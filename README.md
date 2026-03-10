@@ -40,6 +40,15 @@ go build -o bin/loramapr-receiverd ./cmd/loramapr-receiverd
 ./bin/loramapr-receiverd -config ./receiver.json
 ```
 
+Service/install command modes:
+
+```bash
+./bin/loramapr-receiverd run -config ./receiver.json
+./bin/loramapr-receiverd doctor -config ./receiver.json
+./bin/loramapr-receiverd status -config ./receiver.json
+./bin/loramapr-receiverd install --dry-run --target-root /tmp/receiver-stage
+```
+
 Mode can be forced:
 
 ```bash
@@ -80,3 +89,4 @@ This repository currently contains:
 - [Embedded Local Setup Portal](./docs/local-portal.md)
 - [Meshtastic Adapter Behavior](./docs/meshtastic-adapter.md)
 - [Steady-State Cloud Loop](./docs/steady-state.md)
+- [Service and Install Model](./docs/service-install.md)

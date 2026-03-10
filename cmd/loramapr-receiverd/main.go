@@ -2,59 +2,232 @@ package main
 
 import (
 	"context"
-	"errors"
+	"encoding/json"
 	"flag"
+	"fmt"
 	"log/slog"
+	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 
 	"github.com/loramapr/loramapr-receiver/internal/config"
+	"github.com/loramapr/loramapr-receiver/internal/install"
 	"github.com/loramapr/loramapr-receiver/internal/logging"
 	"github.com/loramapr/loramapr-receiver/internal/runtime"
+	"github.com/loramapr/loramapr-receiver/internal/state"
 )
 
 func main() {
-	configPath := flag.String("config", config.DefaultPath, "path to receiver config file")
-	modeOverride := flag.String("mode", "", "runtime mode override: auto|setup|service")
-	flag.Parse()
+	args := os.Args[1:]
+	if len(args) == 0 {
+		runCommand(nil)
+		return
+	}
+
+	cmd := args[0]
+	switch cmd {
+	case "run":
+		runCommand(args[1:])
+	case "install":
+		installCommand(args[1:])
+	case "uninstall":
+		uninstallCommand(args[1:])
+	case "doctor":
+		doctorCommand(args[1:])
+	case "status":
+		statusCommand(args[1:])
+	default:
+		if strings.HasPrefix(cmd, "-") {
+			runCommand(args)
+			return
+		}
+		printUsage()
+		os.Exit(2)
+	}
+}
+
+func runCommand(args []string) {
+	flags := flag.NewFlagSet("run", flag.ExitOnError)
+	configPath := flags.String("config", config.DefaultPath, "path to receiver config file")
+	modeOverride := flags.String("mode", "", "runtime mode override: auto|setup|service")
+	_ = flags.Parse(args)
 
 	cfg, err := config.Load(*configPath)
 	if err != nil {
 		slog.Error("load config failed", "err", err, "config", *configPath)
-		return
+		os.Exit(1)
 	}
 
 	if *modeOverride != "" {
 		cfg.Service.Mode = config.RunMode(*modeOverride)
 		if err := cfg.Validate(); err != nil {
 			slog.Error("invalid mode override", "err", err, "mode", *modeOverride)
-			return
+			os.Exit(1)
 		}
 	}
 
 	logger, err := logging.New(cfg.Logging)
 	if err != nil {
 		slog.Error("initialize logger failed", "err", err)
-		return
+		os.Exit(1)
 	}
 
 	svc, err := runtime.New(cfg, logger)
 	if err != nil {
 		logger.Error("create runtime failed", "err", err)
-		return
+		os.Exit(1)
 	}
 
-	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	ctx, cancel := signalNotifyContext()
 	defer cancel()
 
 	if err := svc.Run(ctx); err != nil {
-		if errors.Is(err, context.Canceled) {
-			logger.Info("runtime canceled")
-			return
-		}
 		logger.Error("runtime failed", "err", err)
-		return
+		os.Exit(1)
 	}
 
 	logger.Info("runtime stopped")
+}
+
+func installCommand(args []string) {
+	flags := flag.NewFlagSet("install", flag.ExitOnError)
+	targetRoot := flags.String("target-root", "/", "installation root prefix (default /)")
+	dryRun := flags.Bool("dry-run", false, "print planned install operations without writing files")
+	force := flags.Bool("force", false, "overwrite existing config file")
+	serviceUser := flags.String("service-user", "loramapr", "systemd service user")
+	serviceGroup := flags.String("service-group", "loramapr", "systemd service group")
+	_ = flags.Parse(args)
+
+	result, err := install.InstallLinuxSystemd(install.LinuxInstallOptions{
+		TargetRoot:   *targetRoot,
+		ServiceUser:  *serviceUser,
+		ServiceGroup: *serviceGroup,
+		DryRun:       *dryRun,
+		Force:        *force,
+	})
+	if err != nil {
+		slog.Error("install failed", "err", err)
+		os.Exit(1)
+	}
+
+	fmt.Printf("Install layout root: %s\n", result.Layout.Root)
+	for _, op := range result.Operations {
+		fmt.Printf("- %s %s\n", op.Action, op.Path)
+	}
+	if *dryRun {
+		fmt.Println("Dry run complete; no files were modified.")
+		return
+	}
+	fmt.Println("Install complete.")
+	fmt.Println("Next steps:")
+	fmt.Println("1. sudo systemctl daemon-reload")
+	fmt.Println("2. sudo systemctl enable --now loramapr-receiverd")
+}
+
+func uninstallCommand(args []string) {
+	flags := flag.NewFlagSet("uninstall", flag.ExitOnError)
+	targetRoot := flags.String("target-root", "/", "installation root prefix")
+	dryRun := flags.Bool("dry-run", false, "print planned uninstall operations without deleting files")
+	purgeState := flags.Bool("purge-state", false, "remove persisted state file and state directory")
+	_ = flags.Parse(args)
+
+	result, err := install.UninstallLinuxSystemd(install.LinuxUninstallOptions{
+		TargetRoot: *targetRoot,
+		DryRun:     *dryRun,
+		PurgeState: *purgeState,
+	})
+	if err != nil {
+		slog.Error("uninstall failed", "err", err)
+		os.Exit(1)
+	}
+
+	fmt.Printf("Uninstall layout root: %s\n", result.Layout.Root)
+	for _, op := range result.Operations {
+		fmt.Printf("- %s %s\n", op.Action, op.Path)
+	}
+	if *dryRun {
+		fmt.Println("Dry run complete; no files were removed.")
+		return
+	}
+	fmt.Println("Uninstall complete.")
+}
+
+func doctorCommand(args []string) {
+	flags := flag.NewFlagSet("doctor", flag.ExitOnError)
+	configPath := flags.String("config", config.DefaultPath, "path to receiver config file")
+	_ = flags.Parse(args)
+
+	cfg, err := config.Load(*configPath)
+	if err != nil {
+		fmt.Printf("[FAIL] config load: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Printf("[OK] config load: %s\n", *configPath)
+
+	store, err := state.Open(cfg.Paths.StateFile)
+	if err != nil {
+		fmt.Printf("[FAIL] state open: %v\n", err)
+		os.Exit(1)
+	}
+	snapshot := store.Snapshot()
+	fmt.Printf("[OK] state open: %s\n", cfg.Paths.StateFile)
+	fmt.Printf("[INFO] pairing phase: %s\n", snapshot.Pairing.Phase)
+	fmt.Printf("[INFO] cloud endpoint: %s\n", cfg.Cloud.BaseURL)
+	fmt.Printf("[INFO] meshtastic transport: %s\n", cfg.Meshtastic.Transport)
+	fmt.Println("Doctor checks completed.")
+}
+
+func statusCommand(args []string) {
+	flags := flag.NewFlagSet("status", flag.ExitOnError)
+	configPath := flags.String("config", config.DefaultPath, "path to receiver config file")
+	_ = flags.Parse(args)
+
+	cfg, err := config.Load(*configPath)
+	if err != nil {
+		slog.Error("status failed: load config", "err", err)
+		os.Exit(1)
+	}
+	store, err := state.Open(cfg.Paths.StateFile)
+	if err != nil {
+		slog.Error("status failed: open state", "err", err)
+		os.Exit(1)
+	}
+	snapshot := store.Snapshot()
+
+	output := map[string]any{
+		"config_path":      *configPath,
+		"state_path":       cfg.Paths.StateFile,
+		"installation_id":  snapshot.Installation.ID,
+		"pairing_phase":    snapshot.Pairing.Phase,
+		"cloud_endpoint":   cfg.Cloud.BaseURL,
+		"runtime_mode":     snapshot.Runtime.Mode,
+		"runtime_profile":  snapshot.Runtime.Profile,
+		"meshtastic_mode":  cfg.Meshtastic.Transport,
+		"last_pairing_err": snapshot.Pairing.LastError,
+		"updated_at":       snapshot.Metadata.UpdatedAt,
+	}
+
+	encoder := json.NewEncoder(os.Stdout)
+	encoder.SetIndent("", "  ")
+	if err := encoder.Encode(output); err != nil {
+		slog.Error("status failed: encode", "err", err)
+		os.Exit(1)
+	}
+}
+
+func signalNotifyContext() (context.Context, context.CancelFunc) {
+	return signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+}
+
+func printUsage() {
+	fmt.Println("LoRaMapr Receiver")
+	fmt.Println("Usage:")
+	fmt.Println("  loramapr-receiverd run [flags]")
+	fmt.Println("  loramapr-receiverd install [flags]")
+	fmt.Println("  loramapr-receiverd uninstall [flags]")
+	fmt.Println("  loramapr-receiverd doctor [flags]")
+	fmt.Println("  loramapr-receiverd status [flags]")
+	fmt.Println("")
+	fmt.Println("If no subcommand is provided, run mode is used.")
 }
