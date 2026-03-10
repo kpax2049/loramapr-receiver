@@ -1,0 +1,19 @@
+{{define "content"}}
+<section class="panel">
+  <h2>Troubleshooting</h2>
+  <p>Use these checks before escalating support issues.</p>
+  <ul>
+    {{range .TroubleshootingHints}}
+    <li>{{.}}</li>
+    {{end}}
+  </ul>
+</section>
+<section class="panel">
+  <h2>Health Endpoints</h2>
+  <table>
+    <tr><th>Liveness</th><td><span class="mono">GET /healthz</span></td></tr>
+    <tr><th>Readiness</th><td><span class="mono">GET /readyz</span></td></tr>
+    <tr><th>Structured Status</th><td><span class="mono">GET /api/status</span></td></tr>
+  </table>
+</section>
+{{end}}

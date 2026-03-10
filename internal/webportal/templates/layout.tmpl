@@ -1,0 +1,153 @@
+{{define "layout"}}
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{.Title}} - LoRaMapr Receiver</title>
+  <style>
+    :root {
+      --bg: #f4f7fb;
+      --panel: #ffffff;
+      --text: #10203a;
+      --muted: #5f6f86;
+      --accent: #006aa8;
+      --accent-soft: #e6f2fa;
+      --ok: #137b48;
+      --warn: #9a6500;
+      --err: #b81d13;
+      --border: #d5dfeb;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Segoe UI", "Helvetica Neue", Helvetica, Arial, sans-serif;
+      color: var(--text);
+      background: linear-gradient(180deg, #ecf3fa 0%, #f8fbff 100%);
+    }
+    header {
+      background: #0f2746;
+      color: #fff;
+      padding: 16px;
+    }
+    header h1 {
+      margin: 0;
+      font-size: 1.15rem;
+      letter-spacing: 0.02em;
+    }
+    nav {
+      margin-top: 10px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+    nav a {
+      color: #e8f1fb;
+      text-decoration: none;
+      background: rgba(255,255,255,0.12);
+      padding: 6px 10px;
+      border-radius: 8px;
+      font-size: 0.92rem;
+    }
+    nav a:hover { background: rgba(255,255,255,0.2); }
+    main {
+      width: min(960px, 96vw);
+      margin: 20px auto;
+      display: grid;
+      gap: 14px;
+    }
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 16px;
+      box-shadow: 0 1px 2px rgba(4, 26, 54, 0.06);
+    }
+    .panel h2 {
+      margin-top: 0;
+      font-size: 1.1rem;
+    }
+    .status-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+      gap: 10px;
+    }
+    .status-chip {
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 10px;
+      background: #f8fbff;
+    }
+    .status-chip .label {
+      color: var(--muted);
+      font-size: 0.8rem;
+      margin-bottom: 4px;
+      text-transform: uppercase;
+      letter-spacing: 0.03em;
+    }
+    .status-chip .value {
+      font-weight: 600;
+      word-break: break-word;
+    }
+    .hint {
+      padding: 10px;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: var(--accent-soft);
+      color: #0f2b46;
+      margin-top: 8px;
+    }
+    .hint.ok { border-color: #b8e4ce; background: #ebf9f1; color: var(--ok); }
+    .hint.warn { border-color: #f0ddb2; background: #fff9ea; color: var(--warn); }
+    .hint.err { border-color: #f0c0bc; background: #fff0ef; color: var(--err); }
+    label { display: block; margin-bottom: 6px; font-weight: 600; }
+    input[type=text] {
+      width: 100%;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 10px;
+      font-size: 1rem;
+    }
+    button {
+      margin-top: 10px;
+      border: 0;
+      border-radius: 8px;
+      padding: 10px 14px;
+      background: var(--accent);
+      color: white;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.93rem;
+    }
+    th, td {
+      border-bottom: 1px solid var(--border);
+      text-align: left;
+      padding: 8px;
+      vertical-align: top;
+    }
+    th { width: 36%; color: var(--muted); font-weight: 600; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    .muted { color: var(--muted); }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>LoRaMapr Receiver Setup Portal</h1>
+    <nav>
+      <a href="/">Welcome</a>
+      <a href="/pairing">Pairing</a>
+      <a href="/progress">Progress</a>
+      <a href="/troubleshooting">Troubleshooting</a>
+      <a href="/advanced">Advanced</a>
+    </nav>
+  </header>
+  <main>
+    {{template "content" .}}
+  </main>
+</body>
+</html>
+{{end}}

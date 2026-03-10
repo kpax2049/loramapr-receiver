@@ -77,3 +77,4 @@ This repository currently contains:
 - [Architecture ADR](./docs/adr/0001-standalone-receiver-runtime.md)
 - [Config and State Layout](./docs/runtime-config-state.md)
 - [Pairing and Bootstrap Lifecycle](./docs/pairing-lifecycle.md)
+- [Embedded Local Setup Portal](./docs/local-portal.md)

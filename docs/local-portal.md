@@ -1,0 +1,54 @@
+# Embedded Local Setup Portal
+
+`loramapr-receiverd` serves an embedded local web portal for first-run setup and
+ongoing receiver status checks.
+
+## Purpose
+
+The portal is the normal human interface for receiver bootstrap:
+
+- enter pairing code from LoRaMapr Cloud
+- monitor pairing/bootstrap progress
+- view runtime health/readiness
+- view practical troubleshooting guidance
+- inspect non-sensitive advanced runtime details
+
+## Routes
+
+UI routes:
+
+- `GET /` welcome + quick status
+- `GET /pairing` pairing code entry form
+- `POST /pairing` pairing code submission form action
+- `GET /progress` setup/runtime progress
+- `GET /troubleshooting` human-readable checks
+- `GET /advanced` runtime/platform details
+
+API routes:
+
+- `GET /healthz` liveness
+- `GET /readyz` readiness
+- `GET /api/status` structured status JSON
+- `POST /api/pairing/code` JSON pairing submission
+
+## Binding Strategy
+
+Configured by `portal.bind_address` in receiver config.
+
+Recommended defaults:
+
+- desktop/local install path: `127.0.0.1:8080`
+- Raspberry Pi/appliance path: `0.0.0.0:8080`
+
+Use loopback by default on general-purpose hosts; expose on LAN only for
+appliance-style usage where setup happens from another device.
+
+## Security Behavior
+
+Portal intentionally omits sensitive values from rendered pages and `/api/status`:
+
+- ingest API secret
+- activation token
+- persisted pairing code
+
+Those remain in local state storage with restricted file permissions.

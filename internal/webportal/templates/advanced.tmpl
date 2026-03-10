@@ -1,0 +1,18 @@
+{{define "content"}}
+<section class="panel">
+  <h2>Advanced Details</h2>
+  <table>
+    <tr><th>Runtime Version</th><td class="mono">{{.RuntimeVersion}}</td></tr>
+    <tr><th>Go Version</th><td class="mono">{{.GoVersion}}</td></tr>
+    <tr><th>Platform</th><td class="mono">{{.Platform}}/{{.Arch}}</td></tr>
+    <tr><th>Service Mode</th><td class="mono">{{.Snapshot.Mode}}</td></tr>
+    <tr><th>Runtime Profile</th><td class="mono">{{.Snapshot.RuntimeProfile}}</td></tr>
+    <tr><th>Lifecycle</th><td>{{.Snapshot.Lifecycle}}</td></tr>
+    <tr><th>Installation ID</th><td class="mono">{{.Snapshot.InstallationID}}</td></tr>
+  </table>
+</section>
+<section class="panel">
+  <h2>Security Notes</h2>
+  <p class="muted">This page intentionally omits stored API secrets and activation tokens.</p>
+</section>
+{{end}}

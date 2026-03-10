@@ -1,0 +1,26 @@
+{{define "content"}}
+<section class="panel">
+  <h2>Setup Progress</h2>
+  {{if .Flash}}
+  <div class="hint {{.FlashClass}}">{{.Flash}}</div>
+  {{end}}
+  <div class="status-grid">
+    <div class="status-chip"><div class="label">Pairing State</div><div class="value mono">{{.Snapshot.PairingPhase}}</div></div>
+    <div class="status-chip"><div class="label">Cloud Connectivity</div><div class="value">{{.Snapshot.CloudStatus}}</div></div>
+    <div class="status-chip"><div class="label">Service State</div><div class="value">{{.Snapshot.Lifecycle}}</div></div>
+    <div class="status-chip"><div class="label">Meshtastic Status</div><div class="value">{{.MeshtasticState}}</div></div>
+  </div>
+</section>
+<section class="panel">
+  <h2>Status Details</h2>
+  <table>
+    <tr><th>Ready</th><td>{{if .Snapshot.Ready}}yes{{else}}no{{end}} {{if .Snapshot.ReadyReason}}({{.Snapshot.ReadyReason}}){{end}}</td></tr>
+    <tr><th>Started At</th><td class="mono">{{.Snapshot.StartedAt}}</td></tr>
+    <tr><th>Updated At</th><td class="mono">{{.Snapshot.UpdatedAt}}</td></tr>
+    <tr><th>Cloud Endpoint</th><td class="mono">{{.Snapshot.CloudEndpoint}}</td></tr>
+    <tr><th>Mode</th><td class="mono">{{.Snapshot.Mode}}</td></tr>
+    <tr><th>Runtime Profile</th><td class="mono">{{.Snapshot.RuntimeProfile}}</td></tr>
+    <tr><th>Last Error</th><td>{{if .Snapshot.LastError}}{{.Snapshot.LastError}}{{else}}none{{end}}</td></tr>
+  </table>
+</section>
+{{end}}

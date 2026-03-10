@@ -1,0 +1,23 @@
+{{define "content"}}
+<section class="panel">
+  <h2>Enter Pairing Code</h2>
+  <p>Paste the pairing code generated in LoRaMapr Cloud onboarding.</p>
+  {{if .Flash}}
+  <div class="hint {{.FlashClass}}">{{.Flash}}</div>
+  {{end}}
+  <form method="post" action="/pairing">
+    <label for="pairing_code">Pairing Code</label>
+    <input id="pairing_code" name="pairing_code" type="text" placeholder="LMR-..." maxlength="128" required>
+    <button type="submit">Start Pairing</button>
+  </form>
+</section>
+<section class="panel">
+  <h2>Current Pairing Status</h2>
+  <table>
+    <tr><th>Pairing Phase</th><td class="mono">{{.Snapshot.PairingPhase}}</td></tr>
+    <tr><th>Cloud Reachability</th><td>{{.Snapshot.CloudStatus}}</td></tr>
+    <tr><th>Service Lifecycle</th><td>{{.Snapshot.Lifecycle}}</td></tr>
+    <tr><th>Last Error</th><td>{{if .Snapshot.LastError}}{{.Snapshot.LastError}}{{else}}none{{end}}</td></tr>
+  </table>
+</section>
+{{end}}
