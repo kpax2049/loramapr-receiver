@@ -1,0 +1,8 @@
+[
+  { "goos": "linux", "goarch": "amd64", "goarm": "", "archive": "tar.gz" },
+  { "goos": "linux", "goarch": "arm64", "goarm": "", "archive": "tar.gz" },
+  { "goos": "linux", "goarch": "arm", "goarm": "7", "archive": "tar.gz" },
+  { "goos": "darwin", "goarch": "amd64", "goarm": "", "archive": "tar.gz" },
+  { "goos": "darwin", "goarch": "arm64", "goarm": "", "archive": "tar.gz" },
+  { "goos": "windows", "goarch": "amd64", "goarm": "", "archive": "zip" }
+]

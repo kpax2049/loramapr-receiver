@@ -90,3 +90,4 @@ This repository currently contains:
 - [Meshtastic Adapter Behavior](./docs/meshtastic-adapter.md)
 - [Steady-State Cloud Loop](./docs/steady-state.md)
 - [Service and Install Model](./docs/service-install.md)
+- [Release Artifact Mapping](./docs/release-artifacts.md)

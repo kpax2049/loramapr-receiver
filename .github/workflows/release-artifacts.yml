@@ -1,0 +1,45 @@
+name: Receiver Release Artifacts
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Release version (for example v1.0.0)
+        required: true
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build-artifacts:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Resolve Version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            VERSION="${{ github.event.inputs.version }}"
+          else
+            VERSION="${GITHUB_REF_NAME}"
+          fi
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+      - name: Run Tests
+        run: go test ./...
+
+      - name: Build Artifacts
+        run: packaging/release/build-artifacts.sh "${{ steps.version.outputs.version }}"
+
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: receiver-artifacts-${{ steps.version.outputs.version }}
+          path: dist/${{ steps.version.outputs.version }}/artifacts/
