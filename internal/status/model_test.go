@@ -1,6 +1,9 @@
 package status
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func TestSnapshotReturnsCopy(t *testing.T) {
 	t.Parallel()
@@ -29,5 +32,25 @@ func TestReadinessUpdates(t *testing.T) {
 	}
 	if snap.ReadyReason != "setup portal available" {
 		t.Fatalf("unexpected ready reason: %q", snap.ReadyReason)
+	}
+}
+
+func TestHeartbeatAndPacketTelemetry(t *testing.T) {
+	t.Parallel()
+
+	model := New()
+	now := time.Date(2026, 3, 10, 22, 0, 0, 0, time.UTC)
+	model.SetHeartbeat(&now, &now, true)
+	model.SetPacketTelemetry(&now, &now, &now, 3)
+
+	snap := model.Snapshot()
+	if !snap.HeartbeatFresh {
+		t.Fatal("expected heartbeat_fresh=true")
+	}
+	if snap.LastHeartbeatAck == nil || snap.LastPacketAck == nil {
+		t.Fatal("expected heartbeat/packet telemetry timestamps")
+	}
+	if snap.IngestQueueDepth != 3 {
+		t.Fatalf("expected queue depth 3, got %d", snap.IngestQueueDepth)
 	}
 }

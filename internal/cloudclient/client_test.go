@@ -145,6 +145,81 @@ func TestExchangePairingCodeRetryableError(t *testing.T) {
 	}
 }
 
+func TestPostIngestEventSendsHeaders(t *testing.T) {
+	t.Parallel()
+
+	client := &HTTPClient{
+		baseURL: "https://api.example.com",
+		client: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			if req.URL.Path != "/api/meshtastic/event" {
+				t.Fatalf("unexpected path: %s", req.URL.Path)
+			}
+			if req.Header.Get("x-api-key") != "ingest-secret" {
+				t.Fatalf("missing x-api-key header")
+			}
+			if req.Header.Get("x-idempotency-key") != "event-1" {
+				t.Fatalf("missing x-idempotency-key header")
+			}
+			return jsonResponse(http.StatusOK, `{"status":"ok"}`), nil
+		})},
+	}
+
+	err := client.PostIngestEvent(context.Background(), "/api/meshtastic/event", "ingest-secret", map[string]any{
+		"fromId": "node-1",
+	}, "event-1")
+	if err != nil {
+		t.Fatalf("PostIngestEvent returned error: %v", err)
+	}
+}
+
+func TestSendReceiverHeartbeat(t *testing.T) {
+	t.Parallel()
+
+	client := &HTTPClient{
+		baseURL: "https://api.example.com",
+		client: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			if req.URL.Path != "/api/receiver/heartbeat" {
+				t.Fatalf("unexpected path: %s", req.URL.Path)
+			}
+			if req.Header.Get("x-api-key") != "ingest-secret" {
+				t.Fatalf("missing x-api-key header")
+			}
+
+			var payload map[string]any
+			if err := json.NewDecoder(req.Body).Decode(&payload); err != nil {
+				t.Fatalf("decode request: %v", err)
+			}
+			if payload["runtimeVersion"] != "1.0.0" {
+				t.Fatalf("unexpected runtime version payload: %#v", payload)
+			}
+			return jsonResponse(http.StatusCreated, `{
+				"receiverAgentId":"agent-1",
+				"ownerId":"owner-1",
+				"lastHeartbeatAt":"2026-03-10T22:00:00Z",
+				"nodeCount":2
+			}`), nil
+		})},
+	}
+
+	ack, err := client.SendReceiverHeartbeat(context.Background(), "/api/receiver/heartbeat", "ingest-secret", ReceiverHeartbeat{
+		RuntimeVersion:  "1.0.0",
+		Platform:        "linux",
+		Arch:            "arm64",
+		LocalNodeID:     "!home",
+		ObservedNodeIDs: []string{"!node-1", "!node-2"},
+		Status:          map[string]any{"queueDepth": 1},
+	})
+	if err != nil {
+		t.Fatalf("SendReceiverHeartbeat returned error: %v", err)
+	}
+	if ack.ReceiverAgentID != "agent-1" {
+		t.Fatalf("unexpected agent id: %q", ack.ReceiverAgentID)
+	}
+	if ack.NodeCount != 2 {
+		t.Fatalf("unexpected node count: %d", ack.NodeCount)
+	}
+}
+
 func TestIsRetryableCanceledContext(t *testing.T) {
 	t.Parallel()
 

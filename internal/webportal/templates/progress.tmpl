@@ -15,6 +15,11 @@
   <h2>Status Details</h2>
   <table>
     <tr><th>Ready</th><td>{{if .Snapshot.Ready}}yes{{else}}no{{end}} {{if .Snapshot.ReadyReason}}({{.Snapshot.ReadyReason}}){{end}}</td></tr>
+    <tr><th>Cloud Reachable</th><td>{{if .Snapshot.CloudReachable}}yes{{else}}no{{end}}</td></tr>
+    <tr><th>Heartbeat Fresh</th><td>{{if .Snapshot.HeartbeatFresh}}yes{{else}}no{{end}}</td></tr>
+    <tr><th>Last Heartbeat Ack</th><td class="mono">{{if .Snapshot.LastHeartbeatAck}}{{.Snapshot.LastHeartbeatAck}}{{else}}none{{end}}</td></tr>
+    <tr><th>Ingest Queue Depth</th><td>{{.Snapshot.IngestQueueDepth}}</td></tr>
+    <tr><th>Last Packet Ack</th><td class="mono">{{if .Snapshot.LastPacketAck}}{{.Snapshot.LastPacketAck}}{{else}}none{{end}}</td></tr>
     <tr><th>Started At</th><td class="mono">{{.Snapshot.StartedAt}}</td></tr>
     <tr><th>Updated At</th><td class="mono">{{.Snapshot.UpdatedAt}}</td></tr>
     <tr><th>Cloud Endpoint</th><td class="mono">{{.Snapshot.CloudEndpoint}}</td></tr>

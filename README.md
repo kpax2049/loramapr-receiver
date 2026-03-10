@@ -79,3 +79,4 @@ This repository currently contains:
 - [Pairing and Bootstrap Lifecycle](./docs/pairing-lifecycle.md)
 - [Embedded Local Setup Portal](./docs/local-portal.md)
 - [Meshtastic Adapter Behavior](./docs/meshtastic-adapter.md)
+- [Steady-State Cloud Loop](./docs/steady-state.md)

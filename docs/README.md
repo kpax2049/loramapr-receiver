@@ -7,3 +7,4 @@ Architecture decisions and product runtime specifications for LoRaMapr Receiver.
 - [Pairing and Bootstrap Lifecycle](./pairing-lifecycle.md)
 - [Embedded Local Setup Portal](./local-portal.md)
 - [Meshtastic Adapter Behavior](./meshtastic-adapter.md)
+- [Steady-State Cloud Loop](./steady-state.md)

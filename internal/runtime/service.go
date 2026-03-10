@@ -2,10 +2,15 @@ package runtime
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
 	"path/filepath"
+	goruntime "runtime"
+	"strconv"
 	"strings"
 	"time"
 
@@ -18,9 +23,26 @@ import (
 	"github.com/loramapr/loramapr-receiver/internal/webportal"
 )
 
+const (
+	maxIngestQueueDepth = 512
+	maxIngestBatchTick  = 32
+)
+
+type CloudClient interface {
+	cloudclient.PairingClient
+	PostIngestEvent(ctx context.Context, ingestEndpoint string, apiKey string, payload map[string]any, idempotencyKey string) error
+	SendReceiverHeartbeat(
+		ctx context.Context,
+		heartbeatEndpoint string,
+		apiKey string,
+		heartbeat cloudclient.ReceiverHeartbeat,
+	) (cloudclient.ReceiverHeartbeatAck, error)
+}
+
 type Service struct {
 	container *Container
 	mode      config.RunMode
+	steady    steadyState
 }
 
 type Container struct {
@@ -28,10 +50,29 @@ type Container struct {
 	Logger     *slog.Logger
 	State      *state.Store
 	Status     *status.Model
+	Cloud      CloudClient
 	Pairing    *pairing.Manager
 	Meshtastic meshtastic.Adapter
 	MeshEvents <-chan meshtastic.Event
 	Portal     *webportal.Server
+}
+
+type steadyState struct {
+	ingestQueue       []queuedIngestEvent
+	lastHeartbeatSent *time.Time
+	lastHeartbeatAck  *time.Time
+	lastPacketQueued  *time.Time
+	lastPacketSent    *time.Time
+	lastPacketAck     *time.Time
+	cloudReachable    bool
+}
+
+type queuedIngestEvent struct {
+	payload        map[string]any
+	idempotencyKey string
+	enqueuedAt     time.Time
+	nextAttemptAt  time.Time
+	attempts       int
 }
 
 func New(cfg config.Config, logger *slog.Logger) (*Service, error) {
@@ -70,17 +111,24 @@ func New(cfg config.Config, logger *slog.Logger) (*Service, error) {
 	statusModel.SetComponent("runtime", "starting", "initializing service container")
 	statusModel.SetComponent("portal", "stopped", "portal not started yet")
 
-	svc := &Service{mode: mode}
+	svc := &Service{}
+	svc.mode = mode
+	svc.steady = steadyState{
+		ingestQueue: make([]queuedIngestEvent, 0, 64),
+	}
+
 	cloud := cloudclient.NewHTTPClient(cfg.Cloud.BaseURL, 10*time.Second)
 	mesh := meshtastic.NewAdapter(cfg.Meshtastic, logger.With("component", "meshtastic"))
 	meshSnap := mesh.Snapshot()
 	statusModel.SetComponent("meshtastic", string(meshSnap.State), meshtasticStatusMessage(meshSnap))
+	statusModel.SetComponent("ingest", "idle", "no queued packets")
 
 	svc.container = &Container{
 		Config:     cfg,
 		Logger:     logger.With("component", "runtime"),
 		State:      store,
 		Status:     statusModel,
+		Cloud:      cloud,
 		Meshtastic: mesh,
 		Pairing: pairing.NewManager(
 			store,
@@ -189,22 +237,25 @@ func (s *Service) tick(ctx context.Context) {
 	}
 
 	snap := c.State.Snapshot()
+	meshSnap := c.Meshtastic.Snapshot()
+
 	c.Status.SetPairingPhase(string(snap.Pairing.Phase))
 	c.Status.SetCloud(c.Config.Cloud.BaseURL, pairingCloudStatus(snap.Pairing.Phase))
-	meshSnap := c.Meshtastic.Snapshot()
 	c.Status.SetComponent("meshtastic", string(meshSnap.State), meshtasticStatusMessage(meshSnap))
 
+	s.processSteadyState(ctx, snap, meshSnap)
+
+	syncReady := snap.Pairing.Phase == state.PairingSteadyState
 	switch s.mode {
 	case config.ModeSetup:
 		c.Status.SetReady(true, "setup portal available")
-		if snap.Pairing.Phase == state.PairingSteadyState {
+		if syncReady {
 			c.Status.SetComponent("service", "ready", "receiver paired and activated")
 		} else {
 			c.Status.SetComponent("service", "setup", "receiver in setup mode")
 		}
 	case config.ModeService:
-		ready := snap.Pairing.Phase == state.PairingSteadyState
-		if ready {
+		if syncReady {
 			c.Status.SetReady(true, "service mode active")
 		} else {
 			c.Status.SetReady(false, "service mode requires paired state")
@@ -219,13 +270,17 @@ func (s *Service) tick(ctx context.Context) {
 
 func (s *Service) onMeshtasticEvent(event meshtastic.Event) {
 	c := s.container
+	now := time.Now().UTC()
+
 	switch event.Kind {
 	case meshtastic.EventPacket:
 		if event.Packet != nil {
+			payload, idempotencyKey := shapeIngestPayload(*event.Packet)
+			s.enqueueIngestEvent(payload, idempotencyKey, now)
 			c.Status.SetComponent(
 				"meshtastic",
 				"connected",
-				fmt.Sprintf("packet from %s port=%d", event.Packet.SourceNodeID, event.Packet.PortNum),
+				fmt.Sprintf("packet from %s port=%d queued=%d", event.Packet.SourceNodeID, event.Packet.PortNum, len(s.steady.ingestQueue)),
 			)
 		}
 	case meshtastic.EventStatus:
@@ -237,6 +292,260 @@ func (s *Service) onMeshtasticEvent(event meshtastic.Event) {
 			)
 		}
 	}
+}
+
+func (s *Service) enqueueIngestEvent(payload map[string]any, idempotencyKey string, now time.Time) {
+	if idempotencyKey == "" {
+		idempotencyKey = fmt.Sprintf("rx-%d", now.UnixNano())
+	}
+
+	if len(s.steady.ingestQueue) >= maxIngestQueueDepth {
+		s.steady.ingestQueue = s.steady.ingestQueue[1:]
+		s.container.Status.SetComponent("ingest", "queue_trimmed", "oldest ingest event dropped due to queue limit")
+	}
+
+	s.steady.ingestQueue = append(s.steady.ingestQueue, queuedIngestEvent{
+		payload:        payload,
+		idempotencyKey: idempotencyKey,
+		enqueuedAt:     now,
+		nextAttemptAt:  now,
+	})
+	s.steady.lastPacketQueued = cloneTime(now)
+
+	s.container.Status.SetPacketTelemetry(
+		s.steady.lastPacketQueued,
+		s.steady.lastPacketSent,
+		s.steady.lastPacketAck,
+		len(s.steady.ingestQueue),
+	)
+	s.container.Status.SetComponent("ingest", "queued", fmt.Sprintf("queue depth %d", len(s.steady.ingestQueue)))
+}
+
+func (s *Service) processSteadyState(ctx context.Context, snapshot state.Data, meshSnap meshtastic.Snapshot) {
+	c := s.container
+	if !credentialsReady(snapshot) {
+		fresh := isHeartbeatFresh(s.steady.lastHeartbeatAck, c.Config.Service.Heartbeat.Std())
+		c.Status.SetHeartbeat(s.steady.lastHeartbeatSent, s.steady.lastHeartbeatAck, fresh)
+		c.Status.SetPacketTelemetry(
+			s.steady.lastPacketQueued,
+			s.steady.lastPacketSent,
+			s.steady.lastPacketAck,
+			len(s.steady.ingestQueue),
+		)
+		c.Status.SetCloudReachable(false)
+		return
+	}
+
+	if err := s.sendHeartbeat(ctx, snapshot, meshSnap); err != nil {
+		if cloudclient.IsRetryable(err) {
+			c.Logger.Warn("heartbeat failed", "err", err)
+		} else {
+			c.Logger.Error("heartbeat failed", "err", err)
+		}
+	}
+	if err := s.drainIngestQueue(ctx, snapshot); err != nil {
+		if cloudclient.IsRetryable(err) {
+			c.Logger.Warn("ingest delivery failed", "err", err)
+		} else {
+			c.Logger.Error("ingest delivery failed", "err", err)
+		}
+	}
+
+	fresh := isHeartbeatFresh(s.steady.lastHeartbeatAck, c.Config.Service.Heartbeat.Std())
+	c.Status.SetHeartbeat(s.steady.lastHeartbeatSent, s.steady.lastHeartbeatAck, fresh)
+	c.Status.SetPacketTelemetry(
+		s.steady.lastPacketQueued,
+		s.steady.lastPacketSent,
+		s.steady.lastPacketAck,
+		len(s.steady.ingestQueue),
+	)
+	c.Status.SetCloudReachable(s.steady.cloudReachable)
+	if s.steady.cloudReachable {
+		c.Status.SetCloud(snapshot.Cloud.EndpointURL, "reachable")
+	} else {
+		c.Status.SetCloud(snapshot.Cloud.EndpointURL, "unreachable")
+	}
+}
+
+func (s *Service) sendHeartbeat(ctx context.Context, snapshot state.Data, meshSnap meshtastic.Snapshot) error {
+	apiKey := strings.TrimSpace(snapshot.Cloud.IngestAPIKey)
+	if apiKey == "" {
+		return errors.New("heartbeat skipped: ingest API key missing")
+	}
+	endpoint := strings.TrimSpace(snapshot.Cloud.HeartbeatEndpoint)
+	if endpoint == "" {
+		endpoint = "/api/receiver/heartbeat"
+	}
+
+	sentAt := time.Now().UTC()
+	s.steady.lastHeartbeatSent = &sentAt
+
+	coarseFailure := "none"
+	if meshSnap.State != meshtastic.StateConnected {
+		coarseFailure = "node_not_connected"
+	}
+	if len(s.steady.ingestQueue) > 0 {
+		coarseFailure = "queue_backlog"
+	}
+
+	ack, err := s.container.Cloud.SendReceiverHeartbeat(ctx, endpoint, apiKey, cloudclient.ReceiverHeartbeat{
+		RuntimeVersion:  "0.1.0-dev",
+		Platform:        goruntime.GOOS,
+		Arch:            goruntime.GOARCH,
+		LocalNodeID:     meshSnap.LocalNodeID,
+		ObservedNodeIDs: append([]string(nil), meshSnap.ObservedNodeIDs...),
+		Status: map[string]any{
+			"pairingPhase":        snapshot.Pairing.Phase,
+			"serviceMode":         s.mode,
+			"meshtasticState":     meshSnap.State,
+			"ingestQueueDepth":    len(s.steady.ingestQueue),
+			"coarseFailureReason": coarseFailure,
+		},
+	})
+	if err != nil {
+		s.steady.cloudReachable = false
+		return err
+	}
+
+	ackAt := ack.LastHeartbeatAt.UTC()
+	s.steady.lastHeartbeatAck = &ackAt
+	s.steady.cloudReachable = true
+	return nil
+}
+
+func (s *Service) drainIngestQueue(ctx context.Context, snapshot state.Data) error {
+	if len(s.steady.ingestQueue) == 0 {
+		s.container.Status.SetComponent("ingest", "idle", "no queued packets")
+		return nil
+	}
+
+	apiKey := strings.TrimSpace(snapshot.Cloud.IngestAPIKey)
+	if apiKey == "" {
+		return errors.New("ingest delivery skipped: ingest API key missing")
+	}
+	endpoint := strings.TrimSpace(snapshot.Cloud.IngestEndpoint)
+	if endpoint == "" {
+		endpoint = "/api/meshtastic/event"
+	}
+
+	for i := 0; i < maxIngestBatchTick && len(s.steady.ingestQueue) > 0; i++ {
+		now := time.Now().UTC()
+		item := &s.steady.ingestQueue[0]
+		if now.Before(item.nextAttemptAt) {
+			break
+		}
+
+		sentAt := time.Now().UTC()
+		s.steady.lastPacketSent = &sentAt
+		err := s.container.Cloud.PostIngestEvent(ctx, endpoint, apiKey, item.payload, item.idempotencyKey)
+		if err == nil {
+			ackAt := time.Now().UTC()
+			s.steady.lastPacketAck = &ackAt
+			s.steady.cloudReachable = true
+			s.steady.ingestQueue = s.steady.ingestQueue[1:]
+			s.container.Status.SetComponent("ingest", "delivered", fmt.Sprintf("queue depth %d", len(s.steady.ingestQueue)))
+			continue
+		}
+
+		if cloudclient.IsRetryable(err) {
+			item.attempts++
+			item.nextAttemptAt = now.Add(deliveryRetryDelay(item.attempts))
+			s.steady.cloudReachable = false
+			s.container.Status.SetComponent("ingest", "retrying", fmt.Sprintf("retrying in %s", time.Until(item.nextAttemptAt).Round(time.Second)))
+			return err
+		}
+
+		s.container.Logger.Warn("dropping non-retryable ingest event", "err", err)
+		s.steady.ingestQueue = s.steady.ingestQueue[1:]
+		s.container.Status.SetComponent("ingest", "dropped", "non-retryable ingest failure")
+	}
+
+	return nil
+}
+
+func credentialsReady(snapshot state.Data) bool {
+	if snapshot.Pairing.Phase != state.PairingSteadyState {
+		return false
+	}
+	return strings.TrimSpace(snapshot.Cloud.IngestAPIKey) != ""
+}
+
+func shapeIngestPayload(packet meshtastic.Packet) (map[string]any, string) {
+	receivedAt := packet.ReceivedAt.UTC()
+	if receivedAt.IsZero() {
+		receivedAt = time.Now().UTC()
+	}
+	idempotencyKey := ingestIdempotencyKey(packet, receivedAt)
+	portLabel := fmt.Sprintf("PORT_%d", packet.PortNum)
+
+	payload := map[string]any{
+		"fromId":     packet.SourceNodeID,
+		"to":         packet.DestinationNodeID,
+		"packetId":   idempotencyKey,
+		"portnum":    portLabel,
+		"receivedAt": receivedAt.Format(time.RFC3339Nano),
+		"decoded": map[string]any{
+			"portnum": portLabel,
+		},
+		"payload": map[string]any{
+			"rawBase64": base64.StdEncoding.EncodeToString(packet.Payload),
+			"size":      len(packet.Payload),
+		},
+		"_receiver": map[string]any{
+			"adapter":      "meshtastic",
+			"sourceNodeId": packet.SourceNodeID,
+			"receivedAt":   receivedAt.Format(time.RFC3339Nano),
+		},
+	}
+	if len(packet.Meta) > 0 {
+		payload["radio"] = packet.Meta
+	}
+	return payload, idempotencyKey
+}
+
+func ingestIdempotencyKey(packet meshtastic.Packet, receivedAt time.Time) string {
+	hasher := sha256.New()
+	_, _ = hasher.Write([]byte(packet.SourceNodeID))
+	_, _ = hasher.Write([]byte("|"))
+	_, _ = hasher.Write([]byte(packet.DestinationNodeID))
+	_, _ = hasher.Write([]byte("|"))
+	_, _ = hasher.Write([]byte(strconv.Itoa(packet.PortNum)))
+	_, _ = hasher.Write([]byte("|"))
+	_, _ = hasher.Write([]byte(receivedAt.Format(time.RFC3339Nano)))
+	_, _ = hasher.Write([]byte("|"))
+	_, _ = hasher.Write(packet.Payload)
+	sum := hasher.Sum(nil)
+	return "rx-" + hex.EncodeToString(sum[:12])
+}
+
+func deliveryRetryDelay(attempt int) time.Duration {
+	if attempt <= 0 {
+		return 0
+	}
+	delay := time.Second << minInt(attempt+1, 7)
+	if delay > 2*time.Minute {
+		return 2 * time.Minute
+	}
+	return delay
+}
+
+func isHeartbeatFresh(lastAck *time.Time, interval time.Duration) bool {
+	if lastAck == nil {
+		return false
+	}
+	if interval <= 0 {
+		interval = 30 * time.Second
+	}
+	maxAge := interval * 2
+	if maxAge < 30*time.Second {
+		maxAge = 30 * time.Second
+	}
+	return time.Since(lastAck.UTC()) <= maxAge
+}
+
+func cloneTime(value time.Time) *time.Time {
+	v := value.UTC()
+	return &v
 }
 
 func (s *Service) configureInitialReadiness(phase state.PairingPhase) {
@@ -309,4 +618,11 @@ func meshtasticStatusMessage(snapshot meshtastic.Snapshot) string {
 		message += " error=" + snapshot.LastError
 	}
 	return message
+}
+
+func minInt(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }

@@ -49,6 +49,22 @@ type ActivationResult struct {
 	ActivatedAt       time.Time
 }
 
+type ReceiverHeartbeat struct {
+	RuntimeVersion  string
+	Platform        string
+	Arch            string
+	LocalNodeID     string
+	ObservedNodeIDs []string
+	Status          map[string]any
+}
+
+type ReceiverHeartbeatAck struct {
+	ReceiverAgentID string
+	OwnerID         string
+	LastHeartbeatAt time.Time
+	NodeCount       int
+}
+
 type APIError struct {
 	StatusCode int
 	Message    string
@@ -198,6 +214,84 @@ func (c *HTTPClient) ActivateReceiver(
 		IngestEndpoint:    response.IngestEndpoint,
 		HeartbeatEndpoint: response.HeartbeatEndpoint,
 		ActivatedAt:       activatedAt,
+	}, nil
+}
+
+func (c *HTTPClient) PostIngestEvent(
+	ctx context.Context,
+	ingestEndpoint string,
+	apiKey string,
+	payload map[string]any,
+	idempotencyKey string,
+) error {
+	trimmedKey := strings.TrimSpace(apiKey)
+	if trimmedKey == "" {
+		return errors.New("ingest API key is required")
+	}
+
+	headers := map[string]string{
+		"x-api-key": trimmedKey,
+	}
+	if key := strings.TrimSpace(idempotencyKey); key != "" {
+		headers["x-idempotency-key"] = key
+	}
+
+	var response struct {
+		Status string `json:"status"`
+	}
+	return c.postJSON(ctx, ingestEndpoint, payload, headers, &response)
+}
+
+func (c *HTTPClient) SendReceiverHeartbeat(
+	ctx context.Context,
+	heartbeatEndpoint string,
+	apiKey string,
+	heartbeat ReceiverHeartbeat,
+) (ReceiverHeartbeatAck, error) {
+	trimmedKey := strings.TrimSpace(apiKey)
+	if trimmedKey == "" {
+		return ReceiverHeartbeatAck{}, errors.New("ingest API key is required")
+	}
+
+	request := struct {
+		RuntimeVersion  string         `json:"runtimeVersion,omitempty"`
+		Platform        string         `json:"platform,omitempty"`
+		Arch            string         `json:"arch,omitempty"`
+		LocalNodeID     string         `json:"localNodeId,omitempty"`
+		ObservedNodeIDs []string       `json:"observedNodeIds,omitempty"`
+		Status          map[string]any `json:"status,omitempty"`
+	}{
+		RuntimeVersion:  strings.TrimSpace(heartbeat.RuntimeVersion),
+		Platform:        strings.TrimSpace(heartbeat.Platform),
+		Arch:            strings.TrimSpace(heartbeat.Arch),
+		LocalNodeID:     strings.TrimSpace(heartbeat.LocalNodeID),
+		ObservedNodeIDs: append([]string(nil), heartbeat.ObservedNodeIDs...),
+		Status:          heartbeat.Status,
+	}
+
+	var response struct {
+		ReceiverAgentID string `json:"receiverAgentId"`
+		OwnerID         string `json:"ownerId"`
+		LastHeartbeatAt string `json:"lastHeartbeatAt"`
+		NodeCount       int    `json:"nodeCount"`
+	}
+	err := c.postJSON(ctx, heartbeatEndpoint, request, map[string]string{
+		"x-api-key": trimmedKey,
+	}, &response)
+	if err != nil {
+		return ReceiverHeartbeatAck{}, err
+	}
+
+	lastHeartbeatAt, err := time.Parse(time.RFC3339, response.LastHeartbeatAt)
+	if err != nil {
+		return ReceiverHeartbeatAck{}, fmt.Errorf("parse heartbeat time: %w", err)
+	}
+
+	return ReceiverHeartbeatAck{
+		ReceiverAgentID: response.ReceiverAgentID,
+		OwnerID:         response.OwnerID,
+		LastHeartbeatAt: lastHeartbeatAt,
+		NodeCount:       response.NodeCount,
 	}, nil
 }
 
