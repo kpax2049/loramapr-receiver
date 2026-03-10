@@ -120,7 +120,7 @@ func defaultLinuxConfig() string {
 	}
 
 	// Fallback should only trigger on unexpected local filesystem errors.
-	return "{\n  \"service\": {\n    \"mode\": \"auto\",\n    \"heartbeat\": \"30s\"\n  },\n  \"paths\": {\n    \"state_file\": \"/var/lib/loramapr/receiver-state.json\"\n  },\n  \"portal\": {\n    \"bind_address\": \"127.0.0.1:8080\"\n  },\n  \"cloud\": {\n    \"base_url\": \"https://api.loramapr.example\"\n  },\n  \"meshtastic\": {\n    \"transport\": \"serial\"\n  },\n  \"logging\": {\n    \"level\": \"info\",\n    \"format\": \"json\"\n  }\n}\n"
+	return "{\n  \"service\": {\n    \"mode\": \"auto\",\n    \"heartbeat\": \"30s\"\n  },\n  \"runtime\": {\n    \"profile\": \"auto\"\n  },\n  \"paths\": {\n    \"state_file\": \"/var/lib/loramapr/receiver-state.json\"\n  },\n  \"portal\": {\n    \"bind_address\": \"127.0.0.1:8080\"\n  },\n  \"cloud\": {\n    \"base_url\": \"https://api.loramapr.example\"\n  },\n  \"meshtastic\": {\n    \"transport\": \"serial\"\n  },\n  \"logging\": {\n    \"level\": \"info\",\n    \"format\": \"json\"\n  }\n}\n"
 }
 
 func defaultSystemdUnit(layout Layout, serviceUser, serviceGroup string) string {

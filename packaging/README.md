@@ -9,6 +9,7 @@ with Linux/systemd as the first-class path.
 - `linux/scripts/`: install/uninstall helper scripts
 - `docker/`: container build scaffolding
 - `release/`: multi-platform artifact generation and checksums
+- `pi/`: Raspberry Pi appliance image scaffolding
 - `macos/launchd/`: launchd placeholders
 - `windows/`: Windows service placeholders
 

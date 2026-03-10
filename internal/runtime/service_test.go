@@ -55,6 +55,47 @@ func TestDetectRuntimeProfile(t *testing.T) {
 	}
 }
 
+func TestResolveRuntimeProfile(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name      string
+		requested string
+		stateFile string
+		expected  string
+	}{
+		{
+			name:      "auto by linux path",
+			requested: "auto",
+			stateFile: "/var/lib/loramapr/receiver-state.json",
+			expected:  "linux-service",
+		},
+		{
+			name:      "appliance override",
+			requested: "appliance-pi",
+			stateFile: "./data/receiver-state.json",
+			expected:  "appliance-pi",
+		},
+		{
+			name:      "local dev override",
+			requested: "local-dev",
+			stateFile: "/var/lib/loramapr/receiver-state.json",
+			expected:  "local-dev",
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := resolveRuntimeProfile(tc.requested, tc.stateFile)
+			if got != tc.expected {
+				t.Fatalf("expected profile %q, got %q", tc.expected, got)
+			}
+		})
+	}
+}
+
 type mockCloudClient struct {
 	postErr      error
 	postCalls    int

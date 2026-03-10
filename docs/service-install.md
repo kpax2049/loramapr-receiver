@@ -46,3 +46,9 @@ Repository includes placeholder paths for future non-Linux service integration:
 - Windows service packaging: `packaging/windows/`
 
 Linux remains the only implemented service install path in this version.
+
+## Raspberry Pi Appliance Path
+
+Raspberry Pi appliance images use the same Linux/systemd service model with an
+image-first distribution path. See `docs/raspberry-pi-appliance.md` and
+`packaging/pi/` for image scaffolding and appliance defaults.

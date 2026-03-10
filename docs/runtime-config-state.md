@@ -17,6 +17,9 @@ Example shape:
     "mode": "auto",
     "heartbeat": "30s"
   },
+  "runtime": {
+    "profile": "auto"
+  },
   "paths": {
     "state_file": "./data/receiver-state.json"
   },
@@ -42,6 +45,14 @@ Example shape:
 - `auto`: use persisted pairing phase to select setup/service mode
 - `setup`: force first-run/setup runtime behavior
 - `service`: force service mode (readiness remains false unless paired steady-state exists)
+
+### `runtime.profile`
+
+- `auto`: detect profile from filesystem/runtime context
+- `local-dev`: local development defaults
+- `linux-service`: packaged Linux service runtime
+- `windows-user`: user-scoped Windows runtime
+- `appliance-pi`: Raspberry Pi appliance profile (LAN portal defaults, first-run setup path)
 
 ### `meshtastic.transport`
 
@@ -78,6 +89,6 @@ These values are intentionally **not** exposed by `/api/status`.
 
 - Config: `/etc/loramapr/receiver.json`
 - State: `/var/lib/loramapr/receiver-state.json`
-- Service unit: `packaging/systemd/loramapr-receiverd.service`
+- Service unit: `packaging/linux/systemd/loramapr-receiverd.service`
 
 Packaging work is phased; these paths are the intended service-mode target layout.

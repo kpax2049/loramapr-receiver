@@ -19,6 +19,9 @@ func TestLoadMissingFileReturnsDefaults(t *testing.T) {
 	if cfg.Service.Mode != ModeAuto {
 		t.Fatalf("expected default mode %q, got %q", ModeAuto, cfg.Service.Mode)
 	}
+	if cfg.Runtime.Profile != "auto" {
+		t.Fatalf("expected default profile %q, got %q", "auto", cfg.Runtime.Profile)
+	}
 	if cfg.Portal.BindAddress != "127.0.0.1:8080" {
 		t.Fatalf("unexpected default bind address: %q", cfg.Portal.BindAddress)
 	}
@@ -55,6 +58,20 @@ func TestLoadRejectsInvalidMeshtasticTransport(t *testing.T) {
 	}
 }
 
+func TestLoadRejectsInvalidRuntimeProfile(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "receiver.json")
+	if err := os.WriteFile(path, []byte(`{"runtime":{"profile":"pi"}}`), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected validation error for invalid runtime profile")
+	}
+}
+
 func TestSaveAndLoadRoundTrip(t *testing.T) {
 	t.Parallel()
 
@@ -67,6 +84,7 @@ func TestSaveAndLoadRoundTrip(t *testing.T) {
 	cfg.Cloud.BaseURL = "https://api.example.com"
 	cfg.Logging.Format = "text"
 	cfg.Logging.Level = "debug"
+	cfg.Runtime.Profile = "appliance-pi"
 
 	if err := Save(path, cfg); err != nil {
 		t.Fatalf("save failed: %v", err)
@@ -88,5 +106,8 @@ func TestSaveAndLoadRoundTrip(t *testing.T) {
 	}
 	if loaded.Paths.StateFile != "/var/lib/loramapr/state.json" {
 		t.Fatalf("unexpected state file: %s", loaded.Paths.StateFile)
+	}
+	if loaded.Runtime.Profile != "appliance-pi" {
+		t.Fatalf("unexpected runtime profile: %s", loaded.Runtime.Profile)
 	}
 }

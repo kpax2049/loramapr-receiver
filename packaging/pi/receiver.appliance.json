@@ -4,13 +4,13 @@
     "heartbeat": "30s"
   },
   "runtime": {
-    "profile": "auto"
+    "profile": "appliance-pi"
   },
   "paths": {
-    "state_file": "./data/receiver-state.json"
+    "state_file": "/var/lib/loramapr/receiver-state.json"
   },
   "portal": {
-    "bind_address": "127.0.0.1:8080"
+    "bind_address": "0.0.0.0:8080"
   },
   "cloud": {
     "base_url": "https://api.loramapr.example"

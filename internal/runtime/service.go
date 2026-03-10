@@ -90,7 +90,7 @@ func New(cfg config.Config, logger *slog.Logger) (*Service, error) {
 
 	current := store.Snapshot()
 	mode := resolveMode(cfg.Service.Mode, current.Pairing.Phase)
-	profile := detectRuntimeProfile(cfg.Paths.StateFile)
+	profile := resolveRuntimeProfile(cfg.Runtime.Profile, cfg.Paths.StateFile)
 
 	if err := store.Update(func(data *state.Data) {
 		data.Installation.LastStartedAt = time.Now().UTC()
@@ -586,6 +586,17 @@ func detectRuntimeProfile(stateFile string) string {
 		return "windows-user"
 	default:
 		return "local-dev"
+	}
+}
+
+func resolveRuntimeProfile(requestedProfile string, stateFile string) string {
+	switch strings.ToLower(strings.TrimSpace(requestedProfile)) {
+	case "", "auto":
+		return detectRuntimeProfile(stateFile)
+	case "local-dev", "linux-service", "windows-user", "appliance-pi":
+		return strings.ToLower(strings.TrimSpace(requestedProfile))
+	default:
+		return detectRuntimeProfile(stateFile)
 	}
 }
 

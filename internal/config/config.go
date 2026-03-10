@@ -28,6 +28,7 @@ const (
 
 type Config struct {
 	Service    ServiceConfig    `json:"service"`
+	Runtime    RuntimeConfig    `json:"runtime"`
 	Paths      PathsConfig      `json:"paths"`
 	Portal     PortalConfig     `json:"portal"`
 	Cloud      CloudConfig      `json:"cloud"`
@@ -38,6 +39,10 @@ type Config struct {
 type ServiceConfig struct {
 	Mode      RunMode  `json:"mode"`
 	Heartbeat Duration `json:"heartbeat"`
+}
+
+type RuntimeConfig struct {
+	Profile string `json:"profile"`
 }
 
 type PathsConfig struct {
@@ -107,6 +112,9 @@ func Default() Config {
 			Mode:      ModeAuto,
 			Heartbeat: Duration(30 * time.Second),
 		},
+		Runtime: RuntimeConfig{
+			Profile: "auto",
+		},
 		Paths: PathsConfig{
 			StateFile: "./data/receiver-state.json",
 		},
@@ -168,6 +176,12 @@ func (c Config) Validate() error {
 		return errors.New("heartbeat must be > 0")
 	}
 
+	switch strings.ToLower(strings.TrimSpace(c.Runtime.Profile)) {
+	case "auto", "local-dev", "linux-service", "windows-user", "appliance-pi":
+	default:
+		return fmt.Errorf("invalid runtime.profile %q", c.Runtime.Profile)
+	}
+
 	if strings.TrimSpace(c.Paths.StateFile) == "" {
 		return errors.New("paths.state_file is required")
 	}
@@ -227,6 +241,9 @@ func (c *Config) applyDefaults() {
 	}
 	if c.Service.Heartbeat.Std() <= 0 {
 		c.Service.Heartbeat = defaults.Service.Heartbeat
+	}
+	if c.Runtime.Profile == "" {
+		c.Runtime.Profile = defaults.Runtime.Profile
 	}
 	if c.Paths.StateFile == "" {
 		c.Paths.StateFile = defaults.Paths.StateFile
