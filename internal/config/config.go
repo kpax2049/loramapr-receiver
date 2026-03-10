@@ -181,6 +181,12 @@ func (c Config) Validate() error {
 		return fmt.Errorf("invalid cloud.base_url %q", c.Cloud.BaseURL)
 	}
 
+	switch strings.ToLower(strings.TrimSpace(c.Meshtastic.Transport)) {
+	case "serial", "json_stream", "disabled":
+	default:
+		return fmt.Errorf("invalid meshtastic.transport %q", c.Meshtastic.Transport)
+	}
+
 	switch strings.ToLower(c.Logging.Level) {
 	case "debug", "info", "warn", "error":
 	default:

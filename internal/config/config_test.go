@@ -41,6 +41,20 @@ func TestLoadRejectsInvalidMode(t *testing.T) {
 	}
 }
 
+func TestLoadRejectsInvalidMeshtasticTransport(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "receiver.json")
+	if err := os.WriteFile(path, []byte(`{"meshtastic":{"transport":"invalid"}}`), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected validation error for invalid meshtastic transport")
+	}
+}
+
 func TestSaveAndLoadRoundTrip(t *testing.T) {
 	t.Parallel()
 

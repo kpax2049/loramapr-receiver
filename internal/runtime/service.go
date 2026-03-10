@@ -11,6 +11,7 @@ import (
 
 	"github.com/loramapr/loramapr-receiver/internal/cloudclient"
 	"github.com/loramapr/loramapr-receiver/internal/config"
+	"github.com/loramapr/loramapr-receiver/internal/meshtastic"
 	"github.com/loramapr/loramapr-receiver/internal/pairing"
 	"github.com/loramapr/loramapr-receiver/internal/state"
 	"github.com/loramapr/loramapr-receiver/internal/status"
@@ -23,12 +24,14 @@ type Service struct {
 }
 
 type Container struct {
-	Config  config.Config
-	Logger  *slog.Logger
-	State   *state.Store
-	Status  *status.Model
-	Pairing *pairing.Manager
-	Portal  *webportal.Server
+	Config     config.Config
+	Logger     *slog.Logger
+	State      *state.Store
+	Status     *status.Model
+	Pairing    *pairing.Manager
+	Meshtastic meshtastic.Adapter
+	MeshEvents <-chan meshtastic.Event
+	Portal     *webportal.Server
 }
 
 func New(cfg config.Config, logger *slog.Logger) (*Service, error) {
@@ -66,15 +69,19 @@ func New(cfg config.Config, logger *slog.Logger) (*Service, error) {
 	statusModel.SetCloud(cfg.Cloud.BaseURL, "unknown")
 	statusModel.SetComponent("runtime", "starting", "initializing service container")
 	statusModel.SetComponent("portal", "stopped", "portal not started yet")
-	statusModel.SetComponent("meshtastic", "not_implemented", "adapter integration lands in Prompt 5")
 
 	svc := &Service{mode: mode}
 	cloud := cloudclient.NewHTTPClient(cfg.Cloud.BaseURL, 10*time.Second)
+	mesh := meshtastic.NewAdapter(cfg.Meshtastic, logger.With("component", "meshtastic"))
+	meshSnap := mesh.Snapshot()
+	statusModel.SetComponent("meshtastic", string(meshSnap.State), meshtasticStatusMessage(meshSnap))
+
 	svc.container = &Container{
-		Config: cfg,
-		Logger: logger.With("component", "runtime"),
-		State:  store,
-		Status: statusModel,
+		Config:     cfg,
+		Logger:     logger.With("component", "runtime"),
+		State:      store,
+		Status:     statusModel,
+		Meshtastic: mesh,
 		Pairing: pairing.NewManager(
 			store,
 			statusModel,
@@ -103,6 +110,12 @@ func (s *Service) Run(ctx context.Context) error {
 	c.Status.SetLifecycle(status.LifecycleRunning)
 	c.Status.SetComponent("runtime", "running", "runtime loop active")
 	c.Status.SetComponent("portal", "starting", "local setup portal starting")
+
+	meshEvents, err := c.Meshtastic.Start(ctx)
+	if err != nil {
+		return err
+	}
+	c.MeshEvents = meshEvents
 
 	portalErr := make(chan error, 1)
 	go func() {
@@ -135,6 +148,13 @@ func (s *Service) Run(ctx context.Context) error {
 				return nil
 			}
 			return errors.New("portal exited unexpectedly")
+		case event, ok := <-c.MeshEvents:
+			if !ok {
+				c.Logger.Warn("meshtastic event stream closed")
+				c.Status.SetComponent("meshtastic", "degraded", "meshtastic stream closed")
+				continue
+			}
+			s.onMeshtasticEvent(event)
 		case <-ticker.C:
 			s.tick(ctx)
 		}
@@ -171,6 +191,8 @@ func (s *Service) tick(ctx context.Context) {
 	snap := c.State.Snapshot()
 	c.Status.SetPairingPhase(string(snap.Pairing.Phase))
 	c.Status.SetCloud(c.Config.Cloud.BaseURL, pairingCloudStatus(snap.Pairing.Phase))
+	meshSnap := c.Meshtastic.Snapshot()
+	c.Status.SetComponent("meshtastic", string(meshSnap.State), meshtasticStatusMessage(meshSnap))
 
 	switch s.mode {
 	case config.ModeSetup:
@@ -192,6 +214,28 @@ func (s *Service) tick(ctx context.Context) {
 	default:
 		c.Status.SetReady(false, "unknown runtime mode")
 		c.Status.SetLastError("unknown runtime mode")
+	}
+}
+
+func (s *Service) onMeshtasticEvent(event meshtastic.Event) {
+	c := s.container
+	switch event.Kind {
+	case meshtastic.EventPacket:
+		if event.Packet != nil {
+			c.Status.SetComponent(
+				"meshtastic",
+				"connected",
+				fmt.Sprintf("packet from %s port=%d", event.Packet.SourceNodeID, event.Packet.PortNum),
+			)
+		}
+	case meshtastic.EventStatus:
+		if event.Node != nil {
+			c.Status.SetComponent(
+				"meshtastic",
+				"connected",
+				fmt.Sprintf("local node %s observed=%d", event.Node.LocalNodeID, len(event.Node.ObservedNodeIDs)),
+			)
+		}
 	}
 }
 
@@ -247,4 +291,22 @@ func pairingCloudStatus(phase state.PairingPhase) string {
 	default:
 		return "unknown"
 	}
+}
+
+func meshtasticStatusMessage(snapshot meshtastic.Snapshot) string {
+	device := snapshot.DetectedDevice
+	if device == "" {
+		device = snapshot.Device
+	}
+	if device == "" {
+		device = "none"
+	}
+	message := fmt.Sprintf("device=%s packets=%d observed_nodes=%d", device, snapshot.PacketsSeen, len(snapshot.ObservedNodeIDs))
+	if snapshot.LocalNodeID != "" {
+		message += " local_node=" + snapshot.LocalNodeID
+	}
+	if snapshot.LastError != "" {
+		message += " error=" + snapshot.LastError
+	}
+	return message
 }

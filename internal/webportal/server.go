@@ -362,8 +362,11 @@ func troubleshootingHints(snap status.Snapshot) []string {
 		hints = append(hints, "Runtime is not ready: "+reason)
 	}
 	meshtasticState := componentState(snap, "meshtastic")
-	if meshtasticState == "not_implemented" {
-		hints = append(hints, "Meshtastic auto-detection is a placeholder in this build and lands in the adapter prompt.")
+	if meshtasticState == "not_present" {
+		hints = append(hints, "No local Meshtastic device detected yet. Check USB connection and device permissions.")
+	}
+	if meshtasticState == "degraded" {
+		hints = append(hints, "Meshtastic adapter is degraded. Verify configured device path and input stream format.")
 	}
 	if snap.LastError != "" {
 		hints = append(hints, "Last runtime error: "+snap.LastError)

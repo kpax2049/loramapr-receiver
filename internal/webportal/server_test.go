@@ -159,7 +159,7 @@ func sampleSnapshot() status.Snapshot {
 		UpdatedAt:      now,
 		Components: map[string]status.ComponentStatus{
 			"meshtastic": {
-				State:     "not_implemented",
+				State:     "not_present",
 				UpdatedAt: now,
 			},
 		},

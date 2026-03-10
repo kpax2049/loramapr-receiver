@@ -43,6 +43,12 @@ Example shape:
 - `setup`: force first-run/setup runtime behavior
 - `service`: force service mode (readiness remains false unless paired steady-state exists)
 
+### `meshtastic.transport`
+
+- `serial`: auto-detect serial device candidates, then consume JSON event stream
+- `json_stream`: consume JSON event stream from configured `meshtastic.device`
+- `disabled`: adapter inactive
+
 ## State File
 
 - Configured by `paths.state_file`

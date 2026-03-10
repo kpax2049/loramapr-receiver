@@ -78,3 +78,4 @@ This repository currently contains:
 - [Config and State Layout](./docs/runtime-config-state.md)
 - [Pairing and Bootstrap Lifecycle](./docs/pairing-lifecycle.md)
 - [Embedded Local Setup Portal](./docs/local-portal.md)
+- [Meshtastic Adapter Behavior](./docs/meshtastic-adapter.md)
