@@ -1,16 +1,23 @@
 {
-  "node_id": "receiver-dev-001",
-  "portal_addr": "127.0.0.1:8080",
-  "heartbeat": "30s",
-  "storage_path": "./data",
+  "service": {
+    "mode": "auto",
+    "heartbeat": "30s"
+  },
+  "paths": {
+    "state_file": "./data/receiver-state.json"
+  },
+  "portal": {
+    "bind_address": "127.0.0.1:8080"
+  },
   "cloud": {
-    "base_url": "https://api.loramapr.example",
-    "pair_token": "",
-    "api_key": ""
+    "base_url": "https://api.loramapr.example"
   },
   "meshtastic": {
     "transport": "serial",
-    "device": "/dev/ttyUSB0",
-    "network": ""
+    "device": "/dev/ttyUSB0"
+  },
+  "logging": {
+    "level": "info",
+    "format": "json"
   }
 }

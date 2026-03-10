@@ -3,154 +3,208 @@ package runtime
 import (
 	"context"
 	"errors"
-	"log"
-	"net/http"
+	"fmt"
+	"log/slog"
 	"path/filepath"
+	"strings"
 	"time"
 
-	"github.com/loramapr/loramapr-receiver/internal/cloudclient"
 	"github.com/loramapr/loramapr-receiver/internal/config"
-	"github.com/loramapr/loramapr-receiver/internal/meshtastic"
 	"github.com/loramapr/loramapr-receiver/internal/state"
+	"github.com/loramapr/loramapr-receiver/internal/status"
 	"github.com/loramapr/loramapr-receiver/internal/webportal"
 )
 
 type Service struct {
-	cfg    config.Config
-	store  *state.Store
-	cloud  cloudclient.Client
-	mesh   meshtastic.Adapter
-	portal *webportal.Server
+	container *Container
+	mode      config.RunMode
 }
 
-func New(cfg config.Config) (*Service, error) {
-	if cfg.StoragePath == "" {
-		return nil, errors.New("storage path is required")
+type Container struct {
+	Config config.Config
+	Logger *slog.Logger
+	State  *state.Store
+	Status *status.Model
+	Portal *webportal.Server
+}
+
+func New(cfg config.Config, logger *slog.Logger) (*Service, error) {
+	if err := cfg.Validate(); err != nil {
+		return nil, fmt.Errorf("validate config: %w", err)
 	}
-	if cfg.PortalAddr == "" {
-		return nil, errors.New("portal addr is required")
-	}
-	if cfg.Heartbeat.Std() <= 0 {
-		return nil, errors.New("heartbeat interval must be > 0")
+	if logger == nil {
+		logger = slog.Default()
 	}
 
-	store, err := state.NewStore(filepath.Join(cfg.StoragePath, "state.json"))
+	store, err := state.Open(cfg.Paths.StateFile)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("open state store: %w", err)
 	}
 
-	s := &Service{
-		cfg:   cfg,
-		store: store,
-		cloud: cloudclient.NewHTTPClient(cfg.Cloud.BaseURL, cfg.Cloud.APIKey),
-		mesh:  meshtastic.NewAdapter(cfg.Meshtastic),
+	current := store.Snapshot()
+	mode := resolveMode(cfg.Service.Mode, current.Pairing.Phase)
+	profile := detectRuntimeProfile(cfg.Paths.StateFile)
+
+	if err := store.Update(func(data *state.Data) {
+		data.Installation.LastStartedAt = time.Now().UTC()
+		data.Cloud.EndpointURL = cfg.Cloud.BaseURL
+		data.Runtime.Profile = profile
+		data.Runtime.Mode = string(mode)
+	}); err != nil {
+		return nil, fmt.Errorf("persist startup state: %w", err)
 	}
-	s.portal = webportal.New(cfg.PortalAddr, s)
-	return s, nil
+
+	current = store.Snapshot()
+	statusModel := status.New()
+	statusModel.SetInstallationID(current.Installation.ID)
+	statusModel.SetMode(string(mode))
+	statusModel.SetRuntimeProfile(profile)
+	statusModel.SetPairingPhase(string(current.Pairing.Phase))
+	statusModel.SetCloud(cfg.Cloud.BaseURL, "unknown")
+	statusModel.SetComponent("runtime", "starting", "initializing service container")
+	statusModel.SetComponent("portal", "stopped", "portal not started yet")
+	statusModel.SetComponent("meshtastic", "not_implemented", "adapter integration lands in Prompt 5")
+
+	svc := &Service{mode: mode}
+	svc.container = &Container{
+		Config: cfg,
+		Logger: logger.With("component", "runtime"),
+		State:  store,
+		Status: statusModel,
+	}
+	svc.container.Portal = webportal.New(cfg.Portal.BindAddress, svc, logger.With("component", "webportal"))
+	svc.configureInitialReadiness(current.Pairing.Phase)
+	return svc, nil
 }
 
 func (s *Service) Run(ctx context.Context) error {
-	log.Printf("starting loramapr-receiverd node=%s", s.cfg.NodeID)
+	c := s.container
+	c.Logger.Info(
+		"starting loramapr-receiverd",
+		"mode", s.mode,
+		"profile", c.Status.Snapshot().RuntimeProfile,
+		"state_file", c.State.Path(),
+		"portal_bind", c.Config.Portal.BindAddress,
+	)
 
-	packets, err := s.mesh.Start(ctx)
-	if err != nil {
-		return err
-	}
+	c.Status.SetLifecycle(status.LifecycleRunning)
+	c.Status.SetComponent("runtime", "running", "runtime loop active")
+	c.Status.SetComponent("portal", "starting", "local setup portal starting")
 
 	portalErr := make(chan error, 1)
 	go func() {
-		portalErr <- s.portal.Start()
+		portalErr <- c.Portal.Run(ctx)
 	}()
 
-	ticker := time.NewTicker(s.cfg.Heartbeat.Std())
+	ticker := time.NewTicker(c.Config.Service.Heartbeat.Std())
 	defer ticker.Stop()
 
 	for {
 		select {
 		case <-ctx.Done():
-			shutdownCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-			defer cancel()
-			_ = s.portal.Shutdown(shutdownCtx)
+			c.Logger.Info("shutdown requested")
+			c.Status.SetLifecycle(status.LifecycleStopping)
+			c.Status.SetReady(false, "shutdown requested")
+			c.Status.SetComponent("runtime", "stopping", "context canceled")
+			c.Status.SetLifecycle(status.LifecycleStopped)
 			return nil
 		case err := <-portalErr:
-			if err != nil && !errors.Is(err, http.ErrServerClosed) {
+			if err != nil {
+				c.Logger.Error("portal failed", "err", err)
+				c.Status.SetLastError(err.Error())
+				c.Status.SetLifecycle(status.LifecycleFailed)
+				c.Status.SetComponent("portal", "error", "portal terminated unexpectedly")
+				c.Status.SetReady(false, "local portal failed")
 				return err
 			}
-		case pkt, ok := <-packets:
-			if !ok {
-				continue
+			if ctx.Err() != nil {
+				return nil
 			}
-			if err := s.forwardPacket(ctx, pkt); err != nil {
-				log.Printf("forward packet failed: %v", err)
-				_ = s.store.Update(func(ls *state.LocalState) {
-					ls.LastError = err.Error()
-				})
-			}
+			return errors.New("portal exited unexpectedly")
 		case <-ticker.C:
-			if err := s.sendHeartbeat(ctx); err != nil {
-				log.Printf("heartbeat failed: %v", err)
-				_ = s.store.Update(func(ls *state.LocalState) {
-					ls.LastError = err.Error()
-				})
-			}
+			s.tick()
 		}
 	}
 }
 
-func (s *Service) forwardPacket(ctx context.Context, pkt meshtastic.Packet) error {
-	now := time.Now().UTC()
-	err := s.cloud.SendPacket(ctx, cloudclient.Packet{
-		Source:    pkt.SourceID,
-		Payload:   pkt.Payload,
-		Timestamp: pkt.ReceivedAt,
-		Meta: map[string]string{
-			"adapter": "meshtastic",
-		},
-	})
-	if err != nil {
-		return err
-	}
-	return s.store.Update(func(ls *state.LocalState) {
-		ls.LastSeenMesh = &now
-		ls.LastError = ""
-	})
+func (s *Service) CurrentStatus() status.Snapshot {
+	return s.container.Status.Snapshot()
 }
 
-func (s *Service) sendHeartbeat(ctx context.Context) error {
-	snap := s.store.Snapshot()
-	now := time.Now().UTC()
-	err := s.cloud.SendHeartbeat(ctx, cloudclient.Heartbeat{
-		NodeID:           s.cfg.NodeID,
-		Status:           "running",
-		PairingState:     string(snap.PairingStatus),
-		ObservedAt:       now,
-		MeshtasticHealth: s.mesh.Health(),
-	})
-	if err != nil {
-		return err
-	}
-	return s.store.Update(func(ls *state.LocalState) {
-		ls.LastHeartbeat = &now
-		ls.LastError = ""
-	})
+func (s *Service) StatusModel() *status.Model {
+	return s.container.Status
 }
 
-func (s *Service) Snapshot() map[string]string {
-	snap := s.store.Snapshot()
-	out := map[string]string{
-		"node_id":           s.cfg.NodeID,
-		"pairing_status":    string(snap.PairingStatus),
-		"meshtastic_health": s.mesh.Health(),
-		"portal_addr":       s.cfg.PortalAddr,
+func (s *Service) StateStore() *state.Store {
+	return s.container.State
+}
+
+func (s *Service) Mode() config.RunMode {
+	return s.mode
+}
+
+func (s *Service) tick() {
+	c := s.container
+	snap := c.State.Snapshot()
+	c.Status.SetPairingPhase(string(snap.Pairing.Phase))
+	c.Status.SetCloud(c.Config.Cloud.BaseURL, "unknown")
+
+	switch s.mode {
+	case config.ModeSetup:
+		c.Status.SetReady(true, "setup portal available")
+		c.Status.SetComponent("pairing", "waiting", "enter pairing code in local portal")
+	case config.ModeService:
+		ready := snap.Pairing.Phase == state.PairingSteadyState
+		if ready {
+			c.Status.SetReady(true, "service mode active")
+		} else {
+			c.Status.SetReady(false, "service mode requires paired state")
+		}
+		c.Status.SetComponent("pairing", string(snap.Pairing.Phase), "pairing state from persistent store")
+		c.Status.SetComponent("service", "running", "service mode loop active")
+	default:
+		c.Status.SetReady(false, "unknown runtime mode")
+		c.Status.SetLastError("unknown runtime mode")
 	}
-	if snap.LastError != "" {
-		out["last_error"] = snap.LastError
+}
+
+func (s *Service) configureInitialReadiness(phase state.PairingPhase) {
+	switch s.mode {
+	case config.ModeSetup:
+		s.container.Status.SetReady(true, "setup mode selected")
+	case config.ModeService:
+		if phase == state.PairingSteadyState {
+			s.container.Status.SetReady(true, "paired state present")
+			return
+		}
+		s.container.Status.SetReady(false, "service mode requested without steady pairing state")
+	default:
+		s.container.Status.SetReady(false, "runtime mode unresolved")
 	}
-	if snap.LastSeenMesh != nil {
-		out["last_seen_mesh"] = snap.LastSeenMesh.Format(time.RFC3339)
+}
+
+func resolveMode(requested config.RunMode, pairingPhase state.PairingPhase) config.RunMode {
+	switch requested {
+	case config.ModeSetup:
+		return config.ModeSetup
+	case config.ModeService:
+		return config.ModeService
+	default:
+		if pairingPhase == state.PairingSteadyState {
+			return config.ModeService
+		}
+		return config.ModeSetup
 	}
-	if snap.LastHeartbeat != nil {
-		out["last_heartbeat"] = snap.LastHeartbeat.Format(time.RFC3339)
+}
+
+func detectRuntimeProfile(stateFile string) string {
+	path := strings.ToLower(filepath.Clean(stateFile))
+	switch {
+	case strings.HasPrefix(path, "/var/lib/loramapr"):
+		return "linux-service"
+	case strings.Contains(path, "appdata"):
+		return "windows-user"
+	default:
+		return "local-dev"
 	}
-	return out
 }

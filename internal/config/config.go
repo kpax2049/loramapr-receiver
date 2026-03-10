@@ -2,7 +2,10 @@ package config
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -11,17 +14,53 @@ import (
 )
 
 const (
-	// DefaultPath is a development fallback and will be overridden by packaging.
+	// DefaultPath is the local development fallback.
 	DefaultPath = "./receiver.json"
 )
 
+type RunMode string
+
+const (
+	ModeAuto    RunMode = "auto"
+	ModeSetup   RunMode = "setup"
+	ModeService RunMode = "service"
+)
+
 type Config struct {
-	NodeID      string        `json:"node_id"`
-	PortalAddr  string        `json:"portal_addr"`
-	Heartbeat   Duration      `json:"heartbeat"`
-	Cloud       CloudConfig   `json:"cloud"`
-	Meshtastic  MeshConfig    `json:"meshtastic"`
-	StoragePath string        `json:"storage_path"`
+	Service    ServiceConfig    `json:"service"`
+	Paths      PathsConfig      `json:"paths"`
+	Portal     PortalConfig     `json:"portal"`
+	Cloud      CloudConfig      `json:"cloud"`
+	Meshtastic MeshtasticConfig `json:"meshtastic"`
+	Logging    LoggingConfig    `json:"logging"`
+}
+
+type ServiceConfig struct {
+	Mode      RunMode  `json:"mode"`
+	Heartbeat Duration `json:"heartbeat"`
+}
+
+type PathsConfig struct {
+	StateFile string `json:"state_file"`
+}
+
+type PortalConfig struct {
+	BindAddress string `json:"bind_address"`
+}
+
+type CloudConfig struct {
+	BaseURL string `json:"base_url"`
+}
+
+type MeshtasticConfig struct {
+	Transport string `json:"transport,omitempty"`
+	Device    string `json:"device,omitempty"`
+	Network   string `json:"network,omitempty"`
+}
+
+type LoggingConfig struct {
+	Level  string `json:"level"`
+	Format string `json:"format"`
 }
 
 type Duration time.Duration
@@ -62,29 +101,27 @@ func (d *Duration) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-type CloudConfig struct {
-	BaseURL   string `json:"base_url"`
-	PairToken string `json:"pair_token"`
-	APIKey    string `json:"api_key"`
-}
-
-type MeshConfig struct {
-	Transport string `json:"transport"`
-	Device    string `json:"device"`
-	Network   string `json:"network"`
-}
-
 func Default() Config {
 	return Config{
-		NodeID:      "unpaired",
-		PortalAddr:  "127.0.0.1:8080",
-		Heartbeat:   Duration(30 * time.Second),
-		StoragePath: "./data",
+		Service: ServiceConfig{
+			Mode:      ModeAuto,
+			Heartbeat: Duration(30 * time.Second),
+		},
+		Paths: PathsConfig{
+			StateFile: "./data/receiver-state.json",
+		},
+		Portal: PortalConfig{
+			BindAddress: "127.0.0.1:8080",
+		},
 		Cloud: CloudConfig{
 			BaseURL: "https://api.loramapr.example",
 		},
-		Meshtastic: MeshConfig{
+		Meshtastic: MeshtasticConfig{
 			Transport: "serial",
+		},
+		Logging: LoggingConfig{
+			Level:  "info",
+			Format: "json",
 		},
 	}
 }
@@ -98,6 +135,9 @@ func Load(path string) (Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
+			if err := cfg.Validate(); err != nil {
+				return Config{}, err
+			}
 			return cfg, nil
 		}
 		return Config{}, err
@@ -106,12 +146,63 @@ func Load(path string) (Config, error) {
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		return Config{}, err
 	}
+	cfg.applyDefaults()
+	if err := cfg.Validate(); err != nil {
+		return Config{}, err
+	}
 	return cfg, nil
+}
+
+func (c Config) Validate() error {
+	mode := c.Service.Mode
+	if mode == "" {
+		mode = ModeAuto
+	}
+	switch mode {
+	case ModeAuto, ModeSetup, ModeService:
+	default:
+		return fmt.Errorf("invalid service mode %q", c.Service.Mode)
+	}
+
+	if c.Service.Heartbeat.Std() <= 0 {
+		return errors.New("heartbeat must be > 0")
+	}
+
+	if strings.TrimSpace(c.Paths.StateFile) == "" {
+		return errors.New("paths.state_file is required")
+	}
+
+	if _, _, err := net.SplitHostPort(c.Portal.BindAddress); err != nil {
+		return fmt.Errorf("invalid portal.bind_address %q: %w", c.Portal.BindAddress, err)
+	}
+
+	u, err := url.Parse(c.Cloud.BaseURL)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return fmt.Errorf("invalid cloud.base_url %q", c.Cloud.BaseURL)
+	}
+
+	switch strings.ToLower(c.Logging.Level) {
+	case "debug", "info", "warn", "error":
+	default:
+		return fmt.Errorf("invalid logging.level %q", c.Logging.Level)
+	}
+
+	switch strings.ToLower(c.Logging.Format) {
+	case "json", "text":
+	default:
+		return fmt.Errorf("invalid logging.format %q", c.Logging.Format)
+	}
+
+	return nil
 }
 
 func Save(path string, cfg Config) error {
 	if path == "" {
 		path = DefaultPath
+	}
+	cfg.applyDefaults()
+	if err := cfg.Validate(); err != nil {
+		return err
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
@@ -121,4 +212,32 @@ func Save(path string, cfg Config) error {
 		return err
 	}
 	return os.WriteFile(path, data, 0o600)
+}
+
+func (c *Config) applyDefaults() {
+	defaults := Default()
+	if c.Service.Mode == "" {
+		c.Service.Mode = defaults.Service.Mode
+	}
+	if c.Service.Heartbeat.Std() <= 0 {
+		c.Service.Heartbeat = defaults.Service.Heartbeat
+	}
+	if c.Paths.StateFile == "" {
+		c.Paths.StateFile = defaults.Paths.StateFile
+	}
+	if c.Portal.BindAddress == "" {
+		c.Portal.BindAddress = defaults.Portal.BindAddress
+	}
+	if c.Cloud.BaseURL == "" {
+		c.Cloud.BaseURL = defaults.Cloud.BaseURL
+	}
+	if c.Meshtastic.Transport == "" {
+		c.Meshtastic.Transport = defaults.Meshtastic.Transport
+	}
+	if c.Logging.Level == "" {
+		c.Logging.Level = defaults.Logging.Level
+	}
+	if c.Logging.Format == "" {
+		c.Logging.Format = defaults.Logging.Format
+	}
 }

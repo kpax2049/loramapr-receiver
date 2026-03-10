@@ -20,10 +20,10 @@ type Adapter interface {
 }
 
 type StubAdapter struct {
-	cfg config.MeshConfig
+	cfg config.MeshtasticConfig
 }
 
-func NewAdapter(cfg config.MeshConfig) Adapter {
+func NewAdapter(cfg config.MeshtasticConfig) Adapter {
 	return &StubAdapter{cfg: cfg}
 }
 
