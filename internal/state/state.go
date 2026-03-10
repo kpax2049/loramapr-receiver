@@ -37,17 +37,31 @@ type InstallationState struct {
 }
 
 type PairingState struct {
-	Phase      PairingPhase `json:"phase"`
-	LastError  string       `json:"last_error,omitempty"`
-	UpdatedAt  time.Time    `json:"updated_at,omitempty"`
-	LastChange string       `json:"last_change,omitempty"`
+	Phase             PairingPhase `json:"phase"`
+	PairingCode       string       `json:"pairing_code,omitempty"`
+	InstallSessionID  string       `json:"install_session_id,omitempty"`
+	FlowKey           string       `json:"flow_key,omitempty"`
+	ActivationToken   string       `json:"activation_token,omitempty"`
+	ActivationExpires *time.Time   `json:"activation_expires_at,omitempty"`
+	RetryCount        int          `json:"retry_count,omitempty"`
+	NextRetryAt       *time.Time   `json:"next_retry_at,omitempty"`
+	LastAttemptAt     *time.Time   `json:"last_attempt_at,omitempty"`
+	LastError         string       `json:"last_error,omitempty"`
+	UpdatedAt         time.Time    `json:"updated_at,omitempty"`
+	LastChange        string       `json:"last_change,omitempty"`
 }
 
 type CloudState struct {
-	EndpointURL   string    `json:"endpoint_url"`
-	ReceiverID    string    `json:"receiver_id,omitempty"`
-	CredentialRef string    `json:"credential_ref,omitempty"`
-	UpdatedAt     time.Time `json:"updated_at,omitempty"`
+	EndpointURL       string    `json:"endpoint_url"`
+	ActivateEndpoint  string    `json:"activate_endpoint,omitempty"`
+	HeartbeatEndpoint string    `json:"heartbeat_endpoint,omitempty"`
+	IngestEndpoint    string    `json:"ingest_endpoint,omitempty"`
+	OwnerID           string    `json:"owner_id,omitempty"`
+	ReceiverID        string    `json:"receiver_id,omitempty"`
+	IngestAPIKeyID    string    `json:"ingest_api_key_id,omitempty"`
+	IngestAPIKey      string    `json:"ingest_api_key_secret,omitempty"`
+	CredentialRef     string    `json:"credential_ref,omitempty"`
+	UpdatedAt         time.Time `json:"updated_at,omitempty"`
 }
 
 type RuntimeState struct {

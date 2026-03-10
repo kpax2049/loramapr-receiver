@@ -1,0 +1,176 @@
+package cloudclient
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"io"
+	"net/http"
+	"strings"
+	"testing"
+	"time"
+)
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (fn roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return fn(req)
+}
+
+func TestExchangePairingCode(t *testing.T) {
+	t.Parallel()
+
+	client := &HTTPClient{
+		baseURL: "https://api.example.com",
+		client: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			if req.URL.Path != "/api/receiver/bootstrap/exchange" {
+				t.Fatalf("unexpected path: %s", req.URL.Path)
+			}
+			if req.Method != http.MethodPost {
+				t.Fatalf("unexpected method: %s", req.Method)
+			}
+
+			var payload struct {
+				PairingCode string `json:"pairingCode"`
+			}
+			if err := json.NewDecoder(req.Body).Decode(&payload); err != nil {
+				t.Fatalf("decode request: %v", err)
+			}
+			if payload.PairingCode != "LMR-ABC12345" {
+				t.Fatalf("unexpected pairing code: %q", payload.PairingCode)
+			}
+
+			body := `{
+				"installSessionId":"session-1",
+				"flowKey":"meshtastic_first_run",
+				"activationToken":"rx_act_token",
+				"activationExpiresAt":"2026-03-10T18:00:00Z",
+				"receiverLabel":"Home Receiver",
+				"activateEndpoint":"/api/receiver/activate",
+				"heartbeatEndpoint":"/api/receiver/heartbeat",
+				"ingestEndpoint":"/api/meshtastic/event"
+			}`
+			return jsonResponse(http.StatusCreated, body), nil
+		})},
+	}
+
+	response, err := client.ExchangePairingCode(context.Background(), "LMR-ABC12345")
+	if err != nil {
+		t.Fatalf("ExchangePairingCode returned error: %v", err)
+	}
+
+	if response.InstallSessionID != "session-1" {
+		t.Fatalf("unexpected install session: %q", response.InstallSessionID)
+	}
+	if response.ActivationToken != "rx_act_token" {
+		t.Fatalf("unexpected activation token")
+	}
+	if response.ActivationExpires.IsZero() {
+		t.Fatal("expected activation expiry to be parsed")
+	}
+}
+
+func TestActivateReceiver(t *testing.T) {
+	t.Parallel()
+
+	client := &HTTPClient{
+		baseURL: "https://api.example.com",
+		client: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			if req.URL.Path != "/runtime/activate" {
+				t.Fatalf("unexpected path: %s", req.URL.Path)
+			}
+			var payload struct {
+				ActivationToken string `json:"activationToken"`
+				RuntimeVersion  string `json:"runtimeVersion"`
+				Platform        string `json:"platform"`
+				Arch            string `json:"arch"`
+			}
+			if err := json.NewDecoder(req.Body).Decode(&payload); err != nil {
+				t.Fatalf("decode request: %v", err)
+			}
+			if payload.ActivationToken != "rx_act_123" {
+				t.Fatalf("unexpected activation token")
+			}
+
+			body := `{
+				"receiverAgentId":"agent-1",
+				"ownerId":"owner-1",
+				"ingestApiKeyId":"api-key-id",
+				"ingestApiKeySecret":"api-secret",
+				"ingestEndpoint":"/api/meshtastic/event",
+				"heartbeatEndpoint":"/api/receiver/heartbeat",
+				"activatedAt":"2026-03-10T18:10:00Z"
+			}`
+			return jsonResponse(http.StatusCreated, body), nil
+		})},
+	}
+
+	response, err := client.ActivateReceiver(context.Background(), "/runtime/activate", ActivationRequest{
+		ActivationToken: "rx_act_123",
+		RuntimeVersion:  "1.0.0",
+		Platform:        "linux",
+		Arch:            "amd64",
+	})
+	if err != nil {
+		t.Fatalf("ActivateReceiver returned error: %v", err)
+	}
+
+	if response.ReceiverAgentID != "agent-1" {
+		t.Fatalf("unexpected receiver id: %q", response.ReceiverAgentID)
+	}
+	if response.IngestAPIKey != "api-secret" {
+		t.Fatalf("unexpected ingest API key")
+	}
+	if response.ActivatedAt.IsZero() {
+		t.Fatal("expected activated_at to be parsed")
+	}
+}
+
+func TestExchangePairingCodeRetryableError(t *testing.T) {
+	t.Parallel()
+
+	client := &HTTPClient{
+		baseURL: "https://api.example.com",
+		client: &http.Client{Transport: roundTripFunc(func(_ *http.Request) (*http.Response, error) {
+			return jsonResponse(http.StatusServiceUnavailable, `{"message":"temporary outage"}`), nil
+		})},
+	}
+
+	_, err := client.ExchangePairingCode(context.Background(), "LMR-ERR00001")
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !IsRetryable(err) {
+		t.Fatal("expected error to be retryable")
+	}
+}
+
+func TestIsRetryableCanceledContext(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	if IsRetryable(ctx.Err()) {
+		t.Fatal("context canceled should not be retryable")
+	}
+}
+
+func jsonResponse(statusCode int, payload string) *http.Response {
+	return &http.Response{
+		StatusCode: statusCode,
+		Header: http.Header{
+			"Content-Type": []string{"application/json"},
+		},
+		Body: io.NopCloser(bytes.NewBufferString(strings.TrimSpace(payload))),
+	}
+}
+
+func TestNewHTTPClientDefaultTimeout(t *testing.T) {
+	t.Parallel()
+
+	client := NewHTTPClient("https://api.example.com", 0)
+	if client.client.Timeout != 10*time.Second {
+		t.Fatalf("expected default timeout 10s, got %s", client.client.Timeout)
+	}
+}

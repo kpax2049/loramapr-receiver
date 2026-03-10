@@ -9,7 +9,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/loramapr/loramapr-receiver/internal/cloudclient"
 	"github.com/loramapr/loramapr-receiver/internal/config"
+	"github.com/loramapr/loramapr-receiver/internal/pairing"
 	"github.com/loramapr/loramapr-receiver/internal/state"
 	"github.com/loramapr/loramapr-receiver/internal/status"
 	"github.com/loramapr/loramapr-receiver/internal/webportal"
@@ -21,11 +23,12 @@ type Service struct {
 }
 
 type Container struct {
-	Config config.Config
-	Logger *slog.Logger
-	State  *state.Store
-	Status *status.Model
-	Portal *webportal.Server
+	Config  config.Config
+	Logger  *slog.Logger
+	State   *state.Store
+	Status  *status.Model
+	Pairing *pairing.Manager
+	Portal  *webportal.Server
 }
 
 func New(cfg config.Config, logger *slog.Logger) (*Service, error) {
@@ -66,13 +69,23 @@ func New(cfg config.Config, logger *slog.Logger) (*Service, error) {
 	statusModel.SetComponent("meshtastic", "not_implemented", "adapter integration lands in Prompt 5")
 
 	svc := &Service{mode: mode}
+	cloud := cloudclient.NewHTTPClient(cfg.Cloud.BaseURL, 10*time.Second)
 	svc.container = &Container{
 		Config: cfg,
 		Logger: logger.With("component", "runtime"),
 		State:  store,
 		Status: statusModel,
+		Pairing: pairing.NewManager(
+			store,
+			statusModel,
+			cloud,
+			logger,
+			pairing.ActivationIdentity{
+				RuntimeVersion: "0.1.0-dev",
+			},
+		),
 	}
-	svc.container.Portal = webportal.New(cfg.Portal.BindAddress, svc, logger.With("component", "webportal"))
+	svc.container.Portal = webportal.New(cfg.Portal.BindAddress, svc, svc, logger.With("component", "webportal"))
 	svc.configureInitialReadiness(current.Pairing.Phase)
 	return svc, nil
 }
@@ -98,6 +111,7 @@ func (s *Service) Run(ctx context.Context) error {
 
 	ticker := time.NewTicker(c.Config.Service.Heartbeat.Std())
 	defer ticker.Stop()
+	s.tick(ctx)
 
 	for {
 		select {
@@ -122,13 +136,17 @@ func (s *Service) Run(ctx context.Context) error {
 			}
 			return errors.New("portal exited unexpectedly")
 		case <-ticker.C:
-			s.tick()
+			s.tick(ctx)
 		}
 	}
 }
 
 func (s *Service) CurrentStatus() status.Snapshot {
 	return s.container.Status.Snapshot()
+}
+
+func (s *Service) SubmitPairingCode(ctx context.Context, code string) error {
+	return s.container.Pairing.SubmitPairingCode(ctx, code)
 }
 
 func (s *Service) StatusModel() *status.Model {
@@ -143,16 +161,25 @@ func (s *Service) Mode() config.RunMode {
 	return s.mode
 }
 
-func (s *Service) tick() {
+func (s *Service) tick(ctx context.Context) {
 	c := s.container
+	if err := c.Pairing.Process(ctx); err != nil {
+		c.Logger.Error("pairing lifecycle tick failed", "err", err)
+		c.Status.SetLastError("pairing tick failed")
+	}
+
 	snap := c.State.Snapshot()
 	c.Status.SetPairingPhase(string(snap.Pairing.Phase))
-	c.Status.SetCloud(c.Config.Cloud.BaseURL, "unknown")
+	c.Status.SetCloud(c.Config.Cloud.BaseURL, pairingCloudStatus(snap.Pairing.Phase))
 
 	switch s.mode {
 	case config.ModeSetup:
 		c.Status.SetReady(true, "setup portal available")
-		c.Status.SetComponent("pairing", "waiting", "enter pairing code in local portal")
+		if snap.Pairing.Phase == state.PairingSteadyState {
+			c.Status.SetComponent("service", "ready", "receiver paired and activated")
+		} else {
+			c.Status.SetComponent("service", "setup", "receiver in setup mode")
+		}
 	case config.ModeService:
 		ready := snap.Pairing.Phase == state.PairingSteadyState
 		if ready {
@@ -206,5 +233,18 @@ func detectRuntimeProfile(stateFile string) string {
 		return "windows-user"
 	default:
 		return "local-dev"
+	}
+}
+
+func pairingCloudStatus(phase state.PairingPhase) string {
+	switch phase {
+	case state.PairingSteadyState, state.PairingActivated:
+		return "credential_ready"
+	case state.PairingBootstrapExchanged:
+		return "activating"
+	case state.PairingCodeEntered:
+		return "pairing"
+	default:
+		return "unknown"
 	}
 }

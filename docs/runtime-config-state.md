@@ -54,10 +54,19 @@ Persisted fields currently include:
 
 - installation identity (`installation.id`)
 - installation timestamps (`created_at`, `last_started_at`)
-- pairing/bootstrap phase and error state (`pairing.*`)
-- cloud endpoint + receiver identity placeholders (`cloud.*`)
+- pairing/bootstrap phase and retry/error metadata (`pairing.*`)
+- cloud endpoint, activation endpoint, and durable receiver credentials (`cloud.*`)
 - detected runtime profile + selected mode (`runtime.*`)
 - generic metadata timestamp (`metadata.updated_at`)
+
+Important persisted pairing/cloud fields:
+
+- `pairing.pairing_code` (transient until bootstrap exchange)
+- `pairing.activation_token` + `pairing.activation_expires_at`
+- `pairing.next_retry_at` + `pairing.retry_count`
+- `cloud.ingest_api_key_secret` (durable ingest credential)
+
+These values are intentionally **not** exposed by `/api/status`.
 
 ## Typical Packaged Paths (Planned Linux-first)
 

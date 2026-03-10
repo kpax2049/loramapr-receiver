@@ -57,6 +57,7 @@ Default `auto` mode chooses:
 - `GET /healthz` liveness
 - `GET /readyz` readiness (mode/pairing aware)
 - `GET /api/status` structured runtime status snapshot
+- `POST /api/pairing/code` submit pairing code (`{"pairingCode":"LMR-..."}`)
 
 Portal bind address is configured via `portal.bind_address`.
 
@@ -75,3 +76,4 @@ This repository currently contains:
 
 - [Architecture ADR](./docs/adr/0001-standalone-receiver-runtime.md)
 - [Config and State Layout](./docs/runtime-config-state.md)
+- [Pairing and Bootstrap Lifecycle](./docs/pairing-lifecycle.md)
