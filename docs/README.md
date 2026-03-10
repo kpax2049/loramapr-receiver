@@ -11,3 +11,5 @@ Architecture decisions and product runtime specifications for LoRaMapr Receiver.
 - [Service and Install Model](./service-install.md)
 - [Release Artifact Mapping](./release-artifacts.md)
 - [Raspberry Pi Appliance Path](./raspberry-pi-appliance.md)
+- [Release Notes](./release-notes.md)
+- [Reviewer Smoke Test Guide](./reviewer-smoke-test.md)

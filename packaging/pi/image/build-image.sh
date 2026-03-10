@@ -6,9 +6,23 @@ ROOT_DIR="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
 VERSION="${1:-${VERSION:-}}"
 PI_GEN_DIR="${PI_GEN_DIR:-}"
 
-if [[ -z "${VERSION}" ]]; then
-  echo "Usage: $0 <version>" >&2
-  exit 1
+usage() {
+  cat <<USAGE
+Usage: $0 <version>
+
+Environment:
+  PI_GEN_DIR                    Path to local pi-gen checkout (required)
+  LORAMAPR_ARM64_SYSTEMD_TARBALL
+                                Optional override for arm64 systemd artifact path
+USAGE
+}
+
+if [[ "${VERSION}" == "-h" || "${VERSION}" == "--help" || -z "${VERSION}" ]]; then
+  usage
+  if [[ -z "${VERSION}" ]]; then
+    exit 1
+  fi
+  exit 0
 fi
 
 if [[ -z "${PI_GEN_DIR}" ]]; then

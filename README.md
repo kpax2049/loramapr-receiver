@@ -92,3 +92,5 @@ This repository currently contains:
 - [Service and Install Model](./docs/service-install.md)
 - [Release Artifact Mapping](./docs/release-artifacts.md)
 - [Raspberry Pi Appliance Path](./docs/raspberry-pi-appliance.md)
+- [Release Notes](./docs/release-notes.md)
+- [Reviewer Smoke Test Guide](./docs/reviewer-smoke-test.md)
