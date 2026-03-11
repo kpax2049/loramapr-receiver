@@ -10,6 +10,7 @@ Architecture decisions and product runtime specifications for LoRaMapr Receiver.
 - [Steady-State Cloud Loop](./steady-state.md)
 - [Service and Install Model](./service-install.md)
 - [Release Artifact Mapping](./release-artifacts.md)
+- [Linux/Pi Distribution Path](./linux-pi-distribution.md)
 - [Raspberry Pi Appliance Path](./raspberry-pi-appliance.md)
 - [Release Notes](./release-notes.md)
 - [Reviewer Smoke Test Guide](./reviewer-smoke-test.md)

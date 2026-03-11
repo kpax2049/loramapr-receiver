@@ -91,6 +91,7 @@ This repository currently contains:
 - [Steady-State Cloud Loop](./docs/steady-state.md)
 - [Service and Install Model](./docs/service-install.md)
 - [Release Artifact Mapping](./docs/release-artifacts.md)
+- [Linux/Pi Distribution Path](./docs/linux-pi-distribution.md)
 - [Raspberry Pi Appliance Path](./docs/raspberry-pi-appliance.md)
 - [Release Notes](./docs/release-notes.md)
 - [Reviewer Smoke Test Guide](./docs/reviewer-smoke-test.md)

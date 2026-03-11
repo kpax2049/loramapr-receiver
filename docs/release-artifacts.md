@@ -58,3 +58,8 @@ versioning explicit in URL path.
 
 The generated `relativeUrl` values in the manifest fragment are based on this
 path pattern (`receiver/<channel>/<version>/<artifact-file>`).
+
+For signed Linux/Pi publication flow and channel index metadata generation, see:
+
+- `packaging/distribution/README.md`
+- `docs/linux-pi-distribution.md`
