@@ -19,6 +19,16 @@ const (
 	maxRetryDelay        = 2 * time.Minute
 )
 
+type LifecycleChange string
+
+const (
+	LifecycleCredentialRevoked LifecycleChange = "credential_revoked"
+	LifecycleReceiverDisabled  LifecycleChange = "receiver_disabled"
+	LifecycleReceiverReplaced  LifecycleChange = "receiver_replaced"
+	LifecycleLocalReset        LifecycleChange = "local_reset"
+	LifecycleLocalDeauthorized LifecycleChange = "local_deauthorized"
+)
+
 type ActivationIdentity struct {
 	Label          string
 	RuntimeVersion string
@@ -93,6 +103,71 @@ func (m *Manager) SubmitPairingCode(_ context.Context, code string) error {
 	m.status.SetPairingPhase(string(state.PairingCodeEntered))
 	m.status.SetComponent("pairing", "pairing_code_entered", "pairing code accepted")
 	m.status.SetLastError("")
+	return nil
+}
+
+func (m *Manager) ResetPairing(deauthorize bool) error {
+	change := LifecycleLocalReset
+	detail := ""
+	clearDurable := false
+	if deauthorize {
+		change = LifecycleLocalDeauthorized
+		detail = "local receiver deauthorization requested"
+		clearDurable = true
+	}
+	return m.ApplyLifecycleChange(change, detail, clearDurable)
+}
+
+func (m *Manager) ApplyLifecycleChange(change LifecycleChange, detail string, clearDurable bool) error {
+	if !isLifecycleChangeValid(change) {
+		return fmt.Errorf("invalid lifecycle change %q", change)
+	}
+
+	now := m.now().UTC()
+	reason := sanitizeText(detail)
+	if !isLocalLifecycleChange(change) && reason == "" {
+		reason = lifecycleDefaultReason(change)
+	}
+
+	if err := m.store.Update(func(data *state.Data) {
+		data.Pairing.Phase = state.PairingUnpaired
+		data.Pairing.PairingCode = ""
+		data.Pairing.InstallSessionID = ""
+		data.Pairing.FlowKey = ""
+		data.Pairing.ActivationToken = ""
+		data.Pairing.ActivationExpires = nil
+		data.Pairing.RetryCount = 0
+		data.Pairing.NextRetryAt = nil
+		data.Pairing.LastAttemptAt = &now
+		if isLocalLifecycleChange(change) {
+			data.Pairing.LastError = ""
+		} else {
+			data.Pairing.LastError = reason
+		}
+		data.Pairing.UpdatedAt = now
+		data.Pairing.LastChange = string(change)
+
+		if clearDurable {
+			data.Cloud.OwnerID = ""
+			data.Cloud.ReceiverID = ""
+			data.Cloud.IngestAPIKeyID = ""
+			data.Cloud.IngestAPIKey = ""
+			data.Cloud.CredentialRef = ""
+			data.Cloud.UpdatedAt = now
+		}
+	}); err != nil {
+		return err
+	}
+
+	componentState, componentMessage := lifecycleStatus(change)
+	m.status.SetPairingPhase(string(state.PairingUnpaired))
+	m.status.SetComponent("pairing", componentState, componentMessage)
+	if isLocalLifecycleChange(change) {
+		m.status.SetLastError("")
+	} else {
+		m.status.SetLastError(lifecycleError(change))
+	}
+
 	return nil
 }
 
@@ -379,6 +454,14 @@ func sanitizeError(err error) string {
 	return text
 }
 
+func sanitizeText(value string) string {
+	trimmed := strings.TrimSpace(value)
+	if len(trimmed) > 256 {
+		return trimmed[:256]
+	}
+	return trimmed
+}
+
 func minInt(a, b int) int {
 	if a < b {
 		return a
@@ -422,4 +505,64 @@ func isPairingCodeExpired(err error) bool {
 		return apiErr.StatusCode == 410
 	}
 	return false
+}
+
+func isLifecycleChangeValid(change LifecycleChange) bool {
+	switch change {
+	case LifecycleCredentialRevoked,
+		LifecycleReceiverDisabled,
+		LifecycleReceiverReplaced,
+		LifecycleLocalReset,
+		LifecycleLocalDeauthorized:
+		return true
+	default:
+		return false
+	}
+}
+
+func isLocalLifecycleChange(change LifecycleChange) bool {
+	return change == LifecycleLocalReset || change == LifecycleLocalDeauthorized
+}
+
+func lifecycleDefaultReason(change LifecycleChange) string {
+	switch change {
+	case LifecycleCredentialRevoked:
+		return "receiver credential was revoked by cloud"
+	case LifecycleReceiverDisabled:
+		return "receiver is disabled by cloud policy"
+	case LifecycleReceiverReplaced:
+		return "receiver was replaced by a newer installation"
+	default:
+		return "receiver lifecycle changed"
+	}
+}
+
+func lifecycleStatus(change LifecycleChange) (string, string) {
+	switch change {
+	case LifecycleCredentialRevoked:
+		return "credential_revoked", "receiver credential was revoked; re-pair required"
+	case LifecycleReceiverDisabled:
+		return "receiver_disabled", "receiver is disabled in cloud; resolve and re-pair"
+	case LifecycleReceiverReplaced:
+		return "receiver_replaced", "receiver was replaced by another installation"
+	case LifecycleLocalDeauthorized:
+		return "deauthorized", "local credentials cleared; enter a new pairing code"
+	case LifecycleLocalReset:
+		return "reset", "pairing state reset; enter a new pairing code"
+	default:
+		return "lifecycle_changed", "receiver lifecycle changed"
+	}
+}
+
+func lifecycleError(change LifecycleChange) string {
+	switch change {
+	case LifecycleCredentialRevoked:
+		return "receiver credential revoked"
+	case LifecycleReceiverDisabled:
+		return "receiver disabled by cloud"
+	case LifecycleReceiverReplaced:
+		return "receiver replaced by another install"
+	default:
+		return "receiver lifecycle changed"
+	}
 }

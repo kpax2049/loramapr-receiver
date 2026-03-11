@@ -279,3 +279,74 @@ func TestNormalizePairingCodeValidation(t *testing.T) {
 		t.Fatalf("expected normalized code, got %q", code)
 	}
 }
+
+func TestApplyLifecycleChangeClearsDurableCredentials(t *testing.T) {
+	t.Parallel()
+
+	store, err := state.Open(filepath.Join(t.TempDir(), "receiver-state.json"))
+	if err != nil {
+		t.Fatalf("open state: %v", err)
+	}
+	err = store.Update(func(data *state.Data) {
+		data.Pairing.Phase = state.PairingSteadyState
+		data.Cloud.OwnerID = "owner-1"
+		data.Cloud.ReceiverID = "receiver-1"
+		data.Cloud.IngestAPIKeyID = "key-1"
+		data.Cloud.IngestAPIKey = "secret"
+		data.Cloud.CredentialRef = "receiver-1"
+	})
+	if err != nil {
+		t.Fatalf("seed state: %v", err)
+	}
+
+	manager := NewManager(store, status.New(), nil, nil, ActivationIdentity{})
+	if err := manager.ApplyLifecycleChange(LifecycleReceiverDisabled, "disabled by policy", true); err != nil {
+		t.Fatalf("ApplyLifecycleChange: %v", err)
+	}
+
+	snap := store.Snapshot()
+	if snap.Pairing.Phase != state.PairingUnpaired {
+		t.Fatalf("expected phase %q, got %q", state.PairingUnpaired, snap.Pairing.Phase)
+	}
+	if snap.Pairing.LastChange != string(LifecycleReceiverDisabled) {
+		t.Fatalf("expected last_change %q, got %q", LifecycleReceiverDisabled, snap.Pairing.LastChange)
+	}
+	if snap.Cloud.IngestAPIKey != "" || snap.Cloud.IngestAPIKeyID != "" || snap.Cloud.CredentialRef != "" {
+		t.Fatalf("expected durable cloud credentials to be cleared")
+	}
+}
+
+func TestResetPairingPreservesInstallationID(t *testing.T) {
+	t.Parallel()
+
+	store, err := state.Open(filepath.Join(t.TempDir(), "receiver-state.json"))
+	if err != nil {
+		t.Fatalf("open state: %v", err)
+	}
+	initialInstallID := store.Snapshot().Installation.ID
+
+	err = store.Update(func(data *state.Data) {
+		data.Pairing.Phase = state.PairingSteadyState
+		data.Cloud.IngestAPIKey = "secret"
+		data.Cloud.IngestAPIKeyID = "key-1"
+	})
+	if err != nil {
+		t.Fatalf("seed state: %v", err)
+	}
+
+	manager := NewManager(store, status.New(), nil, nil, ActivationIdentity{})
+	if err := manager.ResetPairing(true); err != nil {
+		t.Fatalf("ResetPairing: %v", err)
+	}
+
+	snap := store.Snapshot()
+	if snap.Installation.ID != initialInstallID {
+		t.Fatalf("expected installation ID to be preserved")
+	}
+	if snap.Pairing.LastChange != string(LifecycleLocalDeauthorized) {
+		t.Fatalf("expected last_change %q, got %q", LifecycleLocalDeauthorized, snap.Pairing.LastChange)
+	}
+	if snap.Cloud.IngestAPIKey != "" {
+		t.Fatalf("expected ingest API key to be cleared")
+	}
+}

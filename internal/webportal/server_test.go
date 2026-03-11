@@ -21,8 +21,10 @@ func (s staticStatusProvider) CurrentStatus() status.Snapshot {
 }
 
 type recordingPairingSubmitter struct {
-	codes []string
-	err   error
+	codes           []string
+	resetCalls      int
+	lastDeauthorize bool
+	err             error
 }
 
 func (r *recordingPairingSubmitter) SubmitPairingCode(_ context.Context, code string) error {
@@ -30,6 +32,15 @@ func (r *recordingPairingSubmitter) SubmitPairingCode(_ context.Context, code st
 		return r.err
 	}
 	r.codes = append(r.codes, code)
+	return nil
+}
+
+func (r *recordingPairingSubmitter) ResetPairing(_ context.Context, deauthorize bool) error {
+	if r.err != nil {
+		return r.err
+	}
+	r.resetCalls++
+	r.lastDeauthorize = deauthorize
 	return nil
 }
 
@@ -91,6 +102,50 @@ func TestPairingAPI(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), `"accepted":true`) {
 		t.Fatalf("expected accepted response body")
+	}
+}
+
+func TestResetRoute(t *testing.T) {
+	t.Parallel()
+
+	submitter := &recordingPairingSubmitter{}
+	srv := New("127.0.0.1:0", staticStatusProvider{snapshot: sampleSnapshot()}, submitter, nil)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/reset", strings.NewReader("deauthorize=1"))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	srv.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("expected 303 redirect, got %d", rec.Code)
+	}
+	if submitter.resetCalls != 1 {
+		t.Fatalf("expected reset call")
+	}
+	if !submitter.lastDeauthorize {
+		t.Fatalf("expected deauthorize=true")
+	}
+}
+
+func TestLifecycleResetAPI(t *testing.T) {
+	t.Parallel()
+
+	submitter := &recordingPairingSubmitter{}
+	srv := New("127.0.0.1:0", staticStatusProvider{snapshot: sampleSnapshot()}, submitter, nil)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/lifecycle/reset", strings.NewReader(`{"deauthorize":false}`))
+	req.Header.Set("Content-Type", "application/json")
+	srv.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("expected 202, got %d", rec.Code)
+	}
+	if submitter.resetCalls != 1 {
+		t.Fatalf("expected reset call")
+	}
+	if submitter.lastDeauthorize {
+		t.Fatalf("expected deauthorize=false")
 	}
 }
 
@@ -160,6 +215,28 @@ func TestTroubleshootingShowsFailureHint(t *testing.T) {
 	}
 	if !strings.Contains(body, "Check DNS and outbound network connectivity.") {
 		t.Fatalf("expected failure hint in troubleshooting page")
+	}
+}
+
+func TestTroubleshootingLifecycleResetHint(t *testing.T) {
+	t.Parallel()
+
+	snap := sampleSnapshot()
+	snap.FailureCode = "receiver_credential_revoked"
+	snap.FailureSummary = "Receiver credential was revoked by cloud"
+	snap.FailureHint = "Reset local receiver credentials and re-pair from LoRaMapr Cloud."
+
+	srv := New("127.0.0.1:0", staticStatusProvider{snapshot: snap}, &recordingPairingSubmitter{}, nil)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/troubleshooting", nil)
+	srv.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "Reset And Re-pair") {
+		t.Fatalf("expected lifecycle reset action in troubleshooting page")
 	}
 }
 

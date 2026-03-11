@@ -30,6 +30,8 @@ const (
 	maxIngestBatchTick  = 32
 )
 
+var errLifecycleTransition = errors.New("receiver lifecycle transition")
+
 type CloudClient interface {
 	cloudclient.PairingClient
 	PostIngestEvent(ctx context.Context, ingestEndpoint string, apiKey string, payload map[string]any, idempotencyKey string) error
@@ -232,6 +234,10 @@ func (s *Service) SubmitPairingCode(ctx context.Context, code string) error {
 	return s.container.Pairing.SubmitPairingCode(ctx, code)
 }
 
+func (s *Service) ResetPairing(_ context.Context, deauthorize bool) error {
+	return s.container.Pairing.ResetPairing(deauthorize)
+}
+
 func (s *Service) StatusModel() *status.Model {
 	return s.container.Status
 }
@@ -259,7 +265,7 @@ func (s *Service) tick(ctx context.Context) {
 	meshSnap := c.Meshtastic.Snapshot()
 
 	c.Status.SetPairingPhase(string(snap.Pairing.Phase))
-	c.Status.SetCloud(c.Config.Cloud.BaseURL, pairingCloudStatus(snap.Pairing.Phase))
+	c.Status.SetCloud(c.Config.Cloud.BaseURL, pairingCloudStatus(snap.Pairing))
 	c.Status.SetComponent("meshtastic", string(meshSnap.State), meshtasticStatusMessage(meshSnap))
 
 	s.processSteadyState(ctx, snap, meshSnap)
@@ -358,6 +364,19 @@ func (s *Service) processSteadyState(ctx context.Context, snapshot state.Data, m
 	}
 
 	heartbeatErr := s.sendHeartbeat(ctx, snapshot, meshSnap)
+	if errors.Is(heartbeatErr, errLifecycleTransition) {
+		fresh := isHeartbeatFresh(s.steady.lastHeartbeatAck, c.Config.Service.Heartbeat.Std())
+		c.Status.SetHeartbeat(s.steady.lastHeartbeatSent, s.steady.lastHeartbeatAck, fresh)
+		c.Status.SetPacketTelemetry(
+			s.steady.lastPacketQueued,
+			s.steady.lastPacketSent,
+			s.steady.lastPacketAck,
+			len(s.steady.ingestQueue),
+		)
+		c.Status.SetCloudReachable(false)
+		c.Status.SetCloud(snapshot.Cloud.EndpointURL, "lifecycle_blocked")
+		return
+	}
 	if heartbeatErr != nil {
 		if cloudclient.IsRetryable(heartbeatErr) {
 			c.Logger.Warn("heartbeat failed", "err", heartbeatErr)
@@ -366,6 +385,19 @@ func (s *Service) processSteadyState(ctx context.Context, snapshot state.Data, m
 		}
 	}
 	ingestErr := s.drainIngestQueue(ctx, snapshot)
+	if errors.Is(ingestErr, errLifecycleTransition) {
+		fresh := isHeartbeatFresh(s.steady.lastHeartbeatAck, c.Config.Service.Heartbeat.Std())
+		c.Status.SetHeartbeat(s.steady.lastHeartbeatSent, s.steady.lastHeartbeatAck, fresh)
+		c.Status.SetPacketTelemetry(
+			s.steady.lastPacketQueued,
+			s.steady.lastPacketSent,
+			s.steady.lastPacketAck,
+			len(s.steady.ingestQueue),
+		)
+		c.Status.SetCloudReachable(false)
+		c.Status.SetCloud(snapshot.Cloud.EndpointURL, "lifecycle_blocked")
+		return
+	}
 	if ingestErr != nil {
 		if cloudclient.IsRetryable(ingestErr) {
 			c.Logger.Warn("ingest delivery failed", "err", ingestErr)
@@ -431,6 +463,12 @@ func (s *Service) sendHeartbeat(ctx context.Context, snapshot state.Data, meshSn
 		},
 	})
 	if err != nil {
+		if change, ok := lifecycleChangeFromCloudError(err); ok {
+			if applyErr := s.handleLifecycleCloudError(change, err); applyErr != nil {
+				return applyErr
+			}
+			return errLifecycleTransition
+		}
 		s.steady.cloudReachable = false
 		s.container.Status.SetLastError(coarseCloudError(err))
 		return err
@@ -474,6 +512,13 @@ func (s *Service) drainIngestQueue(ctx context.Context, snapshot state.Data) err
 			s.steady.ingestQueue = s.steady.ingestQueue[1:]
 			s.container.Status.SetComponent("ingest", "delivered", fmt.Sprintf("queue depth %d", len(s.steady.ingestQueue)))
 			continue
+		}
+
+		if change, ok := lifecycleChangeFromCloudError(err); ok {
+			if applyErr := s.handleLifecycleCloudError(change, err); applyErr != nil {
+				return applyErr
+			}
+			return errLifecycleTransition
 		}
 
 		if cloudclient.IsRetryable(err) {
@@ -631,8 +676,8 @@ func resolveRuntimeProfile(requestedProfile string, stateFile string) string {
 	}
 }
 
-func pairingCloudStatus(phase state.PairingPhase) string {
-	switch phase {
+func pairingCloudStatus(pairingState state.PairingState) string {
+	switch pairingState.Phase {
 	case state.PairingSteadyState, state.PairingActivated:
 		return "credential_ready"
 	case state.PairingBootstrapExchanged:
@@ -640,6 +685,14 @@ func pairingCloudStatus(phase state.PairingPhase) string {
 	case state.PairingCodeEntered:
 		return "pairing"
 	default:
+		switch strings.TrimSpace(pairingState.LastChange) {
+		case string(pairing.LifecycleCredentialRevoked):
+			return "credential_revoked"
+		case string(pairing.LifecycleReceiverDisabled):
+			return "receiver_disabled"
+		case string(pairing.LifecycleReceiverReplaced):
+			return "receiver_replaced"
+		}
 		return "unknown"
 	}
 }
@@ -716,6 +769,86 @@ func coarseCloudError(err error) string {
 		return "cloud endpoint unreachable"
 	}
 	return "cloud request failed"
+}
+
+func (s *Service) handleLifecycleCloudError(change pairing.LifecycleChange, err error) error {
+	c := s.container
+	reason := lifecycleChangeReason(err)
+	if applyErr := c.Pairing.ApplyLifecycleChange(change, reason, true); applyErr != nil {
+		return applyErr
+	}
+
+	s.steady.cloudReachable = false
+	s.steady.ingestQueue = nil
+	c.Status.SetCloud(c.Config.Cloud.BaseURL, "lifecycle_blocked")
+	c.Status.SetCloudReachable(false)
+	c.Status.SetComponent("service", "blocked", lifecycleServiceMessage(change))
+	c.Status.SetComponent("ingest", "blocked", "ingest disabled until receiver is re-paired")
+	return nil
+}
+
+func lifecycleChangeFromCloudError(err error) (pairing.LifecycleChange, bool) {
+	var apiErr *cloudclient.APIError
+	if !errors.As(err, &apiErr) {
+		return "", false
+	}
+
+	statusCode := apiErr.StatusCode
+	message := strings.ToLower(strings.TrimSpace(apiErr.Message))
+
+	if statusCode == 423 || strings.Contains(message, "disabled") {
+		return pairing.LifecycleReceiverDisabled, true
+	}
+	if strings.Contains(message, "replaced") || strings.Contains(message, "superseded") || strings.Contains(message, "replacement") {
+		return pairing.LifecycleReceiverReplaced, true
+	}
+	if statusCode == 401 {
+		return pairing.LifecycleCredentialRevoked, true
+	}
+	if statusCode == 403 {
+		if strings.Contains(message, "revoked") ||
+			strings.Contains(message, "invalid") ||
+			strings.Contains(message, "unauthorized") ||
+			strings.Contains(message, "forbidden") ||
+			strings.Contains(message, "auth") ||
+			message == "" {
+			return pairing.LifecycleCredentialRevoked, true
+		}
+	}
+	if statusCode == 409 || statusCode == 410 {
+		if strings.Contains(message, "replaced") || strings.Contains(message, "superseded") {
+			return pairing.LifecycleReceiverReplaced, true
+		}
+		if strings.Contains(message, "revoked") || strings.Contains(message, "invalid") {
+			return pairing.LifecycleCredentialRevoked, true
+		}
+	}
+	return "", false
+}
+
+func lifecycleChangeReason(err error) string {
+	var apiErr *cloudclient.APIError
+	if errors.As(err, &apiErr) {
+		message := strings.TrimSpace(apiErr.Message)
+		if message == "" {
+			return fmt.Sprintf("cloud lifecycle response status=%d", apiErr.StatusCode)
+		}
+		return message
+	}
+	return strings.TrimSpace(err.Error())
+}
+
+func lifecycleServiceMessage(change pairing.LifecycleChange) string {
+	switch change {
+	case pairing.LifecycleCredentialRevoked:
+		return "receiver credential revoked; re-pair required"
+	case pairing.LifecycleReceiverDisabled:
+		return "receiver disabled by cloud; resolve policy and re-pair"
+	case pairing.LifecycleReceiverReplaced:
+		return "receiver replaced by newer install; re-pair this host if needed"
+	default:
+		return "receiver lifecycle changed; re-pair required"
+	}
 }
 
 func minInt(a, b int) int {

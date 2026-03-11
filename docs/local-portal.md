@@ -20,6 +20,7 @@ UI routes:
 - `GET /` welcome + quick status
 - `GET /pairing` pairing code entry form
 - `POST /pairing` pairing code submission form action
+- `POST /reset` local reset/deauthorize form action
 - `GET /progress` setup/runtime progress
 - `GET /troubleshooting` human-readable checks
 - `GET /advanced` runtime/platform details
@@ -30,6 +31,7 @@ API routes:
 - `GET /readyz` readiness
 - `GET /api/status` structured status JSON
 - `POST /api/pairing/code` JSON pairing submission
+- `POST /api/lifecycle/reset` JSON reset/deauthorize action
 
 ## Binding Strategy
 
@@ -66,6 +68,9 @@ Portal pages now surface coarse receiver failure taxonomy with actionable hints:
 - `pairing_code_expired`
 - `activation_failed`
 - `pairing_not_completed`
+- `receiver_credential_revoked`
+- `receiver_disabled`
+- `receiver_replaced`
 - `cloud_unreachable`
 - `network_unavailable`
 - `portal_unavailable`
@@ -76,3 +81,9 @@ Portal pages now surface coarse receiver failure taxonomy with actionable hints:
 
 This keeps setup failures human-readable while staying aligned with cloud/onboarding
 terminology.
+
+Lifecycle recovery path in portal:
+
+- troubleshooting page includes "Reset And Re-pair" action
+- reset transitions local runtime to `unpaired` setup state
+- user then submits a fresh pairing code on the Pairing page

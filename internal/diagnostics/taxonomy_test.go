@@ -34,6 +34,30 @@ func TestEvaluateFailureTaxonomy(t *testing.T) {
 			want: FailureActivationFailed,
 		},
 		{
+			name: "credential revoked",
+			in: Input{
+				PairingLastChange: "credential_revoked",
+				Now:               now,
+			},
+			want: FailureReceiverRevoked,
+		},
+		{
+			name: "receiver disabled",
+			in: Input{
+				PairingLastChange: "receiver_disabled",
+				Now:               now,
+			},
+			want: FailureReceiverDisabled,
+		},
+		{
+			name: "receiver replaced",
+			in: Input{
+				PairingLastChange: "receiver_replaced",
+				Now:               now,
+			},
+			want: FailureReceiverReplaced,
+		},
+		{
 			name: "cloud unreachable",
 			in: Input{
 				PairingPhase:    "steady_state",

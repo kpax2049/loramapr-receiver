@@ -1,5 +1,8 @@
 # LoRaMapr Receiver Release Notes
 
+For Receiver Lifecycle Management notes targeting `v2.3.0`, see
+`docs/release-notes-v2.3.0.md`.
+
 For Raspberry Pi Appliance GA notes targeting `v2.2.0`, see
 `docs/release-notes-v2.2.0.md`.
 

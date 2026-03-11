@@ -26,6 +26,7 @@ type StatusProvider interface {
 
 type PairingCodeSubmitter interface {
 	SubmitPairingCode(ctx context.Context, code string) error
+	ResetPairing(ctx context.Context, deauthorize bool) error
 }
 
 type Server struct {
@@ -79,7 +80,9 @@ func New(addr string, statusProvider StatusProvider, pairing PairingCodeSubmitte
 	mux.HandleFunc("/readyz", s.handleReady)
 	mux.HandleFunc("/api/status", s.handleStatus)
 	mux.HandleFunc("/api/pairing/code", s.handlePairingCode)
+	mux.HandleFunc("/api/lifecycle/reset", s.handleLifecycleReset)
 	mux.HandleFunc("/pairing", s.routePairing)
+	mux.HandleFunc("/reset", s.routeReset)
 	mux.HandleFunc("/progress", s.handleProgress)
 	mux.HandleFunc("/troubleshooting", s.handleTroubleshooting)
 	mux.HandleFunc("/advanced", s.handleAdvanced)
@@ -185,10 +188,58 @@ func (s *Server) handlePairingCode(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(payload)
 }
 
+func (s *Server) handleLifecycleReset(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", http.MethodPost)
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.pairing == nil {
+		http.Error(w, "pairing subsystem is not available", http.StatusServiceUnavailable)
+		return
+	}
+
+	request := struct {
+		Deauthorize *bool `json:"deauthorize,omitempty"`
+	}{}
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		http.Error(w, "invalid JSON body", http.StatusBadRequest)
+		return
+	}
+
+	deauthorize := true
+	if request.Deauthorize != nil {
+		deauthorize = *request.Deauthorize
+	}
+	if err := s.pairing.ResetPairing(r.Context(), deauthorize); err != nil {
+		http.Error(w, "reset failed: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	response := map[string]any{
+		"accepted":    true,
+		"deauthorize": deauthorize,
+	}
+	payload, err := json.Marshal(response)
+	if err != nil {
+		http.Error(w, "encode response failed", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusAccepted)
+	_, _ = w.Write(payload)
+}
+
 func (s *Server) routePairing(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
-		s.renderPairing(w, r, "", "")
+		flash := ""
+		flashClass := ""
+		if r.URL.Query().Get("reset") == "1" {
+			flash = "Receiver reset completed. Enter a new pairing code to link this installation."
+			flashClass = "ok"
+		}
+		s.renderPairing(w, r, flash, flashClass)
 	case http.MethodPost:
 		if err := r.ParseForm(); err != nil {
 			s.renderPairing(w, r, "invalid form payload", "err")
@@ -203,6 +254,29 @@ func (s *Server) routePairing(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Allow", "GET, POST")
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
+}
+
+func (s *Server) routeReset(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", http.MethodPost)
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.pairing == nil {
+		http.Error(w, "pairing subsystem is not available", http.StatusServiceUnavailable)
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "invalid form payload", http.StatusBadRequest)
+		return
+	}
+
+	deauthorize := parseDeauthorizeValue(r.Form.Get("deauthorize"), true)
+	if err := s.pairing.ResetPairing(r.Context(), deauthorize); err != nil {
+		http.Error(w, "reset failed: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	http.Redirect(w, r, "/pairing?reset=1", http.StatusSeeOther)
 }
 
 func (s *Server) handleWelcome(w http.ResponseWriter, r *http.Request) {
@@ -354,6 +428,10 @@ func summaryHint(snap status.Snapshot) (string, string) {
 
 func nextAction(snap status.Snapshot) string {
 	isAppliance := strings.EqualFold(strings.TrimSpace(snap.RuntimeProfile), "appliance-pi")
+	switch strings.TrimSpace(snap.FailureCode) {
+	case "receiver_credential_revoked", "receiver_disabled", "receiver_replaced":
+		return "Use reset/re-pair to relink this receiver with LoRaMapr Cloud."
+	}
 	switch snap.PairingPhase {
 	case "unpaired":
 		if isAppliance {
@@ -381,6 +459,10 @@ func troubleshootingHints(snap status.Snapshot) []string {
 		if hint := strings.TrimSpace(snap.FailureHint); hint != "" {
 			hints = append(hints, "Suggested action: "+hint)
 		}
+	}
+	switch strings.TrimSpace(snap.FailureCode) {
+	case "receiver_credential_revoked", "receiver_disabled", "receiver_replaced":
+		hints = append(hints, "Lifecycle recovery: use reset to clear local credentials, then submit a fresh pairing code.")
 	}
 	if snap.PairingPhase == "unpaired" {
 		hints = append(hints, "Generate a fresh pairing code in LoRaMapr Cloud and submit it on the Pairing page.")
@@ -425,4 +507,18 @@ func troubleshootingHints(snap status.Snapshot) []string {
 		hints = append(hints, "No active issues detected. Continue monitoring Progress for node and ingest updates.")
 	}
 	return hints
+}
+
+func parseDeauthorizeValue(raw string, defaultValue bool) bool {
+	trimmed := strings.ToLower(strings.TrimSpace(raw))
+	switch trimmed {
+	case "", "default":
+		return defaultValue
+	case "1", "true", "yes", "on":
+		return true
+	case "0", "false", "no", "off":
+		return false
+	default:
+		return defaultValue
+	}
 }

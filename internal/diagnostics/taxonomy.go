@@ -13,6 +13,9 @@ const (
 	FailurePairingCodeExpired  FailureCode = "pairing_code_expired"
 	FailureActivationFailed    FailureCode = "activation_failed"
 	FailurePairingNotCompleted FailureCode = "pairing_not_completed"
+	FailureReceiverRevoked     FailureCode = "receiver_credential_revoked"
+	FailureReceiverDisabled    FailureCode = "receiver_disabled"
+	FailureReceiverReplaced    FailureCode = "receiver_replaced"
 	FailureCloudUnreachable    FailureCode = "cloud_unreachable"
 	FailureNetworkUnavailable  FailureCode = "network_unavailable"
 	FailurePortalUnavailable   FailureCode = "portal_unavailable"
@@ -71,6 +74,24 @@ func Evaluate(input Input) Finding {
 			Summary: "Receiver activation failed",
 			Hint:    "Retry pairing and confirm cloud onboarding session is still active.",
 		}
+	case "credential_revoked":
+		return Finding{
+			Code:    FailureReceiverRevoked,
+			Summary: "Receiver credential was revoked by cloud",
+			Hint:    "Reset local receiver credentials and re-pair from LoRaMapr Cloud.",
+		}
+	case "receiver_disabled":
+		return Finding{
+			Code:    FailureReceiverDisabled,
+			Summary: "Receiver is disabled in cloud",
+			Hint:    "Resolve cloud-side receiver policy, then reset and re-pair this installation.",
+		}
+	case "receiver_replaced":
+		return Finding{
+			Code:    FailureReceiverReplaced,
+			Summary: "Receiver was replaced by another installation",
+			Hint:    "Re-pair this machine only if it should become the active receiver again.",
+		}
 	}
 
 	pairingErr := strings.ToLower(strings.TrimSpace(input.PairingLastError))
@@ -90,6 +111,27 @@ func Evaluate(input Input) Finding {
 	}
 
 	runtimeErr := strings.ToLower(strings.TrimSpace(input.RuntimeLastError))
+	if strings.Contains(runtimeErr, "credential revoked") {
+		return Finding{
+			Code:    FailureReceiverRevoked,
+			Summary: "Receiver credential was revoked by cloud",
+			Hint:    "Reset local receiver credentials and re-pair from LoRaMapr Cloud.",
+		}
+	}
+	if strings.Contains(runtimeErr, "receiver disabled") {
+		return Finding{
+			Code:    FailureReceiverDisabled,
+			Summary: "Receiver is disabled in cloud",
+			Hint:    "Resolve cloud-side receiver policy, then reset and re-pair this installation.",
+		}
+	}
+	if strings.Contains(runtimeErr, "receiver replaced") {
+		return Finding{
+			Code:    FailureReceiverReplaced,
+			Summary: "Receiver was replaced by another installation",
+			Hint:    "Re-pair this machine only if it should become the active receiver again.",
+		}
+	}
 	if strings.Contains(runtimeErr, "status=401") || strings.Contains(runtimeErr, "status=403") || strings.Contains(runtimeErr, "authentication rejected") {
 		return Finding{
 			Code:    FailureReceiverAuthInvalid,

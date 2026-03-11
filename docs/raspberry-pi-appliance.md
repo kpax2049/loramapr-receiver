@@ -53,6 +53,14 @@ Appliance-specific failure visibility includes:
 - `portal_unavailable`
 - `node_detected_not_connected`
 - `no_serial_device_detected`
+- `receiver_credential_revoked`
+- `receiver_disabled`
+- `receiver_replaced`
+
+Lifecycle recovery on appliance (no SSH normal path):
+
+- use portal Troubleshooting action "Reset And Re-pair"
+- re-enter a fresh pairing code in portal
 
 ## Image Build Scaffolding
 

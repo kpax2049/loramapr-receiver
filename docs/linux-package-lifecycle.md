@@ -76,6 +76,24 @@ After `apt remove`, reinstalling with `apt install`:
 - reuses preserved config/state when present
 - reenables and starts service by default
 
+## Receiver Reset / Re-pair Semantics
+
+Lifecycle recovery command:
+
+```bash
+loramapr-receiverd reset-pairing -config /etc/loramapr/receiver.json
+```
+
+Default (`-deauthorize=true`) behavior:
+
+- preserves `installation.id`
+- clears durable receiver cloud credentials from local state
+- keeps config file and install layout unchanged
+- returns runtime to pairing-ready setup state
+
+This is the supported local operation for revoked/disabled/replaced receiver
+recovery without reinstalling the package.
+
 ## Validation and Smoke Checks
 
 Maintainer validation scripts:

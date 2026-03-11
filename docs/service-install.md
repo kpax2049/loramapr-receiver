@@ -12,6 +12,7 @@ This document defines the receiver install/service model for `loramapr-receiverd
 - `doctor`: local diagnostics for config/state runtime prerequisites
 - `status`: print persisted state summary JSON
 - `support-snapshot`: export redacted diagnostics/support JSON bundle
+- `reset-pairing`: local deauthorize/reset and re-pair preparation
 
 ## Linux-first Path (systemd)
 

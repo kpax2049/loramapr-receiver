@@ -10,6 +10,9 @@ Runtime/portal diagnostics now use these coarse failure codes:
 - `pairing_code_expired`
 - `activation_failed`
 - `pairing_not_completed`
+- `receiver_credential_revoked`
+- `receiver_disabled`
+- `receiver_replaced`
 - `cloud_unreachable`
 - `network_unavailable`
 - `portal_unavailable`
@@ -81,9 +84,12 @@ Only boolean presence indicators are included for secret-bearing fields.
 ## Support Workflow
 
 1. Run `doctor` and note failure code + hint.
-2. Capture `support-snapshot` JSON.
-3. Confirm portal Troubleshooting output matches failure code.
-4. If cloud-side escalation is needed, share failure code and redacted snapshot.
+2. If failure is lifecycle-related (`receiver_credential_revoked`,
+   `receiver_disabled`, `receiver_replaced`), run local reset/deauthorize:
+   - `loramapr-receiverd reset-pairing -config /etc/loramapr/receiver.json`
+3. Capture `support-snapshot` JSON.
+4. Confirm portal Troubleshooting output matches failure code.
+5. If cloud-side escalation is needed, share failure code and redacted snapshot.
 
 This keeps terminology aligned between local receiver support and cloud onboarding
 status surfaces.

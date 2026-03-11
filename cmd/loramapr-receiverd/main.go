@@ -19,8 +19,10 @@ import (
 	"github.com/loramapr/loramapr-receiver/internal/install"
 	"github.com/loramapr/loramapr-receiver/internal/logging"
 	"github.com/loramapr/loramapr-receiver/internal/meshtastic"
+	"github.com/loramapr/loramapr-receiver/internal/pairing"
 	"github.com/loramapr/loramapr-receiver/internal/runtime"
 	"github.com/loramapr/loramapr-receiver/internal/state"
+	"github.com/loramapr/loramapr-receiver/internal/status"
 )
 
 func main() {
@@ -44,6 +46,8 @@ func main() {
 		statusCommand(args[1:])
 	case "support-snapshot":
 		supportSnapshotCommand(args[1:])
+	case "reset-pairing":
+		resetPairingCommand(args[1:])
 	default:
 		if strings.HasPrefix(cmd, "-") {
 			runCommand(args)
@@ -383,6 +387,37 @@ func supportSnapshotCommand(args []string) {
 	fmt.Printf("Support snapshot written: %s\n", *outputPath)
 }
 
+func resetPairingCommand(args []string) {
+	flags := flag.NewFlagSet("reset-pairing", flag.ExitOnError)
+	configPath := flags.String("config", config.DefaultPath, "path to receiver config file")
+	deauthorize := flags.Bool("deauthorize", true, "clear durable receiver credentials and require full re-pair")
+	_ = flags.Parse(args)
+
+	cfg, err := config.Load(*configPath)
+	if err != nil {
+		slog.Error("reset pairing failed: load config", "err", err)
+		os.Exit(1)
+	}
+	store, err := state.Open(cfg.Paths.StateFile)
+	if err != nil {
+		slog.Error("reset pairing failed: open state", "err", err)
+		os.Exit(1)
+	}
+
+	manager := pairing.NewManager(store, status.New(), nil, nil, pairing.ActivationIdentity{})
+	if err := manager.ResetPairing(*deauthorize); err != nil {
+		slog.Error("reset pairing failed", "err", err)
+		os.Exit(1)
+	}
+
+	mode := "reset"
+	if *deauthorize {
+		mode = "deauthorized"
+	}
+	fmt.Printf("Pairing state reset complete (%s).\n", mode)
+	fmt.Println("Next step: open local portal and submit a fresh pairing code.")
+}
+
 func signalNotifyContext() (context.Context, context.CancelFunc) {
 	return signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 }
@@ -396,6 +431,7 @@ func printUsage() {
 	fmt.Println("  loramapr-receiverd doctor [flags]")
 	fmt.Println("  loramapr-receiverd status [flags]")
 	fmt.Println("  loramapr-receiverd support-snapshot [flags]")
+	fmt.Println("  loramapr-receiverd reset-pairing [flags]")
 	fmt.Println("")
 	fmt.Println("If no subcommand is provided, run mode is used.")
 }

@@ -62,6 +62,29 @@ Failure transitions:
 - activation token expiration:
   - phase resets to `unpaired`
 
+Lifecycle invalidation transitions (steady-state runtime):
+
+- cloud credential revoked:
+  - phase resets to `unpaired`
+  - `pairing.last_change = credential_revoked`
+  - durable cloud ingest credential is cleared locally
+- receiver disabled:
+  - phase resets to `unpaired`
+  - `pairing.last_change = receiver_disabled`
+  - durable cloud ingest credential is cleared locally
+- receiver replaced/superseded:
+  - phase resets to `unpaired`
+  - `pairing.last_change = receiver_replaced`
+  - durable cloud ingest credential is cleared locally
+
+Local operator actions:
+
+- local reset without deauthorization:
+  - `pairing.last_change = local_reset`
+- local reset with deauthorization (default reset command behavior):
+  - `pairing.last_change = local_deauthorized`
+  - durable cloud ingest credential is cleared locally
+
 ## Restart Safety
 
 Pairing lifecycle is restart-safe via persisted state file:
@@ -69,6 +92,8 @@ Pairing lifecycle is restart-safe via persisted state file:
 - pairing code and bootstrap activation token are persisted while needed
 - retry metadata (`retry_count`, `next_retry_at`) survives restarts
 - durable cloud credentials survive restarts
+- lifecycle invalidation (`credential_revoked`, `receiver_disabled`,
+  `receiver_replaced`) survives restarts
 - after restart, runtime resumes from persisted phase instead of restarting onboarding flow
 
 ## Sensitive Data Handling

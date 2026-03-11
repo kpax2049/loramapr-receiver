@@ -2,7 +2,9 @@ package runtime
 
 import (
 	"context"
+	"errors"
 	"log/slog"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -10,6 +12,7 @@ import (
 	"github.com/loramapr/loramapr-receiver/internal/cloudclient"
 	"github.com/loramapr/loramapr-receiver/internal/config"
 	"github.com/loramapr/loramapr-receiver/internal/meshtastic"
+	"github.com/loramapr/loramapr-receiver/internal/pairing"
 	"github.com/loramapr/loramapr-receiver/internal/state"
 	"github.com/loramapr/loramapr-receiver/internal/status"
 )
@@ -289,5 +292,133 @@ func TestSendHeartbeatPayloadShaping(t *testing.T) {
 	}
 	if len(mockCloud.lastHeartbeat.ObservedNodeIDs) != 2 {
 		t.Fatalf("unexpected observed nodes in heartbeat payload")
+	}
+}
+
+func TestLifecycleChangeFromCloudError(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name   string
+		err    error
+		want   pairing.LifecycleChange
+		wantOK bool
+	}{
+		{
+			name:   "revoked by status",
+			err:    &cloudclient.APIError{StatusCode: 401, Message: "unauthorized", Retryable: false},
+			want:   pairing.LifecycleCredentialRevoked,
+			wantOK: true,
+		},
+		{
+			name:   "disabled by message",
+			err:    &cloudclient.APIError{StatusCode: 403, Message: "receiver disabled", Retryable: false},
+			want:   pairing.LifecycleReceiverDisabled,
+			wantOK: true,
+		},
+		{
+			name:   "replaced by message",
+			err:    &cloudclient.APIError{StatusCode: 409, Message: "receiver superseded by replacement", Retryable: false},
+			want:   pairing.LifecycleReceiverReplaced,
+			wantOK: true,
+		},
+		{
+			name:   "retryable transport error",
+			err:    errors.New("dial tcp timeout"),
+			want:   "",
+			wantOK: false,
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got, ok := lifecycleChangeFromCloudError(tc.err)
+			if ok != tc.wantOK {
+				t.Fatalf("expected ok=%v got=%v", tc.wantOK, ok)
+			}
+			if got != tc.want {
+				t.Fatalf("expected change %q got %q", tc.want, got)
+			}
+		})
+	}
+}
+
+func TestPairingCloudStatusLifecycleState(t *testing.T) {
+	t.Parallel()
+
+	if got := pairingCloudStatus(state.PairingState{
+		Phase:      state.PairingUnpaired,
+		LastChange: string(pairing.LifecycleReceiverDisabled),
+	}); got != "receiver_disabled" {
+		t.Fatalf("expected receiver_disabled, got %q", got)
+	}
+	if got := pairingCloudStatus(state.PairingState{
+		Phase:      state.PairingUnpaired,
+		LastChange: string(pairing.LifecycleCredentialRevoked),
+	}); got != "credential_revoked" {
+		t.Fatalf("expected credential_revoked, got %q", got)
+	}
+}
+
+func TestSendHeartbeatLifecycleTransitionRevoked(t *testing.T) {
+	t.Parallel()
+
+	statePath := filepath.Join(t.TempDir(), "receiver-state.json")
+	store, err := state.Open(statePath)
+	if err != nil {
+		t.Fatalf("open state: %v", err)
+	}
+	err = store.Update(func(data *state.Data) {
+		data.Pairing.Phase = state.PairingSteadyState
+		data.Cloud.IngestAPIKey = "secret-1"
+		data.Cloud.IngestAPIKeyID = "key-1"
+		data.Cloud.CredentialRef = "receiver-1"
+		data.Cloud.HeartbeatEndpoint = "/api/receiver/heartbeat"
+	})
+	if err != nil {
+		t.Fatalf("seed state: %v", err)
+	}
+
+	statusModel := status.New()
+	pairingManager := pairing.NewManager(store, statusModel, nil, nil, pairing.ActivationIdentity{})
+	mockCloud := &mockCloudClient{
+		heartbeatErr: &cloudclient.APIError{StatusCode: 401, Message: "credential revoked", Retryable: false},
+	}
+	svc := &Service{
+		container: &Container{
+			Config:  config.Default(),
+			Logger:  slog.Default(),
+			State:   store,
+			Status:  statusModel,
+			Cloud:   mockCloud,
+			Pairing: pairingManager,
+		},
+		mode: config.ModeService,
+		steady: steadyState{
+			ingestQueue: []queuedIngestEvent{
+				{payload: map[string]any{"fromId": "node-1"}},
+			},
+		},
+	}
+
+	err = svc.sendHeartbeat(context.Background(), store.Snapshot(), meshtastic.Snapshot{State: meshtastic.StateConnected})
+	if !errors.Is(err, errLifecycleTransition) {
+		t.Fatalf("expected lifecycle transition error, got %v", err)
+	}
+
+	snap := store.Snapshot()
+	if snap.Pairing.Phase != state.PairingUnpaired {
+		t.Fatalf("expected phase %q, got %q", state.PairingUnpaired, snap.Pairing.Phase)
+	}
+	if snap.Pairing.LastChange != string(pairing.LifecycleCredentialRevoked) {
+		t.Fatalf("expected last_change %q, got %q", pairing.LifecycleCredentialRevoked, snap.Pairing.LastChange)
+	}
+	if snap.Cloud.IngestAPIKey != "" || snap.Cloud.IngestAPIKeyID != "" || snap.Cloud.CredentialRef != "" {
+		t.Fatalf("expected durable credentials cleared after lifecycle transition")
+	}
+	if len(svc.steady.ingestQueue) != 0 {
+		t.Fatalf("expected ingest queue to be cleared after lifecycle transition")
 	}
 }

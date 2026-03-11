@@ -82,9 +82,29 @@ Important persisted pairing/cloud fields:
 - `pairing.pairing_code` (transient until bootstrap exchange)
 - `pairing.activation_token` + `pairing.activation_expires_at`
 - `pairing.next_retry_at` + `pairing.retry_count`
+- `pairing.last_change` lifecycle marker (`credential_revoked`,
+  `receiver_disabled`, `receiver_replaced`, `local_reset`,
+  `local_deauthorized`)
 - `cloud.ingest_api_key_secret` (durable ingest credential)
 
 These values are intentionally **not** exposed by `/api/status`.
+
+## Lifecycle Reset and Identity Persistence
+
+Local lifecycle command:
+
+```bash
+loramapr-receiverd reset-pairing -config /etc/loramapr/receiver.json
+```
+
+Default behavior deauthorizes local durable credentials and returns runtime to
+`pairing.phase=unpaired`.
+
+Identity semantics:
+
+- `installation.id` is preserved during reset/re-pair operations
+- durable cloud credential fields are cleared on deauthorization
+- fresh storage (new state file) creates a new `installation.id`
 
 ## Upgrade and Migration Handling
 

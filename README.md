@@ -46,6 +46,7 @@ Service/install command modes:
 ./bin/loramapr-receiverd run -config ./receiver.json
 ./bin/loramapr-receiverd doctor -config ./receiver.json
 ./bin/loramapr-receiverd status -config ./receiver.json
+./bin/loramapr-receiverd reset-pairing -config ./receiver.json
 ./bin/loramapr-receiverd install --dry-run --target-root /tmp/receiver-stage
 ```
 
@@ -67,6 +68,7 @@ Default `auto` mode chooses:
 - `GET /readyz` readiness (mode/pairing aware)
 - `GET /api/status` structured runtime status snapshot
 - `POST /api/pairing/code` submit pairing code (`{"pairingCode":"LMR-..."}`)
+- `POST /api/lifecycle/reset` reset/deauthorize local pairing state
 
 Portal bind address is configured via `portal.bind_address`.
 
@@ -86,8 +88,10 @@ This repository currently contains:
 - [Architecture ADR](./docs/adr/0001-standalone-receiver-runtime.md)
 - [v2.1.0 GA Plan: Linux/Pi Existing-OS](./docs/ga-v2.1.0-linux-pi-existing-os.md)
 - [v2.2.0 GA Plan: Raspberry Pi Appliance](./docs/ga-v2.2.0-raspberry-pi-appliance.md)
+- [v2.3.0 Plan: Receiver Lifecycle Management](./docs/ga-v2.3.0-receiver-lifecycle-management.md)
 - [Config and State Layout](./docs/runtime-config-state.md)
 - [Pairing and Bootstrap Lifecycle](./docs/pairing-lifecycle.md)
+- [Receiver Lifecycle Management](./docs/receiver-lifecycle.md)
 - [Embedded Local Setup Portal](./docs/local-portal.md)
 - [Meshtastic Adapter Behavior](./docs/meshtastic-adapter.md)
 - [Steady-State Cloud Loop](./docs/steady-state.md)
@@ -100,6 +104,7 @@ This repository currently contains:
 - [Raspberry Pi Appliance Path](./docs/raspberry-pi-appliance.md)
 - [Publish Guide](./docs/publish-guide.md)
 - [Release Notes](./docs/release-notes.md)
+- [Release Notes v2.3.0](./docs/release-notes-v2.3.0.md)
 - [Release Notes v2.2.0](./docs/release-notes-v2.2.0.md)
 - [Release Notes v2.1.0](./docs/release-notes-v2.1.0.md)
 - [Release Notes v1.1.0](./docs/release-notes-v1.1.0.md)

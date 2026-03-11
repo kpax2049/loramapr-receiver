@@ -1,114 +1,87 @@
-# Reviewer Smoke Test Guide (v2.2.0)
+# Reviewer Smoke Test Guide (v2.3.0)
 
-This guide validates Raspberry Pi Appliance GA end-to-end behavior. The
-existing-OS package path remains a supported alternate path and is listed in the
-final section.
+This guide validates receiver-side lifecycle behavior for revoked/disabled/
+replaced/reset/re-pair scenarios.
 
 ## Prerequisites
 
-- Build host with Go and release dependencies
-- `pi-gen` workspace for real image generation
-- Raspberry Pi 4/5/400 (`arm64`) + SD card
-- LAN with DHCP and internet access
-- Optional Meshtastic device for node/packet checks
+- Go toolchain
+- receiver config file (for local runtime checks)
+- optional Debian-family host for package lifecycle checks
 
-## 1. Build Artifacts (Including Pi Image)
+## 1. Build and Unit Tests
 
 ```bash
-VERSION=v2.2.0-smoke
-CHANNEL=stable
-PI_GEN_DIR=/path/to/pi-gen \
-ENABLE_PI_IMAGE=1 \
-packaging/release/build-artifacts.sh "${VERSION}" "${CHANNEL}"
+GOCACHE=/tmp/go-build-cache GOTMPDIR=/tmp make test
 ```
 
-Expected under `dist/${VERSION}/artifacts/`:
-
-- `loramapr-receiver_${VERSION}_pi_arm64.img.xz`
-- `loramapr-receiver_${VERSION}_pi_arm64.image-metadata.json`
-- standard platform archives and checksums/manifest metadata
-
-Validate the Pi image artifact:
+Targeted lifecycle tests:
 
 ```bash
-packaging/pi/image/validate-image.sh dist/${VERSION}/artifacts/loramapr-receiver_${VERSION}_pi_arm64.img.xz
-```
-
-## 2. Publish and Verify Distribution Output
-
-```bash
-SIGNING_MODE=none packaging/distribution/publish.sh "${VERSION}" "${CHANNEL}"
-PI_IMAGE_REQUIRED=1 SIGNING_REQUIRED=0 packaging/distribution/verify.sh "${VERSION}" "${CHANNEL}"
+GOCACHE=/tmp/go-build-cache GOTMPDIR=/tmp go test ./internal/runtime -run Lifecycle
+GOCACHE=/tmp/go-build-cache GOTMPDIR=/tmp go test ./internal/pairing -run Lifecycle
+GOCACHE=/tmp/go-build-cache GOTMPDIR=/tmp go test ./internal/diagnostics -run Taxonomy
 ```
 
 Expected:
 
-- published static receiver tree
-- published APT tree (existing-OS alternate path)
-- Pi image verification passes from published path
+- tests pass
+- lifecycle transitions map to explicit local failure codes
 
-## 3. Flash and Boot Pi Appliance
+## 2. Local Reset/Re-pair Flow
 
-1. Flash `loramapr-receiver_${VERSION}_pi_arm64.img.xz` to SD card.
-2. In Raspberry Pi Imager custom settings, preconfigure Wi-Fi/country/hostname
-   settings if needed.
-3. Boot Pi on LAN and wait for service startup.
+Run explicit local reset:
 
-## 4. Discover and Open Local Portal (No SSH Path)
-
-From another LAN device:
-
-- `http://loramapr-receiver.local:8080`
-- fallback `http://<pi-lan-ip>:8080`
+```bash
+loramapr-receiverd reset-pairing -config /etc/loramapr/receiver.json
+loramapr-receiverd status -config /etc/loramapr/receiver.json
+```
 
 Expected:
 
-- welcome/progress pages load
-- status shows pairing-ready state when unpaired
-- troubleshooting page shows actionable guidance if blocked
+- pairing phase becomes `unpaired`
+- status reflects setup-ready pairing flow
+- durable credentials are cleared after default deauthorize reset
 
-## 5. Pairing and Runtime Progress
+## 3. Portal Lifecycle Recovery Path
 
-1. Submit pairing code in portal (or `POST /api/pairing/code`).
-2. Observe phase progression:
-   - `unpaired` -> `pairing_code_entered` -> `bootstrap_exchanged` -> `activated` -> `steady_state`
-3. Confirm no persistent failure code after successful pairing.
+1. Open local portal: `http://<receiver-host>:8080/troubleshooting`
+2. Use `Reset And Re-pair`.
+3. Navigate to Pairing page and submit a fresh pairing code.
 
-## 6. Node and Packet Checks
+Expected:
 
-With Meshtastic device attached:
+- reset action redirects to Pairing with reset confirmation
+- receiver returns to pairing flow without reinstall
 
-1. Confirm status transitions from detection toward `connected`.
-2. Confirm packet telemetry fields advance:
-   - `last_packet_queued`
-   - `last_packet_ack`
-3. Confirm no persistent `events_not_forwarding` state.
+## 4. Lifecycle Failure Visibility
 
-## 7. Diagnostics Capture
+Use diagnostics surfaces:
 
 ```bash
 loramapr-receiverd doctor -config /etc/loramapr/receiver.json
-loramapr-receiverd doctor -config /etc/loramapr/receiver.json -json | jq
 loramapr-receiverd support-snapshot -config /etc/loramapr/receiver.json -out /tmp/receiver-support.json
 cat /tmp/receiver-support.json | jq
 ```
 
-Expected:
+Expected lifecycle codes when applicable:
 
-- appliance-specific failure states are explicit (`network_unavailable`,
-  `pairing_not_completed`, `portal_unavailable`, etc.)
-- support snapshot remains redacted (no secrets)
+- `receiver_credential_revoked`
+- `receiver_disabled`
+- `receiver_replaced`
 
-## 8. Existing-OS Alternate Path (Sanity)
+Support snapshot remains redacted (no pairing code/token/ingest secret values).
 
-Confirm existing-OS package path is still intact:
+## 5. Reinstall/Recovery Semantics (Debian-family)
 
-```bash
-VERSION=v2.2.0-smoke
-CHANNEL=stable
-SIGNING_MODE=none packaging/distribution/publish.sh "${VERSION}" "${CHANNEL}"
-SIGNING_REQUIRED=0 packaging/distribution/verify.sh "${VERSION}" "${CHANNEL}"
-```
+Validate package lifecycle expectations:
 
-Then install via APT on Debian-family host and confirm service/portal startup as
-documented in `docs/linux-pi-distribution.md`.
+1. install package
+2. run `reset-pairing`
+3. `apt remove` then reinstall
+4. confirm runtime starts and pairing portal is available
+
+Policy expectations are documented in:
+
+- `docs/linux-package-lifecycle.md`
+- `docs/receiver-lifecycle.md`
