@@ -89,7 +89,7 @@ func TestBuildInfo(t *testing.T) {
 	t.Parallel()
 
 	model := New()
-	model.SetBuildInfo("v1.1.0", "stable", "abc123")
+	model.SetBuildInfo("v1.1.0", "stable", "abc123", "2026-03-11T00:00:00Z", "build-abc123", "linux", "arm64", "linux-package")
 	snap := model.Snapshot()
 
 	if snap.ReceiverVersion != "v1.1.0" {
@@ -100,5 +100,47 @@ func TestBuildInfo(t *testing.T) {
 	}
 	if snap.BuildCommit != "abc123" {
 		t.Fatalf("unexpected build_commit: %q", snap.BuildCommit)
+	}
+	if snap.BuildDate != "2026-03-11T00:00:00Z" {
+		t.Fatalf("unexpected build_date: %q", snap.BuildDate)
+	}
+	if snap.BuildID != "build-abc123" {
+		t.Fatalf("unexpected build_id: %q", snap.BuildID)
+	}
+	if snap.Platform != "linux" || snap.Arch != "arm64" {
+		t.Fatalf("unexpected platform/arch: %s/%s", snap.Platform, snap.Arch)
+	}
+	if snap.InstallType != "linux-package" {
+		t.Fatalf("unexpected install_type: %q", snap.InstallType)
+	}
+}
+
+func TestUpdateStatus(t *testing.T) {
+	t.Parallel()
+
+	model := New()
+	now := time.Date(2026, 3, 11, 14, 0, 0, 0, time.UTC)
+	model.SetUpdateStatus(
+		"outdated",
+		"New stable receiver release is available",
+		"Upgrade via apt or appliance image refresh.",
+		"v2.4.0",
+		"stable",
+		"v2.4.0",
+		&now,
+	)
+	snap := model.Snapshot()
+
+	if snap.UpdateStatus != "outdated" {
+		t.Fatalf("unexpected update_status: %q", snap.UpdateStatus)
+	}
+	if snap.UpdateManifestVersion != "v2.4.0" {
+		t.Fatalf("unexpected update_manifest_version: %q", snap.UpdateManifestVersion)
+	}
+	if snap.UpdateManifestChannel != "stable" {
+		t.Fatalf("unexpected update_manifest_channel: %q", snap.UpdateManifestChannel)
+	}
+	if snap.UpdateCheckedAt == nil {
+		t.Fatal("expected update_checked_at to be set")
 	}
 }

@@ -1,4 +1,5 @@
 {
+  "schema_version": 2,
   "service": {
     "mode": "auto",
     "heartbeat": "30s"
@@ -14,6 +15,13 @@
   },
   "cloud": {
     "base_url": "https://api.loramapr.example"
+  },
+  "update": {
+    "enabled": false,
+    "manifest_url": "https://downloads.loramapr.com/receiver/stable/latest/cloud-manifest.fragment.json",
+    "check_interval": "6h",
+    "request_timeout": "4s",
+    "min_supported_version": ""
   },
   "meshtastic": {
     "transport": "serial",

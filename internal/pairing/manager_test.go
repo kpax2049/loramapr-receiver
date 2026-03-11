@@ -57,6 +57,7 @@ func TestPairingLifecycleProgression(t *testing.T) {
 			FlowKey:           "meshtastic_first_run",
 			ActivationToken:   "rx_act_abc123",
 			ActivationExpires: now.Add(10 * time.Minute),
+			ConfigVersion:     "v1.2",
 			ActivateEndpoint:  "https://api.example.com/api/receiver/activate",
 			HeartbeatEndpoint: "https://api.example.com/api/receiver/heartbeat",
 			IngestEndpoint:    "https://api.example.com/api/meshtastic/event",
@@ -66,6 +67,7 @@ func TestPairingLifecycleProgression(t *testing.T) {
 			OwnerID:           "owner-1",
 			IngestAPIKeyID:    "key-id-1",
 			IngestAPIKey:      "secret-1",
+			ConfigVersion:     "v1.3",
 			IngestEndpoint:    "https://api.example.com/api/meshtastic/event",
 			HeartbeatEndpoint: "https://api.example.com/api/receiver/heartbeat",
 			ActivatedAt:       now,
@@ -95,6 +97,9 @@ func TestPairingLifecycleProgression(t *testing.T) {
 	}
 	if snap.Cloud.IngestAPIKey != "secret-1" {
 		t.Fatalf("expected durable ingest key to be stored")
+	}
+	if snap.Cloud.ConfigVersion != "v1.3" {
+		t.Fatalf("expected cloud config version to be persisted, got %q", snap.Cloud.ConfigVersion)
 	}
 
 	if err := manager.Process(context.Background()); err != nil {

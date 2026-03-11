@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	goruntime "runtime"
 	"strings"
 	"syscall"
 	"time"
@@ -87,6 +88,9 @@ func runCommand(args []string) {
 	svc, err := runtime.New(cfg, logger)
 	if err != nil {
 		logger.Error("create runtime failed", "err", err)
+		if hint := upgradeCompatibilityHint(err); hint != "" {
+			logger.Error("runtime compatibility hint", "hint", hint)
+		}
 		os.Exit(1)
 	}
 
@@ -179,6 +183,9 @@ func doctorCommand(args []string) {
 	store, err := state.Open(cfg.Paths.StateFile)
 	if err != nil {
 		fmt.Printf("[FAIL] state open: %v\n", err)
+		if hint := upgradeCompatibilityHint(err); hint != "" {
+			fmt.Printf("[HINT] %s\n", hint)
+		}
 		os.Exit(1)
 	}
 	snapshot := store.Snapshot()
@@ -204,6 +211,11 @@ func doctorCommand(args []string) {
 		"receiver_version":     buildinfo.Current().Version,
 		"release_channel":      buildinfo.Current().Channel,
 		"build_commit":         buildinfo.Current().Commit,
+		"build_date":           buildinfo.Current().BuildDate,
+		"build_id":             buildinfo.Current().BuildID,
+		"platform":             goruntime.GOOS,
+		"arch":                 goruntime.GOARCH,
+		"install_type":         installType(snapshot.Runtime.InstallType, cfg.Runtime.Profile),
 		"config_path":          *configPath,
 		"state_path":           cfg.Paths.StateFile,
 		"pairing_phase":        snapshot.Pairing.Phase,
@@ -211,6 +223,16 @@ func doctorCommand(args []string) {
 		"cloud_base_url":       cfg.Cloud.BaseURL,
 		"cloud_probe":          cloudProbe,
 		"network_probe":        networkProbe,
+		"cloud_config_version": snapshot.Cloud.ConfigVersion,
+		"update_status":        snapshot.Update.Status,
+		"update_summary":       snapshot.Update.Summary,
+		"update_hint":          snapshot.Update.Hint,
+		"update_checked_at":    snapshot.Update.LastCheckedAt,
+		"update_manifest": map[string]any{
+			"version":     snapshot.Update.ManifestVersion,
+			"channel":     snapshot.Update.ManifestChannel,
+			"recommended": snapshot.Update.RecommendedVersion,
+		},
 		"meshtastic_transport": cfg.Meshtastic.Transport,
 		"meshtastic_probe":     deviceProbe,
 		"failure_code":         finding.Code,
@@ -231,6 +253,14 @@ func doctorCommand(args []string) {
 	fmt.Printf("[OK] config load: %s\n", *configPath)
 	fmt.Printf("[OK] state open: %s\n", cfg.Paths.StateFile)
 	fmt.Printf("[INFO] pairing phase: %s (%s)\n", snapshot.Pairing.Phase, snapshot.Pairing.LastChange)
+	fmt.Printf("[INFO] build: version=%s channel=%s build_id=%s platform=%s/%s install_type=%s\n",
+		buildinfo.Current().Version,
+		buildinfo.Current().Channel,
+		buildinfo.Current().BuildID,
+		goruntime.GOOS,
+		goruntime.GOARCH,
+		installType(snapshot.Runtime.InstallType, cfg.Runtime.Profile),
+	)
 	fmt.Printf("[INFO] cloud probe: %s", cloudProbe.Status)
 	if cloudProbe.Detail != "" {
 		fmt.Printf(" (%s)", cloudProbe.Detail)
@@ -249,6 +279,13 @@ func doctorCommand(args []string) {
 	} else {
 		fmt.Println("[OK] no active failure states detected")
 	}
+	if strings.TrimSpace(snapshot.Update.Status) != "" {
+		fmt.Printf("[INFO] update status: %s", snapshot.Update.Status)
+		if summary := strings.TrimSpace(snapshot.Update.Summary); summary != "" {
+			fmt.Printf(" (%s)", summary)
+		}
+		fmt.Println()
+	}
 	fmt.Println("Doctor checks completed.")
 }
 
@@ -265,6 +302,9 @@ func statusCommand(args []string) {
 	store, err := state.Open(cfg.Paths.StateFile)
 	if err != nil {
 		slog.Error("status failed: open state", "err", err)
+		if hint := upgradeCompatibilityHint(err); hint != "" {
+			slog.Error("status compatibility hint", "hint", hint)
+		}
 		os.Exit(1)
 	}
 	snapshot := store.Snapshot()
@@ -286,18 +326,33 @@ func statusCommand(args []string) {
 	})
 
 	output := map[string]any{
-		"receiver_version": buildinfo.Current().Version,
-		"release_channel":  buildinfo.Current().Channel,
-		"build_commit":     buildinfo.Current().Commit,
-		"config_path":      *configPath,
-		"state_path":       cfg.Paths.StateFile,
-		"installation_id":  snapshot.Installation.ID,
-		"pairing_phase":    snapshot.Pairing.Phase,
-		"cloud_endpoint":   cfg.Cloud.BaseURL,
-		"runtime_mode":     snapshot.Runtime.Mode,
-		"runtime_profile":  snapshot.Runtime.Profile,
-		"meshtastic_mode":  cfg.Meshtastic.Transport,
-		"meshtastic_state": meshState,
+		"receiver_version":     buildinfo.Current().Version,
+		"release_channel":      buildinfo.Current().Channel,
+		"build_commit":         buildinfo.Current().Commit,
+		"build_date":           buildinfo.Current().BuildDate,
+		"build_id":             buildinfo.Current().BuildID,
+		"platform":             goruntime.GOOS,
+		"arch":                 goruntime.GOARCH,
+		"config_path":          *configPath,
+		"state_path":           cfg.Paths.StateFile,
+		"installation_id":      snapshot.Installation.ID,
+		"pairing_phase":        snapshot.Pairing.Phase,
+		"cloud_endpoint":       cfg.Cloud.BaseURL,
+		"runtime_mode":         snapshot.Runtime.Mode,
+		"runtime_profile":      snapshot.Runtime.Profile,
+		"install_type":         installType(snapshot.Runtime.InstallType, cfg.Runtime.Profile),
+		"meshtastic_mode":      cfg.Meshtastic.Transport,
+		"meshtastic_state":     meshState,
+		"cloud_config_version": snapshot.Cloud.ConfigVersion,
+		"update_status":        snapshot.Update.Status,
+		"update_summary":       snapshot.Update.Summary,
+		"update_hint":          snapshot.Update.Hint,
+		"update_checked_at":    snapshot.Update.LastCheckedAt,
+		"update_manifest": map[string]any{
+			"version":     snapshot.Update.ManifestVersion,
+			"channel":     snapshot.Update.ManifestChannel,
+			"recommended": snapshot.Update.RecommendedVersion,
+		},
 		"last_pairing_err": snapshot.Pairing.LastError,
 		"failure_code":     finding.Code,
 		"failure_summary":  finding.Summary,
@@ -329,6 +384,9 @@ func supportSnapshotCommand(args []string) {
 	store, err := state.Open(cfg.Paths.StateFile)
 	if err != nil {
 		slog.Error("support snapshot failed: open state", "err", err)
+		if hint := upgradeCompatibilityHint(err); hint != "" {
+			slog.Error("support snapshot compatibility hint", "hint", hint)
+		}
 		os.Exit(1)
 	}
 	snapshot := store.Snapshot()
@@ -471,4 +529,36 @@ func asStringSlice(value string) []string {
 		out = append(out, text)
 	}
 	return out
+}
+
+func upgradeCompatibilityHint(err error) string {
+	if err == nil {
+		return ""
+	}
+	text := strings.ToLower(strings.TrimSpace(err.Error()))
+	switch {
+	case strings.Contains(text, "state schema version is newer"):
+		return "This runtime is older than the persisted state schema. Upgrade receiver binary or reset local state only if intended."
+	case strings.Contains(text, "config schema version") && strings.Contains(text, "newer"):
+		return "This config file schema is newer than this runtime supports. Upgrade receiver runtime or use a compatible config schema."
+	default:
+		return ""
+	}
+}
+
+func installType(stateInstallType string, profile string) string {
+	value := strings.TrimSpace(stateInstallType)
+	if value != "" {
+		return value
+	}
+	switch strings.ToLower(strings.TrimSpace(profile)) {
+	case "appliance-pi":
+		return "pi-appliance"
+	case "linux-service":
+		return "linux-package"
+	case "windows-user":
+		return "windows-user"
+	default:
+		return "manual"
+	}
 }

@@ -173,6 +173,27 @@ func TestProgressPage(t *testing.T) {
 	}
 }
 
+func TestProgressPageShowsUpdateStatus(t *testing.T) {
+	t.Parallel()
+
+	snap := sampleSnapshot()
+	snap.UpdateStatus = "outdated"
+	snap.UpdateSummary = "Receiver is behind recommended release"
+	srv := New("127.0.0.1:0", staticStatusProvider{snapshot: snap}, &recordingPairingSubmitter{}, nil)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/progress", nil)
+	srv.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "outdated") {
+		t.Fatalf("expected update status on progress page")
+	}
+}
+
 func TestAdvancedPage(t *testing.T) {
 	t.Parallel()
 

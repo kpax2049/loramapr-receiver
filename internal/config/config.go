@@ -16,6 +16,8 @@ import (
 const (
 	// DefaultPath is the local development fallback.
 	DefaultPath = "./receiver.json"
+
+	CurrentSchemaVersion = 2
 )
 
 type RunMode string
@@ -27,13 +29,15 @@ const (
 )
 
 type Config struct {
-	Service    ServiceConfig    `json:"service"`
-	Runtime    RuntimeConfig    `json:"runtime"`
-	Paths      PathsConfig      `json:"paths"`
-	Portal     PortalConfig     `json:"portal"`
-	Cloud      CloudConfig      `json:"cloud"`
-	Meshtastic MeshtasticConfig `json:"meshtastic"`
-	Logging    LoggingConfig    `json:"logging"`
+	SchemaVersion int              `json:"schema_version,omitempty"`
+	Service       ServiceConfig    `json:"service"`
+	Runtime       RuntimeConfig    `json:"runtime"`
+	Paths         PathsConfig      `json:"paths"`
+	Portal        PortalConfig     `json:"portal"`
+	Cloud         CloudConfig      `json:"cloud"`
+	Update        UpdateConfig     `json:"update"`
+	Meshtastic    MeshtasticConfig `json:"meshtastic"`
+	Logging       LoggingConfig    `json:"logging"`
 }
 
 type ServiceConfig struct {
@@ -55,6 +59,14 @@ type PortalConfig struct {
 
 type CloudConfig struct {
 	BaseURL string `json:"base_url"`
+}
+
+type UpdateConfig struct {
+	Enabled             bool     `json:"enabled"`
+	ManifestURL         string   `json:"manifest_url,omitempty"`
+	CheckInterval       Duration `json:"check_interval"`
+	RequestTimeout      Duration `json:"request_timeout"`
+	MinSupportedVersion string   `json:"min_supported_version,omitempty"`
 }
 
 type MeshtasticConfig struct {
@@ -108,6 +120,7 @@ func (d *Duration) UnmarshalJSON(data []byte) error {
 
 func Default() Config {
 	return Config{
+		SchemaVersion: CurrentSchemaVersion,
 		Service: ServiceConfig{
 			Mode:      ModeAuto,
 			Heartbeat: Duration(30 * time.Second),
@@ -123,6 +136,11 @@ func Default() Config {
 		},
 		Cloud: CloudConfig{
 			BaseURL: "https://api.loramapr.example",
+		},
+		Update: UpdateConfig{
+			Enabled:        false,
+			CheckInterval:  Duration(6 * time.Hour),
+			RequestTimeout: Duration(4 * time.Second),
 		},
 		Meshtastic: MeshtasticConfig{
 			Transport: "serial",
@@ -154,6 +172,9 @@ func Load(path string) (Config, error) {
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		return Config{}, err
 	}
+	if err := cfg.migrate(); err != nil {
+		return Config{}, err
+	}
 	cfg.applyDefaults()
 	if err := cfg.Validate(); err != nil {
 		return Config{}, err
@@ -162,6 +183,13 @@ func Load(path string) (Config, error) {
 }
 
 func (c Config) Validate() error {
+	if c.SchemaVersion <= 0 {
+		return errors.New("schema_version must be > 0")
+	}
+	if c.SchemaVersion > CurrentSchemaVersion {
+		return fmt.Errorf("config schema version %d is newer than runtime supports (%d)", c.SchemaVersion, CurrentSchemaVersion)
+	}
+
 	mode := c.Service.Mode
 	if mode == "" {
 		mode = ModeAuto
@@ -193,6 +221,19 @@ func (c Config) Validate() error {
 	u, err := url.Parse(c.Cloud.BaseURL)
 	if err != nil || u.Scheme == "" || u.Host == "" {
 		return fmt.Errorf("invalid cloud.base_url %q", c.Cloud.BaseURL)
+	}
+
+	if c.Update.CheckInterval.Std() <= 0 {
+		return errors.New("update.check_interval must be > 0")
+	}
+	if c.Update.RequestTimeout.Std() <= 0 {
+		return errors.New("update.request_timeout must be > 0")
+	}
+	if value := strings.TrimSpace(c.Update.ManifestURL); value != "" {
+		parsed, err := url.Parse(value)
+		if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+			return fmt.Errorf("invalid update.manifest_url %q", c.Update.ManifestURL)
+		}
 	}
 
 	switch strings.ToLower(strings.TrimSpace(c.Meshtastic.Transport)) {
@@ -236,6 +277,9 @@ func Save(path string, cfg Config) error {
 
 func (c *Config) applyDefaults() {
 	defaults := Default()
+	if c.SchemaVersion == 0 {
+		c.SchemaVersion = defaults.SchemaVersion
+	}
 	if c.Service.Mode == "" {
 		c.Service.Mode = defaults.Service.Mode
 	}
@@ -254,6 +298,12 @@ func (c *Config) applyDefaults() {
 	if c.Cloud.BaseURL == "" {
 		c.Cloud.BaseURL = defaults.Cloud.BaseURL
 	}
+	if c.Update.CheckInterval.Std() <= 0 {
+		c.Update.CheckInterval = defaults.Update.CheckInterval
+	}
+	if c.Update.RequestTimeout.Std() <= 0 {
+		c.Update.RequestTimeout = defaults.Update.RequestTimeout
+	}
 	if c.Meshtastic.Transport == "" {
 		c.Meshtastic.Transport = defaults.Meshtastic.Transport
 	}
@@ -263,4 +313,21 @@ func (c *Config) applyDefaults() {
 	if c.Logging.Format == "" {
 		c.Logging.Format = defaults.Logging.Format
 	}
+}
+
+func (c *Config) migrate() error {
+	version := c.SchemaVersion
+	if version == 0 {
+		version = 1
+	}
+
+	if version <= 1 {
+		version = 2
+	}
+	if version > CurrentSchemaVersion {
+		return fmt.Errorf("config schema version %d is newer than runtime supports (%d)", version, CurrentSchemaVersion)
+	}
+
+	c.SchemaVersion = version
+	return nil
 }

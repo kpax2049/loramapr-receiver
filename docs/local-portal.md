@@ -1,89 +1,102 @@
 # Embedded Local Setup Portal
 
-`loramapr-receiverd` serves an embedded local web portal for first-run setup and
-ongoing receiver status checks.
+`loramapr-receiverd` serves an embedded local web portal for first-run setup,
+runtime visibility, lifecycle recovery, and update-status visibility.
 
 ## Purpose
 
-The portal is the normal human interface for receiver bootstrap:
+The portal is the normal operator interface for:
 
-- enter pairing code from LoRaMapr Cloud
-- monitor pairing/bootstrap progress
-- view runtime health/readiness
-- view practical troubleshooting guidance
-- inspect non-sensitive advanced runtime details
+- entering pairing code from LoRaMapr Cloud
+- monitoring bootstrap/activation progress
+- checking service/cloud/meshtastic readiness
+- understanding actionable failure states
+- viewing non-sensitive advanced runtime/build details
 
 ## Routes
 
-UI routes:
+UI:
 
-- `GET /` welcome + quick status
-- `GET /pairing` pairing code entry form
-- `POST /pairing` pairing code submission form action
-- `POST /reset` local reset/deauthorize form action
+- `GET /` welcome + summary
+- `GET /pairing` pairing form
+- `POST /pairing` pairing submit
+- `POST /reset` local reset/deauthorize
 - `GET /progress` setup/runtime progress
-- `GET /troubleshooting` human-readable checks
-- `GET /advanced` runtime/platform details
+- `GET /troubleshooting` human-readable guidance
+- `GET /advanced` runtime/build/install details
 
-API routes:
+API:
 
-- `GET /healthz` liveness
-- `GET /readyz` readiness
-- `GET /api/status` structured status JSON
-- `POST /api/pairing/code` JSON pairing submission
-- `POST /api/lifecycle/reset` JSON reset/deauthorize action
+- `GET /healthz`
+- `GET /readyz`
+- `GET /api/status`
+- `POST /api/pairing/code`
+- `POST /api/lifecycle/reset`
 
 ## Binding Strategy
 
-Configured by `portal.bind_address` in receiver config.
+Configured by `portal.bind_address`.
 
 Recommended defaults:
 
-- desktop/local install path: `127.0.0.1:8080`
-- Raspberry Pi/appliance path: `0.0.0.0:8080`
+- desktop/local host path: `127.0.0.1:8080`
+- Pi appliance path: `0.0.0.0:8080`
 
-Use loopback by default on general-purpose hosts; expose on LAN only for
-appliance-style usage where setup happens from another device.
+Discovery assumptions for appliance profile:
 
-Appliance discovery assumptions:
+- preferred: `http://loramapr-receiver.local:8080`
+- fallback: `http://<lan-ip>:8080`
 
-- preferred hostname URL: `http://loramapr-receiver.local:8080`
-- fallback URL: `http://<lan-ip>:8080`
+## Security Model
 
-## Security Behavior
-
-Portal intentionally omits sensitive values from rendered pages and `/api/status`:
+Portal pages and `/api/status` intentionally omit secrets:
 
 - ingest API secret
 - activation token
-- persisted pairing code
+- pairing code value
 
-Those remain in local state storage with restricted file permissions.
+Secret-bearing fields remain only in local state storage with restricted file
+permissions.
 
-## Diagnostics Integration
+## Status and Diagnostics Integration
 
-Portal pages now surface coarse receiver failure taxonomy with actionable hints:
+Progress/Troubleshooting pages surface:
 
-- `pairing_code_invalid`
-- `pairing_code_expired`
-- `activation_failed`
-- `pairing_not_completed`
-- `receiver_credential_revoked`
-- `receiver_disabled`
-- `receiver_replaced`
-- `cloud_unreachable`
-- `network_unavailable`
-- `portal_unavailable`
-- `receiver_auth_invalid`
-- `no_serial_device_detected`
-- `node_detected_not_connected`
-- `events_not_forwarding`
+- pairing phase
+- cloud connectivity/reachability
+- service lifecycle/readiness
+- meshtastic state
+- update status (`disabled`, `unknown`, `current`, `outdated`, `channel_mismatch`, `unsupported`, `ahead`)
+- failure code/summary/hint
 
-This keeps setup failures human-readable while staying aligned with cloud/onboarding
-terminology.
+Advanced page surfaces:
 
-Lifecycle recovery path in portal:
+- version/channel
+- build commit/date/id
+- platform/arch
+- install type/profile/mode
+- update manifest/recommendation/check timestamp
 
-- troubleshooting page includes "Reset And Re-pair" action
-- reset transitions local runtime to `unpaired` setup state
-- user then submits a fresh pairing code on the Pairing page
+## Failure Taxonomy Visibility
+
+Portal aligns with diagnostics taxonomy codes, including:
+
+- pairing/bootstrap: `pairing_code_invalid`, `pairing_code_expired`, `activation_failed`, `pairing_not_completed`
+- lifecycle: `receiver_credential_revoked`, `receiver_disabled`, `receiver_replaced`
+- connectivity/runtime: `cloud_unreachable`, `network_unavailable`, `portal_unavailable`, `receiver_auth_invalid`
+- meshtastic/forwarding: `no_serial_device_detected`, `node_detected_not_connected`, `events_not_forwarding`
+- upgrade compatibility: `cloud_config_incompatible`
+
+## Lifecycle Recovery Path
+
+- Troubleshooting page includes reset/re-pair action.
+- Reset deauthorizes durable credentials by default.
+- Receiver returns to `unpaired` and user submits fresh pairing code.
+
+## Update Status Scope
+
+Portal update-state display is informational only:
+
+- no automatic update install
+- no background package/image mutation
+- manual upgrade path remains package/appliance release workflow

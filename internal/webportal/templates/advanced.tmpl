@@ -5,10 +5,17 @@
     <tr><th>Runtime Version</th><td class="mono">{{.RuntimeVersion}}</td></tr>
     <tr><th>Release Channel</th><td class="mono">{{.ReleaseChannel}}</td></tr>
     <tr><th>Build Commit</th><td class="mono">{{if .BuildCommit}}{{.BuildCommit}}{{else}}unknown{{end}}</td></tr>
+    <tr><th>Build Date</th><td class="mono">{{if .BuildDate}}{{.BuildDate}}{{else}}unknown{{end}}</td></tr>
+    <tr><th>Build ID</th><td class="mono">{{if .BuildID}}{{.BuildID}}{{else}}unknown{{end}}</td></tr>
     <tr><th>Go Version</th><td class="mono">{{.GoVersion}}</td></tr>
     <tr><th>Platform</th><td class="mono">{{.Platform}}/{{.Arch}}</td></tr>
+    <tr><th>Install Type</th><td class="mono">{{if .InstallType}}{{.InstallType}}{{else}}unknown{{end}}</td></tr>
     <tr><th>Service Mode</th><td class="mono">{{.Snapshot.Mode}}</td></tr>
     <tr><th>Runtime Profile</th><td class="mono">{{.Snapshot.RuntimeProfile}}</td></tr>
+    <tr><th>Update Status</th><td class="mono">{{if .Snapshot.UpdateStatus}}{{.Snapshot.UpdateStatus}}{{else}}unknown{{end}}</td></tr>
+    <tr><th>Recommended Version</th><td class="mono">{{if .Snapshot.UpdateRecommendedVersion}}{{.Snapshot.UpdateRecommendedVersion}}{{else}}unknown{{end}}</td></tr>
+    <tr><th>Manifest Channel</th><td class="mono">{{if .Snapshot.UpdateManifestChannel}}{{.Snapshot.UpdateManifestChannel}}{{else}}unknown{{end}}</td></tr>
+    <tr><th>Last Update Check</th><td class="mono">{{if .Snapshot.UpdateCheckedAt}}{{.Snapshot.UpdateCheckedAt}}{{else}}never{{end}}</td></tr>
     <tr><th>Lifecycle</th><td>{{.Snapshot.Lifecycle}}</td></tr>
     <tr><th>Installation ID</th><td class="mono">{{.Snapshot.InstallationID}}</td></tr>
   </table>

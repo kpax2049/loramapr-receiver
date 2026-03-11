@@ -3,9 +3,10 @@
 Standalone runtime for deploying a **LoRaMapr Receiver** appliance that pairs with
 `loramapr-cloud` and forwards decoded packets to the existing cloud ingest path.
 
-Current scope is runtime skeleton and lifecycle wiring for long-running service
-operation and first-run setup, with explicit extension points for pairing, cloud
-steady-state loops, and Meshtastic integration.
+Current scope includes pairing/bootstrap lifecycle, embedded local portal,
+Meshtastic adapter integration, steady-state ingest/heartbeat loops,
+Linux/Pi GA packaging paths, lifecycle management, and update/upgrade safety
+reporting.
 
 ## Product Direction
 
@@ -76,12 +77,14 @@ Portal bind address is configured via `portal.bind_address`.
 
 This repository currently contains:
 
-- runtime skeleton with structured logging and clean startup/shutdown
-- validated config with defaults and mode control
-- atomic persistent local state (install ID, pairing phase, cloud endpoint, runtime profile)
-- runtime status model for subsystem updates/reads
-- health/readiness/status endpoints via embedded local HTTP server
-- unit tests for config/state/status/runtime mode resolution
+- service runtime with structured logging and clean startup/shutdown
+- pairing/bootstrap/activation state machine with restart-safe persistence
+- lifecycle handling for revoked/disabled/replaced receivers + reset/re-pair flow
+- Meshtastic detection/connection and packet normalization boundary
+- steady-state ingest, heartbeat, and receiver/node status reporting with retry/backoff
+- embedded local setup/status portal and diagnostics taxonomy
+- Linux/Pi existing-OS `.deb`/APT path and Pi appliance image path scaffolding
+- version/channel/build reporting, upgrade-safe schema handling, and thin update-status reasoning
 
 ## Documentation
 
@@ -89,6 +92,7 @@ This repository currently contains:
 - [v2.1.0 GA Plan: Linux/Pi Existing-OS](./docs/ga-v2.1.0-linux-pi-existing-os.md)
 - [v2.2.0 GA Plan: Raspberry Pi Appliance](./docs/ga-v2.2.0-raspberry-pi-appliance.md)
 - [v2.3.0 Plan: Receiver Lifecycle Management](./docs/ga-v2.3.0-receiver-lifecycle-management.md)
+- [v2.4.0 Plan: Update Channels and Upgrade Safety](./docs/ga-v2.4.0-update-channels-upgrade-safety.md)
 - [Config and State Layout](./docs/runtime-config-state.md)
 - [Pairing and Bootstrap Lifecycle](./docs/pairing-lifecycle.md)
 - [Receiver Lifecycle Management](./docs/receiver-lifecycle.md)
@@ -104,6 +108,7 @@ This repository currently contains:
 - [Raspberry Pi Appliance Path](./docs/raspberry-pi-appliance.md)
 - [Publish Guide](./docs/publish-guide.md)
 - [Release Notes](./docs/release-notes.md)
+- [Release Notes v2.4.0](./docs/release-notes-v2.4.0.md)
 - [Release Notes v2.3.0](./docs/release-notes-v2.3.0.md)
 - [Release Notes v2.2.0](./docs/release-notes-v2.2.0.md)
 - [Release Notes v2.1.0](./docs/release-notes-v2.1.0.md)

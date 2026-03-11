@@ -228,6 +228,9 @@ func (m *Manager) exchangeBootstrap(ctx context.Context, snapshot state.Data) er
 		data.Pairing.LastError = ""
 		data.Pairing.UpdatedAt = now
 		data.Pairing.LastChange = "bootstrap_exchanged"
+		if value := strings.TrimSpace(response.ConfigVersion); value != "" {
+			data.Cloud.ConfigVersion = value
+		}
 		data.Cloud.ActivateEndpoint = response.ActivateEndpoint
 		data.Cloud.HeartbeatEndpoint = response.HeartbeatEndpoint
 		data.Cloud.IngestEndpoint = response.IngestEndpoint
@@ -295,6 +298,9 @@ func (m *Manager) activate(ctx context.Context, snapshot state.Data) error {
 		data.Cloud.ReceiverID = response.ReceiverAgentID
 		data.Cloud.IngestAPIKeyID = response.IngestAPIKeyID
 		data.Cloud.IngestAPIKey = response.IngestAPIKey
+		if value := strings.TrimSpace(response.ConfigVersion); value != "" {
+			data.Cloud.ConfigVersion = value
+		}
 		if response.IngestEndpoint != "" {
 			data.Cloud.IngestEndpoint = response.IngestEndpoint
 		}

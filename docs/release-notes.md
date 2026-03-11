@@ -1,5 +1,8 @@
 # LoRaMapr Receiver Release Notes
 
+For Update Channels and Upgrade Safety notes targeting `v2.4.0`, see
+`docs/release-notes-v2.4.0.md`.
+
 For Receiver Lifecycle Management notes targeting `v2.3.0`, see
 `docs/release-notes-v2.3.0.md`.
 

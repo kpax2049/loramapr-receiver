@@ -24,6 +24,7 @@ type BootstrapExchange struct {
 	FlowKey           string
 	ActivationToken   string
 	ActivationExpires time.Time
+	ConfigVersion     string
 	ReceiverLabel     string
 	ActivateEndpoint  string
 	HeartbeatEndpoint string
@@ -44,6 +45,7 @@ type ActivationResult struct {
 	OwnerID           string
 	IngestAPIKeyID    string
 	IngestAPIKey      string
+	ConfigVersion     string
 	IngestEndpoint    string
 	HeartbeatEndpoint string
 	ActivatedAt       time.Time
@@ -61,6 +63,7 @@ type ReceiverHeartbeat struct {
 type ReceiverHeartbeatAck struct {
 	ReceiverAgentID string
 	OwnerID         string
+	ConfigVersion   string
 	LastHeartbeatAt time.Time
 	NodeCount       int
 }
@@ -132,6 +135,7 @@ func (c *HTTPClient) ExchangePairingCode(ctx context.Context, pairingCode string
 		FlowKey           string `json:"flowKey"`
 		ActivationToken   string `json:"activationToken"`
 		ActivationExpires string `json:"activationExpiresAt"`
+		ConfigVersion     string `json:"configVersion"`
 		ReceiverLabel     string `json:"receiverLabel"`
 		ActivateEndpoint  string `json:"activateEndpoint"`
 		HeartbeatEndpoint string `json:"heartbeatEndpoint"`
@@ -152,6 +156,7 @@ func (c *HTTPClient) ExchangePairingCode(ctx context.Context, pairingCode string
 		FlowKey:           response.FlowKey,
 		ActivationToken:   response.ActivationToken,
 		ActivationExpires: expiresAt,
+		ConfigVersion:     strings.TrimSpace(response.ConfigVersion),
 		ReceiverLabel:     response.ReceiverLabel,
 		ActivateEndpoint:  response.ActivateEndpoint,
 		HeartbeatEndpoint: response.HeartbeatEndpoint,
@@ -192,6 +197,7 @@ func (c *HTTPClient) ActivateReceiver(
 		OwnerID           string `json:"ownerId"`
 		IngestAPIKeyID    string `json:"ingestApiKeyId"`
 		IngestAPIKey      string `json:"ingestApiKeySecret"`
+		ConfigVersion     string `json:"configVersion"`
 		IngestEndpoint    string `json:"ingestEndpoint"`
 		HeartbeatEndpoint string `json:"heartbeatEndpoint"`
 		ActivatedAt       string `json:"activatedAt"`
@@ -211,6 +217,7 @@ func (c *HTTPClient) ActivateReceiver(
 		OwnerID:           response.OwnerID,
 		IngestAPIKeyID:    response.IngestAPIKeyID,
 		IngestAPIKey:      response.IngestAPIKey,
+		ConfigVersion:     strings.TrimSpace(response.ConfigVersion),
 		IngestEndpoint:    response.IngestEndpoint,
 		HeartbeatEndpoint: response.HeartbeatEndpoint,
 		ActivatedAt:       activatedAt,
@@ -272,6 +279,7 @@ func (c *HTTPClient) SendReceiverHeartbeat(
 	var response struct {
 		ReceiverAgentID string `json:"receiverAgentId"`
 		OwnerID         string `json:"ownerId"`
+		ConfigVersion   string `json:"configVersion"`
 		LastHeartbeatAt string `json:"lastHeartbeatAt"`
 		NodeCount       int    `json:"nodeCount"`
 	}
@@ -290,6 +298,7 @@ func (c *HTTPClient) SendReceiverHeartbeat(
 	return ReceiverHeartbeatAck{
 		ReceiverAgentID: response.ReceiverAgentID,
 		OwnerID:         response.OwnerID,
+		ConfigVersion:   strings.TrimSpace(response.ConfigVersion),
 		LastHeartbeatAt: lastHeartbeatAt,
 		NodeCount:       response.NodeCount,
 	}, nil

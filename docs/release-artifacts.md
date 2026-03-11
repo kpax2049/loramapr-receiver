@@ -48,6 +48,15 @@ Manifest and metadata outputs:
 - `cloud-manifest.fragment.json`
 - `release-metadata.json`
 
+`release-metadata.json` includes:
+
+- `receiverVersion`
+- `channel`
+- `gitCommit` (if available)
+- `buildDate` (if provided)
+- `buildID` (if provided)
+- artifact counts by platform grouping
+
 Validation helper:
 
 - `packaging/debian/validate-deb.sh <deb-file>`

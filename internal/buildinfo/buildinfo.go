@@ -7,6 +7,7 @@ var (
 	Channel   = "dev"
 	Commit    = ""
 	BuildDate = ""
+	BuildID   = ""
 )
 
 type Info struct {
@@ -14,6 +15,7 @@ type Info struct {
 	Channel   string `json:"channel"`
 	Commit    string `json:"commit,omitempty"`
 	BuildDate string `json:"build_date,omitempty"`
+	BuildID   string `json:"build_id,omitempty"`
 }
 
 func Current() Info {
@@ -30,6 +32,11 @@ func Current() Info {
 	}
 	if value := strings.TrimSpace(BuildDate); value != "" {
 		out.BuildDate = value
+	}
+	if value := strings.TrimSpace(BuildID); value != "" {
+		out.BuildID = value
+	} else if out.Commit != "" {
+		out.BuildID = out.Commit
 	}
 	return out
 }

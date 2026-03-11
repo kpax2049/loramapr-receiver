@@ -10,6 +10,7 @@
     <div class="status-chip"><div class="label">Network</div><div class="value">{{.NetworkState}}</div></div>
     <div class="status-chip"><div class="label">Service State</div><div class="value">{{.Snapshot.Lifecycle}}</div></div>
     <div class="status-chip"><div class="label">Meshtastic Status</div><div class="value">{{.MeshtasticState}}</div></div>
+    <div class="status-chip"><div class="label">Update Status</div><div class="value mono">{{if .Snapshot.UpdateStatus}}{{.Snapshot.UpdateStatus}}{{else}}unknown{{end}}</div></div>
     <div class="status-chip"><div class="label">Failure State</div><div class="value mono">{{if .Snapshot.FailureCode}}{{.Snapshot.FailureCode}}{{else}}none{{end}}</div></div>
   </div>
 </section>
@@ -29,6 +30,11 @@
     <tr><th>Runtime Profile</th><td class="mono">{{.Snapshot.RuntimeProfile}}</td></tr>
     <tr><th>Failure Summary</th><td>{{if .Snapshot.FailureSummary}}{{.Snapshot.FailureSummary}}{{else}}none{{end}}</td></tr>
     <tr><th>Failure Guidance</th><td>{{if .Snapshot.FailureHint}}{{.Snapshot.FailureHint}}{{else}}none{{end}}</td></tr>
+    <tr><th>Update Summary</th><td>{{if .Snapshot.UpdateSummary}}{{.Snapshot.UpdateSummary}}{{else}}none{{end}}</td></tr>
+    <tr><th>Update Guidance</th><td>{{if .Snapshot.UpdateHint}}{{.Snapshot.UpdateHint}}{{else}}none{{end}}</td></tr>
+    <tr><th>Recommended Version</th><td class="mono">{{if .Snapshot.UpdateRecommendedVersion}}{{.Snapshot.UpdateRecommendedVersion}}{{else}}unknown{{end}}</td></tr>
+    <tr><th>Manifest Channel</th><td class="mono">{{if .Snapshot.UpdateManifestChannel}}{{.Snapshot.UpdateManifestChannel}}{{else}}unknown{{end}}</td></tr>
+    <tr><th>Last Update Check</th><td class="mono">{{if .Snapshot.UpdateCheckedAt}}{{.Snapshot.UpdateCheckedAt}}{{else}}never{{end}}</td></tr>
     <tr><th>Last Error</th><td>{{if .Snapshot.LastError}}{{.Snapshot.LastError}}{{else}}none{{end}}</td></tr>
   </table>
 </section>

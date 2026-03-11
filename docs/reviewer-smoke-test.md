@@ -1,13 +1,13 @@
-# Reviewer Smoke Test Guide (v2.3.0)
+# Reviewer Smoke Test Guide (v2.4.0)
 
-This guide validates receiver-side lifecycle behavior for revoked/disabled/
-replaced/reset/re-pair scenarios.
+This guide validates update/channel reporting, upgrade-safe behavior, and
+update-status reasoning.
 
 ## Prerequisites
 
 - Go toolchain
-- receiver config file (for local runtime checks)
-- optional Debian-family host for package lifecycle checks
+- local checkout of `loramapr-receiver`
+- optional Debian-family host for package install checks
 
 ## 1. Build and Unit Tests
 
@@ -15,73 +15,108 @@ replaced/reset/re-pair scenarios.
 GOCACHE=/tmp/go-build-cache GOTMPDIR=/tmp make test
 ```
 
-Targeted lifecycle tests:
+Targeted v2.4 areas:
 
 ```bash
-GOCACHE=/tmp/go-build-cache GOTMPDIR=/tmp go test ./internal/runtime -run Lifecycle
-GOCACHE=/tmp/go-build-cache GOTMPDIR=/tmp go test ./internal/pairing -run Lifecycle
-GOCACHE=/tmp/go-build-cache GOTMPDIR=/tmp go test ./internal/diagnostics -run Taxonomy
+GOCACHE=/tmp/go-build-cache GOTMPDIR=/tmp go test ./internal/update -run Test
+GOCACHE=/tmp/go-build-cache GOTMPDIR=/tmp go test ./internal/config -run Schema
+GOCACHE=/tmp/go-build-cache GOTMPDIR=/tmp go test ./internal/state -run SchemaV2ToV3
+GOCACHE=/tmp/go-build-cache GOTMPDIR=/tmp go test ./internal/runtime -run UnsupportedCloudConfig
 ```
 
 Expected:
 
-- tests pass
-- lifecycle transitions map to explicit local failure codes
+- all tests pass
+- update reasoning and migration guards are enforced
 
-## 2. Local Reset/Re-pair Flow
+## 2. Build Metadata and Status Surface Check
 
-Run explicit local reset:
+Build a local binary and inspect status output:
 
 ```bash
-loramapr-receiverd reset-pairing -config /etc/loramapr/receiver.json
-loramapr-receiverd status -config /etc/loramapr/receiver.json
+go build -o ./bin/loramapr-receiverd ./cmd/loramapr-receiverd
+./bin/loramapr-receiverd status -config ./receiver.example.json
+./bin/loramapr-receiverd doctor -config ./receiver.example.json -json
+```
+
+Expected fields present:
+
+- `receiver_version`
+- `release_channel`
+- `build_commit`
+- `build_date` (if available)
+- `build_id` (if available)
+- `platform`, `arch`, `install_type`
+
+## 3. Config/State Upgrade Safety Check
+
+Validate migration and fail-fast semantics:
+
+1. Start runtime once with current config/state.
+2. Confirm state file has `schema_version: 3`.
+3. Set config `schema_version` to a future value (for example `99`) and run:
+   - `loramapr-receiverd doctor -config ...`
+4. Revert config to valid schema and rerun.
+
+Expected:
+
+- newer config schema fails with explicit compatibility hint
+- valid schema resumes normal operation
+
+## 4. Update-Status Reasoning Check
+
+Create a local manifest fragment and point `update.manifest_url` at it
+(or use test HTTP fixture flow).
+
+Verify representative statuses by varying installed/manifest channel/version:
+
+- `current`
+- `outdated`
+- `channel_mismatch`
+- `ahead`
+- `unsupported` (set `update.min_supported_version`)
+
+Check surfaces:
+
+- portal Progress/Advanced
+- `doctor` JSON
+- `status` JSON
+
+## 5. Cloud Config Compatibility Check
+
+Use runtime tests or mock cloud ACK behavior to return unsupported
+`configVersion` (non-v1 major).
+
+Expected:
+
+- runtime enters blocked cloud-config state
+- readiness reflects blocked service path
+- diagnostics failure code includes `cloud_config_incompatible`
+- forwarding/steady-state loop does not continue as healthy
+
+## 6. Support Snapshot Redaction and Metadata
+
+```bash
+./bin/loramapr-receiverd support-snapshot \
+  -config ./receiver.example.json \
+  -out /tmp/receiver-support.json
+cat /tmp/receiver-support.json
 ```
 
 Expected:
 
-- pairing phase becomes `unpaired`
-- status reflects setup-ready pairing flow
-- durable credentials are cleared after default deauthorize reset
+- includes runtime version/channel/build/platform/install-type metadata
+- includes update-status summary if available
+- excludes secret values (`pairing_code`, `activation_token`, ingest API secret)
 
-## 3. Portal Lifecycle Recovery Path
+## 7. Linux/Pi Install Path Regression Check (Optional)
 
-1. Open local portal: `http://<receiver-host>:8080/troubleshooting`
-2. Use `Reset And Re-pair`.
-3. Navigate to Pairing page and submit a fresh pairing code.
+If validating package/install path as part of broader GA regression:
 
-Expected:
+1. install current package/image path
+2. ensure service starts
+3. open portal and confirm pairing-ready state
+4. run `status`/`doctor` and verify update/build metadata visibility
 
-- reset action redirects to Pairing with reset confirmation
-- receiver returns to pairing flow without reinstall
-
-## 4. Lifecycle Failure Visibility
-
-Use diagnostics surfaces:
-
-```bash
-loramapr-receiverd doctor -config /etc/loramapr/receiver.json
-loramapr-receiverd support-snapshot -config /etc/loramapr/receiver.json -out /tmp/receiver-support.json
-cat /tmp/receiver-support.json | jq
-```
-
-Expected lifecycle codes when applicable:
-
-- `receiver_credential_revoked`
-- `receiver_disabled`
-- `receiver_replaced`
-
-Support snapshot remains redacted (no pairing code/token/ingest secret values).
-
-## 5. Reinstall/Recovery Semantics (Debian-family)
-
-Validate package lifecycle expectations:
-
-1. install package
-2. run `reset-pairing`
-3. `apt remove` then reinstall
-4. confirm runtime starts and pairing portal is available
-
-Policy expectations are documented in:
-
-- `docs/linux-package-lifecycle.md`
-- `docs/receiver-lifecycle.md`
+Package/appliance specifics are documented in Linux/Pi GA docs; this step is a
+sanity pass for v2.4 runtime surfaces.

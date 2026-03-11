@@ -16,6 +16,7 @@ const (
 	FailureReceiverRevoked     FailureCode = "receiver_credential_revoked"
 	FailureReceiverDisabled    FailureCode = "receiver_disabled"
 	FailureReceiverReplaced    FailureCode = "receiver_replaced"
+	FailureCloudConfigIncompat FailureCode = "cloud_config_incompatible"
 	FailureCloudUnreachable    FailureCode = "cloud_unreachable"
 	FailureNetworkUnavailable  FailureCode = "network_unavailable"
 	FailurePortalUnavailable   FailureCode = "portal_unavailable"
@@ -130,6 +131,13 @@ func Evaluate(input Input) Finding {
 			Code:    FailureReceiverReplaced,
 			Summary: "Receiver was replaced by another installation",
 			Hint:    "Re-pair this machine only if it should become the active receiver again.",
+		}
+	}
+	if strings.Contains(runtimeErr, "cloud config version unsupported") {
+		return Finding{
+			Code:    FailureCloudConfigIncompat,
+			Summary: "Cloud config version is not compatible with this receiver build",
+			Hint:    "Upgrade receiver to a compatible version for the active cloud config contract.",
 		}
 	}
 	if strings.Contains(runtimeErr, "status=401") || strings.Contains(runtimeErr, "status=403") || strings.Contains(runtimeErr, "authentication rejected") {

@@ -19,6 +19,8 @@ func main() {
 		metadataOut  = flag.String("metadata-out", "", "optional output path for release metadata json")
 		urlPrefix    = flag.String("url-prefix", "receiver", "relative URL prefix used in manifest entries")
 		gitCommit    = flag.String("git-commit", "", "git commit to include in metadata")
+		buildDate    = flag.String("build-date", "", "build date to include in metadata")
+		buildID      = flag.String("build-id", "", "build id to include in metadata")
 	)
 	flag.Parse()
 
@@ -51,7 +53,7 @@ func main() {
 		if commit == "" {
 			commit = resolveCommit()
 		}
-		metadata := release.BuildReleaseMetadata(*version, *channel, commit, manifest)
+		metadata := release.BuildReleaseMetadata(*version, *channel, commit, *buildDate, *buildID, manifest)
 		if err := release.WriteJSON(metadataPath, metadata); err != nil {
 			fatal(err.Error())
 		}

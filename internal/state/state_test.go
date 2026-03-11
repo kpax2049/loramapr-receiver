@@ -28,6 +28,9 @@ func TestOpenInitializesDefaults(t *testing.T) {
 	if snapshot.Installation.CreatedAt.IsZero() {
 		t.Fatal("expected CreatedAt to be populated")
 	}
+	if snapshot.Update.Status != "unknown" {
+		t.Fatalf("expected default update status unknown, got %q", snapshot.Update.Status)
+	}
 }
 
 func TestUpdatePersistsAcrossRestart(t *testing.T) {
@@ -74,6 +77,9 @@ func TestUpdatePersistsAcrossRestart(t *testing.T) {
 	if snapshot.Runtime.Mode != "service" {
 		t.Fatalf("unexpected mode: %q", snapshot.Runtime.Mode)
 	}
+	if snapshot.Runtime.InstallType == "" {
+		t.Fatal("expected install_type to be derived")
+	}
 }
 
 func TestOpenMigratesLegacyState(t *testing.T) {
@@ -101,5 +107,43 @@ func TestOpenMigratesLegacyState(t *testing.T) {
 	}
 	if snapshot.Pairing.Phase != PairingSteadyState {
 		t.Fatalf("expected migrated pairing phase %q, got %q", PairingSteadyState, snapshot.Pairing.Phase)
+	}
+	if snapshot.Runtime.InstallType != "linux-package" {
+		t.Fatalf("expected migrated install_type linux-package, got %q", snapshot.Runtime.InstallType)
+	}
+	if snapshot.Update.Status != "unknown" {
+		t.Fatalf("expected migrated update status unknown, got %q", snapshot.Update.Status)
+	}
+}
+
+func TestOpenMigratesSchemaV2ToV3(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "receiver-state.json")
+	legacy := `{
+  "schema_version": 2,
+  "installation": {"id":"legacy-install","created_at":"2026-03-11T00:00:00Z","last_started_at":"2026-03-11T00:00:00Z"},
+  "pairing": {"phase":"steady_state"},
+  "cloud": {"endpoint_url":"https://api.example.com"},
+  "runtime": {"profile":"appliance-pi","mode":"service"},
+  "metadata": {}
+}`
+	if err := os.WriteFile(path, []byte(legacy), 0o600); err != nil {
+		t.Fatalf("write legacy state: %v", err)
+	}
+
+	store, err := Open(path)
+	if err != nil {
+		t.Fatalf("open migrated state: %v", err)
+	}
+	snapshot := store.Snapshot()
+	if snapshot.SchemaVersion != CurrentSchemaVersion {
+		t.Fatalf("expected schema version %d, got %d", CurrentSchemaVersion, snapshot.SchemaVersion)
+	}
+	if snapshot.Runtime.InstallType != "pi-appliance" {
+		t.Fatalf("expected install_type pi-appliance, got %q", snapshot.Runtime.InstallType)
+	}
+	if snapshot.Update.Status != "unknown" {
+		t.Fatalf("expected update status unknown, got %q", snapshot.Update.Status)
 	}
 }

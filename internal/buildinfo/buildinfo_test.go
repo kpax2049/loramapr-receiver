@@ -9,17 +9,20 @@ func TestCurrentAppliesDefaults(t *testing.T) {
 	originalChannel := Channel
 	originalCommit := Commit
 	originalBuildDate := BuildDate
+	originalBuildID := BuildID
 	defer func() {
 		Version = originalVersion
 		Channel = originalChannel
 		Commit = originalCommit
 		BuildDate = originalBuildDate
+		BuildID = originalBuildID
 	}()
 
 	Version = ""
 	Channel = ""
 	Commit = " abc123 "
 	BuildDate = " 2026-03-11T00:00:00Z "
+	BuildID = " build-abc123 "
 
 	info := Current()
 	if info.Version != "dev" {
@@ -33,5 +36,8 @@ func TestCurrentAppliesDefaults(t *testing.T) {
 	}
 	if info.BuildDate != "2026-03-11T00:00:00Z" {
 		t.Fatalf("unexpected build date %q", info.BuildDate)
+	}
+	if info.BuildID != "build-abc123" {
+		t.Fatalf("unexpected build id %q", info.BuildID)
 	}
 }

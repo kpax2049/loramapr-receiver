@@ -30,35 +30,47 @@ type FailureEvent struct {
 }
 
 type Snapshot struct {
-	InstallationID    string                     `json:"installation_id"`
-	ReceiverVersion   string                     `json:"receiver_version,omitempty"`
-	ReleaseChannel    string                     `json:"release_channel,omitempty"`
-	BuildCommit       string                     `json:"build_commit,omitempty"`
-	Mode              string                     `json:"mode"`
-	RuntimeProfile    string                     `json:"runtime_profile"`
-	Lifecycle         Lifecycle                  `json:"lifecycle"`
-	PairingPhase      string                     `json:"pairing_phase"`
-	CloudEndpoint     string                     `json:"cloud_endpoint"`
-	CloudStatus       string                     `json:"cloud_status"`
-	CloudReachable    bool                       `json:"cloud_reachable"`
-	Ready             bool                       `json:"ready"`
-	ReadyReason       string                     `json:"ready_reason,omitempty"`
-	LastError         string                     `json:"last_error,omitempty"`
-	LastHeartbeatSent *time.Time                 `json:"last_heartbeat_sent,omitempty"`
-	LastHeartbeatAck  *time.Time                 `json:"last_heartbeat_ack,omitempty"`
-	HeartbeatFresh    bool                       `json:"heartbeat_fresh"`
-	LastPacketQueued  *time.Time                 `json:"last_packet_queued,omitempty"`
-	LastPacketSent    *time.Time                 `json:"last_packet_sent,omitempty"`
-	LastPacketAck     *time.Time                 `json:"last_packet_ack,omitempty"`
-	IngestQueueDepth  int                        `json:"ingest_queue_depth,omitempty"`
-	FailureCode       string                     `json:"failure_code,omitempty"`
-	FailureSummary    string                     `json:"failure_summary,omitempty"`
-	FailureHint       string                     `json:"failure_hint,omitempty"`
-	FailureSince      *time.Time                 `json:"failure_since,omitempty"`
-	RecentFailures    []FailureEvent             `json:"recent_failures,omitempty"`
-	StartedAt         time.Time                  `json:"started_at"`
-	UpdatedAt         time.Time                  `json:"updated_at"`
-	Components        map[string]ComponentStatus `json:"components,omitempty"`
+	InstallationID           string                     `json:"installation_id"`
+	ReceiverVersion          string                     `json:"receiver_version,omitempty"`
+	ReleaseChannel           string                     `json:"release_channel,omitempty"`
+	BuildCommit              string                     `json:"build_commit,omitempty"`
+	BuildDate                string                     `json:"build_date,omitempty"`
+	BuildID                  string                     `json:"build_id,omitempty"`
+	Platform                 string                     `json:"platform,omitempty"`
+	Arch                     string                     `json:"arch,omitempty"`
+	InstallType              string                     `json:"install_type,omitempty"`
+	Mode                     string                     `json:"mode"`
+	RuntimeProfile           string                     `json:"runtime_profile"`
+	Lifecycle                Lifecycle                  `json:"lifecycle"`
+	PairingPhase             string                     `json:"pairing_phase"`
+	CloudEndpoint            string                     `json:"cloud_endpoint"`
+	CloudStatus              string                     `json:"cloud_status"`
+	CloudReachable           bool                       `json:"cloud_reachable"`
+	Ready                    bool                       `json:"ready"`
+	ReadyReason              string                     `json:"ready_reason,omitempty"`
+	LastError                string                     `json:"last_error,omitempty"`
+	LastHeartbeatSent        *time.Time                 `json:"last_heartbeat_sent,omitempty"`
+	LastHeartbeatAck         *time.Time                 `json:"last_heartbeat_ack,omitempty"`
+	HeartbeatFresh           bool                       `json:"heartbeat_fresh"`
+	LastPacketQueued         *time.Time                 `json:"last_packet_queued,omitempty"`
+	LastPacketSent           *time.Time                 `json:"last_packet_sent,omitempty"`
+	LastPacketAck            *time.Time                 `json:"last_packet_ack,omitempty"`
+	IngestQueueDepth         int                        `json:"ingest_queue_depth,omitempty"`
+	FailureCode              string                     `json:"failure_code,omitempty"`
+	FailureSummary           string                     `json:"failure_summary,omitempty"`
+	FailureHint              string                     `json:"failure_hint,omitempty"`
+	FailureSince             *time.Time                 `json:"failure_since,omitempty"`
+	RecentFailures           []FailureEvent             `json:"recent_failures,omitempty"`
+	UpdateStatus             string                     `json:"update_status,omitempty"`
+	UpdateSummary            string                     `json:"update_summary,omitempty"`
+	UpdateHint               string                     `json:"update_hint,omitempty"`
+	UpdateManifestVersion    string                     `json:"update_manifest_version,omitempty"`
+	UpdateManifestChannel    string                     `json:"update_manifest_channel,omitempty"`
+	UpdateRecommendedVersion string                     `json:"update_recommended_version,omitempty"`
+	UpdateCheckedAt          *time.Time                 `json:"update_checked_at,omitempty"`
+	StartedAt                time.Time                  `json:"started_at"`
+	UpdatedAt                time.Time                  `json:"updated_at"`
+	Components               map[string]ComponentStatus `json:"components,omitempty"`
 }
 
 type Model struct {
@@ -92,6 +104,7 @@ func (m *Model) Snapshot() Snapshot {
 	}
 	out.RecentFailures = append([]FailureEvent(nil), m.snap.RecentFailures...)
 	out.FailureSince = cloneTimePtr(m.snap.FailureSince)
+	out.UpdateCheckedAt = cloneTimePtr(m.snap.UpdateCheckedAt)
 	return out
 }
 
@@ -126,11 +139,16 @@ func (m *Model) SetInstallationID(id string) {
 	})
 }
 
-func (m *Model) SetBuildInfo(version, channel, commit string) {
+func (m *Model) SetBuildInfo(version, channel, commit, buildDate, buildID, platform, arch, installType string) {
 	m.Update(func(s *Snapshot) {
 		s.ReceiverVersion = normalize(version)
 		s.ReleaseChannel = normalize(channel)
 		s.BuildCommit = normalize(commit)
+		s.BuildDate = normalize(buildDate)
+		s.BuildID = normalize(buildID)
+		s.Platform = normalize(platform)
+		s.Arch = normalize(arch)
+		s.InstallType = normalize(installType)
 	})
 }
 
@@ -228,6 +246,18 @@ func (m *Model) SetFailure(code, summary, hint string) {
 		s.FailureCode = normalizedCode
 		s.FailureSummary = normalizedSummary
 		s.FailureHint = normalizedHint
+	})
+}
+
+func (m *Model) SetUpdateStatus(statusCode, summary, hint, manifestVersion, manifestChannel, recommendedVersion string, checkedAt *time.Time) {
+	m.Update(func(s *Snapshot) {
+		s.UpdateStatus = normalize(statusCode)
+		s.UpdateSummary = normalize(summary)
+		s.UpdateHint = normalize(hint)
+		s.UpdateManifestVersion = normalize(manifestVersion)
+		s.UpdateManifestChannel = normalize(manifestChannel)
+		s.UpdateRecommendedVersion = normalize(recommendedVersion)
+		s.UpdateCheckedAt = cloneTimePtr(checkedAt)
 	})
 }
 

@@ -1,71 +1,117 @@
-# Version, Channel, and Upgrade Safety
+# Version, Channels, and Upgrade Safety
 
-This document defines receiver-side version/channel reporting and upgrade
-compatibility behavior.
+This document defines the receiver-side policy and behavior for release channel
+semantics, build metadata reporting, and upgrade compatibility.
 
-## Build Metadata Reporting
+## Channel Model
 
-Receiver binaries report build metadata via `internal/buildinfo`:
+Supported channels:
 
-- `version`
+- `stable`: production-ready default channel for normal installs.
+- `beta`: pre-production validation channel.
+- `dev`: local/non-release builds and engineering validation.
+
+Policy:
+
+- stable installs should consume stable artifacts/manifests.
+- beta installs may run ahead of stable and can report `ahead`.
+- dev builds are not treated as production support targets.
+
+## Build Metadata Model
+
+Receiver build metadata is centralized in `internal/buildinfo` and release
+builds inject:
+
+- `version` (semantic version)
 - `channel`
 - `commit`
-- optional `build_date`
+- `build_date` (optional; from `BUILD_DATE` or `SOURCE_DATE_EPOCH`)
+- `build_id` (release build identifier; defaults to `<version>-<channel>[+commit]`)
 
-Release builds inject these fields through release `ldflags` in
-`packaging/release/build-artifacts.sh`.
+Release injection is performed in:
 
-## Runtime Status Exposure
+- `packaging/release/build-artifacts.sh`
 
-Runtime status model now includes:
+## Runtime Reporting Surfaces
 
-- `receiver_version`
-- `release_channel`
-- `build_commit`
+A running receiver reports version/channel/build metadata consistently via:
 
-These are visible in:
+- local status API: `GET /api/status`
+- heartbeat status payload metadata
+- local portal:
+  - Progress (update/currentness and recommendations)
+  - Advanced (version/channel/commit/build date/build id/platform/install type)
+- CLI:
+  - `loramapr-receiverd status`
+  - `loramapr-receiverd doctor`
+  - `loramapr-receiverd support-snapshot`
 
-- local portal advanced details
-- `/api/status`
-- heartbeat status payload
-- CLI `doctor` and `status` outputs
+Reported core fields:
 
-## Pairing and Heartbeat Metadata
+- semantic version
+- release channel
+- build commit
+- build date (if present)
+- build id (if present)
+- platform/arch
+- install type (`manual`, `linux-package`, `pi-appliance`, `windows-user`)
 
-Pairing activation metadata now includes release channel and commit in addition to
-runtime version/platform/arch.
+## Update-Status Reasoning (No Auto-Update)
 
-Heartbeat payload includes release channel and build commit under status metadata.
+Receiver includes thin, optional manifest-awareness in `internal/update`.
 
-## State Upgrade Safety
+Behavior:
 
-State storage includes `schema_version` and migration support.
+- no automatic download/install
+- optional manifest fetch/evaluation (`update.enabled` + `update.manifest_url`)
+- offline-safe fallback (`unknown` when manifest is unavailable)
 
-Current schema: `2`
+Status codes:
 
-On startup:
+- `disabled`: update checks disabled by config.
+- `unknown`: insufficient information (manifest unset/fetch failed/unparseable).
+- `current`: installed version matches recommendation.
+- `outdated`: installed version is behind recommendation.
+- `channel_mismatch`: installed channel differs from manifest channel.
+- `unsupported`: below minimum supported version or no compatible artifact.
+- `ahead`: installed version is newer than manifest recommendation.
 
-1. state is loaded
-2. migrations are applied for older schemas
-3. defaults are ensured
-4. migrated state is persisted
+These states are surfaced in portal, diagnostics outputs, and runtime status.
 
-Downgrade protection:
+## Upgrade Compatibility Rules
 
-- if state schema is newer than supported by current binary, startup fails fast.
+### Local Config
 
-## Manifest Awareness Foundation
+- `config.schema_version` is explicit.
+- Current supported config schema: `2`.
+- Older config is migrated in-process.
+- Config schema newer than runtime support is rejected at startup.
 
-`internal/manifest` provides thin parsing and selection helpers for
-`cloud-manifest.fragment.json` data:
+### Local State
 
-- parse manifest fragment with tolerant unknown-field handling
-- select artifact by platform/arch/kind with `recommended` preference
+- `state.schema_version` is explicit.
+- Current supported state schema: `3`.
+- Older state is migrated in-process.
+- Newer state schema than runtime support fails fast (downgrade protection).
 
-This is intentionally not a full auto-update engine.
+### Cloud Config Contract
 
-## Known Limits
+- Cloud config version marker is persisted (`cloud.config_version`) when provided
+  by cloud bootstrap/activation/heartbeat.
+- Receiver currently accepts major version `1`.
+- Unsupported cloud config version blocks steady-state forwarding and exposes
+  explicit diagnostics (`cloud_config_incompatible` / `config_incompatible`).
 
-- no automatic self-update/download/install loop yet
-- no signed delta update workflow yet
-- cloud-side policy remains source of truth for upgrade channel rollout
+## Compatibility Expectations
+
+Upgrade-safe expectations for this milestone:
+
+- restart after upgrade keeps installation identity and pairing state.
+- migration is additive and non-destructive by default.
+- explicit local reset/re-pair remains the recovery path when credentials or
+  lifecycle state are invalidated.
+
+Out of scope:
+
+- automatic self-update orchestration
+- rollback/downgrade tooling beyond schema guardrails

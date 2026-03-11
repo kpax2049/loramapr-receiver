@@ -45,6 +45,7 @@ func TestExchangePairingCode(t *testing.T) {
 				"flowKey":"meshtastic_first_run",
 				"activationToken":"rx_act_token",
 				"activationExpiresAt":"2026-03-10T18:00:00Z",
+				"configVersion":"v1.2",
 				"receiverLabel":"Home Receiver",
 				"activateEndpoint":"/api/receiver/activate",
 				"heartbeatEndpoint":"/api/receiver/heartbeat",
@@ -67,6 +68,9 @@ func TestExchangePairingCode(t *testing.T) {
 	}
 	if response.ActivationExpires.IsZero() {
 		t.Fatal("expected activation expiry to be parsed")
+	}
+	if response.ConfigVersion != "v1.2" {
+		t.Fatalf("unexpected config version %q", response.ConfigVersion)
 	}
 }
 
@@ -97,6 +101,7 @@ func TestActivateReceiver(t *testing.T) {
 				"ownerId":"owner-1",
 				"ingestApiKeyId":"api-key-id",
 				"ingestApiKeySecret":"api-secret",
+				"configVersion":"v1.2",
 				"ingestEndpoint":"/api/meshtastic/event",
 				"heartbeatEndpoint":"/api/receiver/heartbeat",
 				"activatedAt":"2026-03-10T18:10:00Z"
@@ -123,6 +128,9 @@ func TestActivateReceiver(t *testing.T) {
 	}
 	if response.ActivatedAt.IsZero() {
 		t.Fatal("expected activated_at to be parsed")
+	}
+	if response.ConfigVersion != "v1.2" {
+		t.Fatalf("unexpected config version %q", response.ConfigVersion)
 	}
 }
 
@@ -195,6 +203,7 @@ func TestSendReceiverHeartbeat(t *testing.T) {
 			return jsonResponse(http.StatusCreated, `{
 				"receiverAgentId":"agent-1",
 				"ownerId":"owner-1",
+				"configVersion":"v1.3",
 				"lastHeartbeatAt":"2026-03-10T22:00:00Z",
 				"nodeCount":2
 			}`), nil
@@ -217,6 +226,9 @@ func TestSendReceiverHeartbeat(t *testing.T) {
 	}
 	if ack.NodeCount != 2 {
 		t.Fatalf("unexpected node count: %d", ack.NodeCount)
+	}
+	if ack.ConfigVersion != "v1.3" {
+		t.Fatalf("unexpected config version: %q", ack.ConfigVersion)
 	}
 }
 

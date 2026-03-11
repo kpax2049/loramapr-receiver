@@ -22,11 +22,20 @@ func TestLoadMissingFileReturnsDefaults(t *testing.T) {
 	if cfg.Runtime.Profile != "auto" {
 		t.Fatalf("expected default profile %q, got %q", "auto", cfg.Runtime.Profile)
 	}
+	if cfg.SchemaVersion != CurrentSchemaVersion {
+		t.Fatalf("expected schema version %d, got %d", CurrentSchemaVersion, cfg.SchemaVersion)
+	}
 	if cfg.Portal.BindAddress != "127.0.0.1:8080" {
 		t.Fatalf("unexpected default bind address: %q", cfg.Portal.BindAddress)
 	}
 	if cfg.Service.Heartbeat.Std() != 30*time.Second {
 		t.Fatalf("unexpected default heartbeat: %s", cfg.Service.Heartbeat.Std())
+	}
+	if cfg.Update.CheckInterval.Std() != 6*time.Hour {
+		t.Fatalf("unexpected update check interval: %s", cfg.Update.CheckInterval.Std())
+	}
+	if cfg.Update.RequestTimeout.Std() != 4*time.Second {
+		t.Fatalf("unexpected update request timeout: %s", cfg.Update.RequestTimeout.Std())
 	}
 }
 
@@ -72,6 +81,34 @@ func TestLoadRejectsInvalidRuntimeProfile(t *testing.T) {
 	}
 }
 
+func TestLoadRejectsNewerSchemaVersion(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "receiver.json")
+	if err := os.WriteFile(path, []byte(`{"schema_version":999}`), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected validation error for newer schema version")
+	}
+}
+
+func TestLoadRejectsInvalidUpdateManifestURL(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "receiver.json")
+	if err := os.WriteFile(path, []byte(`{"update":{"manifest_url":"not-a-url"}}`), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected validation error for invalid update manifest url")
+	}
+}
+
 func TestSaveAndLoadRoundTrip(t *testing.T) {
 	t.Parallel()
 
@@ -85,6 +122,9 @@ func TestSaveAndLoadRoundTrip(t *testing.T) {
 	cfg.Logging.Format = "text"
 	cfg.Logging.Level = "debug"
 	cfg.Runtime.Profile = "appliance-pi"
+	cfg.Update.Enabled = true
+	cfg.Update.ManifestURL = "https://downloads.loramapr.com/receiver/stable/latest/cloud-manifest.fragment.json"
+	cfg.Update.MinSupportedVersion = "v2.2.0"
 
 	if err := Save(path, cfg); err != nil {
 		t.Fatalf("save failed: %v", err)
@@ -109,5 +149,11 @@ func TestSaveAndLoadRoundTrip(t *testing.T) {
 	}
 	if loaded.Runtime.Profile != "appliance-pi" {
 		t.Fatalf("unexpected runtime profile: %s", loaded.Runtime.Profile)
+	}
+	if loaded.Update.ManifestURL == "" {
+		t.Fatalf("expected update manifest URL to persist")
+	}
+	if loaded.Update.MinSupportedVersion != "v2.2.0" {
+		t.Fatalf("unexpected update min supported version: %s", loaded.Update.MinSupportedVersion)
 	}
 }

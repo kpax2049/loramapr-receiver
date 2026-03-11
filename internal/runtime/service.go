@@ -22,6 +22,7 @@ import (
 	"github.com/loramapr/loramapr-receiver/internal/pairing"
 	"github.com/loramapr/loramapr-receiver/internal/state"
 	"github.com/loramapr/loramapr-receiver/internal/status"
+	"github.com/loramapr/loramapr-receiver/internal/update"
 	"github.com/loramapr/loramapr-receiver/internal/webportal"
 )
 
@@ -48,6 +49,7 @@ type Service struct {
 	mode      config.RunMode
 	steady    steadyState
 	build     buildinfo.Info
+	updater   *update.Checker
 }
 
 type Container struct {
@@ -96,12 +98,14 @@ func New(cfg config.Config, logger *slog.Logger) (*Service, error) {
 	current := store.Snapshot()
 	mode := resolveMode(cfg.Service.Mode, current.Pairing.Phase)
 	profile := resolveRuntimeProfile(cfg.Runtime.Profile, cfg.Paths.StateFile)
+	installType := installTypeFromProfile(profile)
 
 	if err := store.Update(func(data *state.Data) {
 		data.Installation.LastStartedAt = time.Now().UTC()
 		data.Cloud.EndpointURL = cfg.Cloud.BaseURL
 		data.Runtime.Profile = profile
 		data.Runtime.Mode = string(mode)
+		data.Runtime.InstallType = installType
 	}); err != nil {
 		return nil, fmt.Errorf("persist startup state: %w", err)
 	}
@@ -110,7 +114,16 @@ func New(cfg config.Config, logger *slog.Logger) (*Service, error) {
 	statusModel := status.New()
 	statusModel.SetInstallationID(current.Installation.ID)
 	build := buildinfo.Current()
-	statusModel.SetBuildInfo(build.Version, build.Channel, build.Commit)
+	statusModel.SetBuildInfo(
+		build.Version,
+		build.Channel,
+		build.Commit,
+		build.BuildDate,
+		build.BuildID,
+		goruntime.GOOS,
+		goruntime.GOARCH,
+		installType,
+	)
 	statusModel.SetMode(string(mode))
 	statusModel.SetRuntimeProfile(profile)
 	statusModel.SetPairingPhase(string(current.Pairing.Phase))
@@ -118,10 +131,28 @@ func New(cfg config.Config, logger *slog.Logger) (*Service, error) {
 	statusModel.SetComponent("runtime", "starting", "initializing service container")
 	statusModel.SetComponent("portal", "stopped", "portal not started yet")
 	statusModel.SetComponent("network", "unknown", "network status not probed yet")
+	statusModel.SetComponent("update", "unknown", "update status not evaluated yet")
+	statusModel.SetComponent("cloud_config", "unknown", "cloud config version not reported yet")
+	statusModel.SetUpdateStatus(
+		current.Update.Status,
+		current.Update.Summary,
+		current.Update.Hint,
+		current.Update.ManifestVersion,
+		current.Update.ManifestChannel,
+		current.Update.RecommendedVersion,
+		current.Update.LastCheckedAt,
+	)
 
 	svc := &Service{}
 	svc.mode = mode
 	svc.build = build
+	svc.updater = update.NewChecker(update.Config{
+		Enabled:             cfg.Update.Enabled,
+		ManifestURL:         cfg.Update.ManifestURL,
+		CheckInterval:       cfg.Update.CheckInterval.Std(),
+		RequestTimeout:      cfg.Update.RequestTimeout.Std(),
+		MinSupportedVersion: cfg.Update.MinSupportedVersion,
+	})
 	svc.steady = steadyState{
 		ingestQueue: make([]queuedIngestEvent, 0, 64),
 	}
@@ -149,6 +180,9 @@ func New(cfg config.Config, logger *slog.Logger) (*Service, error) {
 				Metadata: map[string]any{
 					"releaseChannel": build.Channel,
 					"buildCommit":    build.Commit,
+					"buildDate":      build.BuildDate,
+					"buildID":        build.BuildID,
+					"installType":    installType,
 				},
 			},
 		),
@@ -269,24 +303,39 @@ func (s *Service) tick(ctx context.Context) {
 	c.Status.SetComponent("meshtastic", string(meshSnap.State), meshtasticStatusMessage(meshSnap))
 
 	s.processSteadyState(ctx, snap, meshSnap)
+	s.refreshUpdateStatus(ctx, snap)
+	snap = c.State.Snapshot()
 
 	syncReady := snap.Pairing.Phase == state.PairingSteadyState
+	cloudConfigIssue := cloudConfigCompatibilityIssue(snap.Cloud.ConfigVersion)
 	switch s.mode {
 	case config.ModeSetup:
 		c.Status.SetReady(true, "setup portal available")
 		if syncReady {
-			c.Status.SetComponent("service", "ready", "receiver paired and activated")
+			if cloudConfigIssue != "" {
+				c.Status.SetComponent("service", "blocked", cloudConfigIssue)
+			} else {
+				c.Status.SetComponent("service", "ready", "receiver paired and activated")
+			}
 		} else {
 			c.Status.SetComponent("service", "setup", "receiver in setup mode")
 		}
 	case config.ModeService:
-		if syncReady {
+		if syncReady && cloudConfigIssue == "" {
 			c.Status.SetReady(true, "service mode active")
 		} else {
-			c.Status.SetReady(false, "service mode requires paired state")
+			switch {
+			case !syncReady:
+				c.Status.SetReady(false, "service mode requires paired state")
+			default:
+				c.Status.SetReady(false, "service mode blocked by incompatible cloud config")
+				c.Status.SetComponent("service", "blocked", cloudConfigIssue)
+			}
 		}
 		c.Status.SetComponent("pairing", string(snap.Pairing.Phase), "pairing state from persistent store")
-		c.Status.SetComponent("service", "running", "service mode loop active")
+		if cloudConfigIssue == "" {
+			c.Status.SetComponent("service", "running", "service mode loop active")
+		}
 	default:
 		c.Status.SetReady(false, "unknown runtime mode")
 		c.Status.SetLastError("unknown runtime mode")
@@ -350,6 +399,15 @@ func (s *Service) enqueueIngestEvent(payload map[string]any, idempotencyKey stri
 
 func (s *Service) processSteadyState(ctx context.Context, snapshot state.Data, meshSnap meshtastic.Snapshot) {
 	c := s.container
+	if issue := cloudConfigCompatibilityIssue(snapshot.Cloud.ConfigVersion); issue != "" {
+		c.Status.SetComponent("cloud_config", "unsupported", issue)
+		c.Status.SetLastError("cloud config version unsupported")
+		c.Status.SetCloud(snapshot.Cloud.EndpointURL, "config_incompatible")
+		c.Status.SetCloudReachable(false)
+		return
+	}
+	c.Status.SetComponent("cloud_config", "compatible", cloudConfigStatusMessage(snapshot.Cloud.ConfigVersion))
+
 	if !credentialsReady(snapshot) {
 		fresh := isHeartbeatFresh(s.steady.lastHeartbeatAck, c.Config.Service.Heartbeat.Std())
 		c.Status.SetHeartbeat(s.steady.lastHeartbeatSent, s.steady.lastHeartbeatAck, fresh)
@@ -445,6 +503,7 @@ func (s *Service) sendHeartbeat(ctx context.Context, snapshot state.Data, meshSn
 	if len(s.steady.ingestQueue) > 0 {
 		coarseFailure = "queue_backlog"
 	}
+	updateSnap := s.container.Status.Snapshot()
 
 	ack, err := s.container.Cloud.SendReceiverHeartbeat(ctx, endpoint, apiKey, cloudclient.ReceiverHeartbeat{
 		RuntimeVersion:  s.build.Version,
@@ -460,6 +519,11 @@ func (s *Service) sendHeartbeat(ctx context.Context, snapshot state.Data, meshSn
 			"coarseFailureReason": coarseFailure,
 			"releaseChannel":      s.build.Channel,
 			"buildCommit":         s.build.Commit,
+			"buildDate":           s.build.BuildDate,
+			"buildID":             s.build.BuildID,
+			"installType":         snapshot.Runtime.InstallType,
+			"updateStatus":        updateSnap.UpdateStatus,
+			"updateVersion":       updateSnap.UpdateRecommendedVersion,
 		},
 	})
 	if err != nil {
@@ -476,6 +540,13 @@ func (s *Service) sendHeartbeat(ctx context.Context, snapshot state.Data, meshSn
 
 	ackAt := ack.LastHeartbeatAt.UTC()
 	s.steady.lastHeartbeatAck = &ackAt
+	if configVersion := strings.TrimSpace(ack.ConfigVersion); configVersion != "" && configVersion != strings.TrimSpace(snapshot.Cloud.ConfigVersion) {
+		if err := s.container.State.Update(func(data *state.Data) {
+			data.Cloud.ConfigVersion = configVersion
+		}); err != nil {
+			s.container.Logger.Warn("persist cloud config version failed", "err", err)
+		}
+	}
 	s.steady.cloudReachable = true
 	return nil
 }
@@ -676,6 +747,19 @@ func resolveRuntimeProfile(requestedProfile string, stateFile string) string {
 	}
 }
 
+func installTypeFromProfile(profile string) string {
+	switch strings.ToLower(strings.TrimSpace(profile)) {
+	case "appliance-pi":
+		return "pi-appliance"
+	case "linux-service":
+		return "linux-package"
+	case "windows-user":
+		return "windows-user"
+	default:
+		return "manual"
+	}
+}
+
 func pairingCloudStatus(pairingState state.PairingState) string {
 	switch pairingState.Phase {
 	case state.PairingSteadyState, state.PairingActivated:
@@ -713,6 +797,88 @@ func meshtasticStatusMessage(snapshot meshtastic.Snapshot) string {
 		message += " error=" + snapshot.LastError
 	}
 	return message
+}
+
+func cloudConfigCompatibilityIssue(configVersion string) string {
+	value := strings.TrimSpace(configVersion)
+	if value == "" {
+		return ""
+	}
+	normalized := strings.TrimPrefix(strings.ToLower(value), "v")
+	major := normalized
+	if idx := strings.Index(major, "."); idx >= 0 {
+		major = major[:idx]
+	}
+	if major == "1" {
+		return ""
+	}
+	return "cloud config version " + value + " is unsupported by this receiver"
+}
+
+func cloudConfigStatusMessage(configVersion string) string {
+	value := strings.TrimSpace(configVersion)
+	if value == "" {
+		return "cloud config version not reported"
+	}
+	return "cloud config version " + value + " is compatible"
+}
+
+func (s *Service) refreshUpdateStatus(ctx context.Context, snapshot state.Data) {
+	if s.updater == nil {
+		return
+	}
+
+	if !s.updater.ShouldCheck(snapshot.Update.LastCheckedAt) {
+		s.container.Status.SetUpdateStatus(
+			snapshot.Update.Status,
+			snapshot.Update.Summary,
+			snapshot.Update.Hint,
+			snapshot.Update.ManifestVersion,
+			snapshot.Update.ManifestChannel,
+			snapshot.Update.RecommendedVersion,
+			snapshot.Update.LastCheckedAt,
+		)
+		stateCode := strings.TrimSpace(snapshot.Update.Status)
+		if stateCode == "" {
+			stateCode = "unknown"
+		}
+		s.container.Status.SetComponent("update", stateCode, strings.TrimSpace(snapshot.Update.Summary))
+		return
+	}
+
+	result := s.updater.Check(ctx, update.Installed{
+		Version:     s.build.Version,
+		Channel:     s.build.Channel,
+		Platform:    goruntime.GOOS,
+		Arch:        goruntime.GOARCH,
+		InstallType: snapshot.Runtime.InstallType,
+	})
+
+	checkedAt := result.CheckedAt
+	s.container.Status.SetUpdateStatus(
+		string(result.Status),
+		result.Summary,
+		result.Hint,
+		result.ManifestVersion,
+		result.ManifestChannel,
+		result.RecommendedVersion,
+		&checkedAt,
+	)
+	s.container.Status.SetComponent("update", string(result.Status), result.Summary)
+
+	if err := s.container.State.Update(func(data *state.Data) {
+		data.Update.Status = string(result.Status)
+		data.Update.Summary = result.Summary
+		data.Update.Hint = result.Hint
+		data.Update.ManifestVersion = result.ManifestVersion
+		data.Update.ManifestChannel = result.ManifestChannel
+		data.Update.RecommendedVersion = result.RecommendedVersion
+		data.Update.LastError = result.LastError
+		data.Update.LastCheckedAt = cloneTime(result.CheckedAt)
+		data.Update.UpdatedAt = result.CheckedAt
+	}); err != nil {
+		s.container.Logger.Warn("persist update status failed", "err", err)
+	}
 }
 
 func (s *Service) updateFailureState(snapshot state.Data, meshSnap meshtastic.Snapshot, networkProbe diagnostics.NetworkProbe) {

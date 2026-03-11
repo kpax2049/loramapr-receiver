@@ -1,18 +1,34 @@
 # Runtime Config and State
 
-This document defines the current receiver runtime config/state files for
-`loramapr-receiverd`.
+This document defines the receiver runtime config/state layout and migration
+behavior for `loramapr-receiverd`.
 
 ## Config File
 
 - Default local path: `./receiver.json`
 - Runtime flag: `-config /path/to/receiver.json`
-- Expected permissions: owner-readable/writeable (recommended `0600`)
+- Recommended permissions: `0600`
 
-Example shape:
+Current config schema:
+
+- `schema_version: 2`
+
+Key sections:
+
+- `service`
+- `runtime`
+- `paths`
+- `portal`
+- `cloud`
+- `update`
+- `meshtastic`
+- `logging`
+
+Example (minimal):
 
 ```json
 {
+  "schema_version": 2,
   "service": {
     "mode": "auto",
     "heartbeat": "30s"
@@ -29,9 +45,15 @@ Example shape:
   "cloud": {
     "base_url": "https://api.loramapr.example"
   },
+  "update": {
+    "enabled": false,
+    "manifest_url": "",
+    "check_interval": "6h",
+    "request_timeout": "4s",
+    "min_supported_version": ""
+  },
   "meshtastic": {
-    "transport": "serial",
-    "device": "/dev/ttyUSB0"
+    "transport": "serial"
   },
   "logging": {
     "level": "info",
@@ -42,89 +64,129 @@ Example shape:
 
 ### `service.mode`
 
-- `auto`: use persisted pairing phase to select setup/service mode
-- `setup`: force first-run/setup runtime behavior
-- `service`: force service mode (readiness remains false unless paired steady-state exists)
+- `auto`: setup unless pairing phase is `steady_state`.
+- `setup`: force setup-first behavior.
+- `service`: force service mode (readiness still depends on compatible pairing/cloud config).
 
 ### `runtime.profile`
 
-- `auto`: detect profile from filesystem/runtime context
-- `local-dev`: local development defaults
-- `linux-service`: packaged Linux service runtime
-- `windows-user`: user-scoped Windows runtime
-- `appliance-pi`: Raspberry Pi appliance profile (LAN portal defaults, first-run setup path)
+- `auto`
+- `local-dev`
+- `linux-service`
+- `windows-user`
+- `appliance-pi`
+
+### `update` block
+
+- `enabled`: enables manifest-based currentness checks.
+- `manifest_url`: URL to cloud manifest fragment.
+- `check_interval`: interval between checks.
+- `request_timeout`: HTTP timeout for manifest fetch.
+- `min_supported_version`: optional support floor for `unsupported` status.
+
+This logic is informational only; no self-update actions are performed.
 
 ### `meshtastic.transport`
 
-- `serial`: auto-detect serial device candidates, then consume JSON event stream
-- `json_stream`: consume JSON event stream from configured `meshtastic.device`
-- `disabled`: adapter inactive
+- `serial`
+- `json_stream`
+- `disabled`
 
 ## State File
 
-- Configured by `paths.state_file`
+- Path: `paths.state_file`
 - Default local path: `./data/receiver-state.json`
-- Stored with atomic rewrite (temp file + rename)
-- File permissions target: `0600`
+- Atomic persistence: temp file + rename
+- Target permissions: `0600`
 
-Persisted fields currently include:
+Current state schema:
 
-- schema version (`schema_version`)
-- installation identity (`installation.id`)
-- installation timestamps (`created_at`, `last_started_at`)
-- pairing/bootstrap phase and retry/error metadata (`pairing.*`)
-- cloud endpoint, activation endpoint, and durable receiver credentials (`cloud.*`)
-- detected runtime profile + selected mode (`runtime.*`)
-- generic metadata timestamp (`metadata.updated_at`)
+- `schema_version: 3`
 
-Important persisted pairing/cloud fields:
+Top-level sections:
 
-- `pairing.pairing_code` (transient until bootstrap exchange)
-- `pairing.activation_token` + `pairing.activation_expires_at`
-- `pairing.next_retry_at` + `pairing.retry_count`
-- `pairing.last_change` lifecycle marker (`credential_revoked`,
-  `receiver_disabled`, `receiver_replaced`, `local_reset`,
-  `local_deauthorized`)
-- `cloud.ingest_api_key_secret` (durable ingest credential)
+- `installation`
+- `pairing`
+- `cloud`
+- `runtime`
+- `update`
+- `metadata`
 
-These values are intentionally **not** exposed by `/api/status`.
+### Persisted identity and pairing
 
-## Lifecycle Reset and Identity Persistence
+- `installation.id` (stable local installation identity)
+- `pairing.phase` (`unpaired`, `pairing_code_entered`, `bootstrap_exchanged`, `activated`, `steady_state`)
+- pairing lifecycle metadata (`retry_count`, `next_retry_at`, `last_error`, `last_change`)
 
-Local lifecycle command:
+### Persisted cloud material
+
+- `cloud.endpoint_url`
+- `cloud.config_version`
+- `cloud.activate_endpoint`, `cloud.heartbeat_endpoint`, `cloud.ingest_endpoint`
+- durable credential fields (`ingest_api_key_id`, `ingest_api_key_secret`, `credential_ref`)
+
+### Persisted runtime classification
+
+- `runtime.profile`
+- `runtime.mode`
+- `runtime.install_type`
+
+### Persisted update reasoning
+
+- `update.status`
+- `update.summary`
+- `update.hint`
+- `update.manifest_version`
+- `update.manifest_channel`
+- `update.recommended_version`
+- `update.last_checked_at`
+- `update.last_error`
+
+## Migration and Compatibility
+
+### Config
+
+- Legacy/unspecified config schema is migrated to `2`.
+- Config schema newer than supported runtime fails startup.
+
+### State
+
+- Legacy pairing phase values are normalized during migration.
+- Schema `2 -> 3` migration adds install type/update defaults.
+- State schema newer than supported runtime fails startup.
+
+### Cloud config compatibility
+
+- Cloud-reported config version is persisted in state.
+- Current runtime accepts cloud config major `1`.
+- Unsupported cloud config version blocks forwarding/steady-state and surfaces
+  explicit diagnostics.
+
+## Reset and Persistence Semantics
+
+Local reset command:
 
 ```bash
 loramapr-receiverd reset-pairing -config /etc/loramapr/receiver.json
 ```
 
-Default behavior deauthorizes local durable credentials and returns runtime to
-`pairing.phase=unpaired`.
+Default reset behavior:
 
-Identity semantics:
+- preserves `installation.id`
+- clears durable cloud credential material
+- returns pairing phase to `unpaired`
 
-- `installation.id` is preserved during reset/re-pair operations
-- durable cloud credential fields are cleared on deauthorization
-- fresh storage (new state file) creates a new `installation.id`
+Fresh state file (new disk/new SD card/new path) generates a new
+`installation.id` and requires fresh pairing.
 
-## Upgrade and Migration Handling
+## Typical Packaged Paths
 
-State store now enforces `schema_version` with in-process migrations.
+Linux package/service path:
 
-Current schema: `2`
+- config: `/etc/loramapr/receiver.json`
+- state: `/var/lib/loramapr/receiver-state.json`
+- logs: `/var/log/loramapr/`
+- service: `loramapr-receiverd.service`
 
-Migration behavior:
-
-- legacy `pairing.phase` values (`paired`, `ready`) migrate to `steady_state`
-- legacy `pairing.phase = pairing` migrates to `pairing_code_entered`
-- unknown invalid pairing phase values reset to `unpaired`
-
-If on-disk state schema is newer than the running binary supports, startup fails
-fast to prevent destructive downgrades.
-
-## Typical Packaged Paths (Planned Linux-first)
-
-- Config: `/etc/loramapr/receiver.json`
-- State: `/var/lib/loramapr/receiver-state.json`
-- Service unit: `packaging/linux/systemd/loramapr-receiverd.service`
-
-Packaging work is phased; these paths are the intended service-mode target layout.
+Pi appliance path uses the same runtime/state model with appliance profile
+defaults.

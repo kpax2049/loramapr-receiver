@@ -52,6 +52,7 @@ Receiver binaries are stamped with build metadata via `ldflags`:
 - channel
 - commit
 - optional build date (`BUILD_DATE` or `SOURCE_DATE_EPOCH`)
+- build id (`BUILD_ID`, default `<version>-<channel>[+commit]`)
 
 ## Naming Convention
 

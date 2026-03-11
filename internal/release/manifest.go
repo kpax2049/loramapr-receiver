@@ -254,7 +254,7 @@ func mapPlatform(goos string) string {
 	}
 }
 
-func BuildReleaseMetadata(version string, channel string, commit string, manifest Manifest) map[string]any {
+func BuildReleaseMetadata(version string, channel string, commit string, buildDate string, buildID string, manifest Manifest) map[string]any {
 	channel = strings.TrimSpace(channel)
 	if channel == "" {
 		channel = "stable"
@@ -268,6 +268,12 @@ func BuildReleaseMetadata(version string, channel string, commit string, manifes
 	trimmedCommit := strings.TrimSpace(commit)
 	if trimmedCommit != "" {
 		metadata["gitCommit"] = trimmedCommit
+	}
+	if value := strings.TrimSpace(buildDate); value != "" {
+		metadata["buildDate"] = value
+	}
+	if value := strings.TrimSpace(buildID); value != "" {
+		metadata["buildID"] = value
 	}
 	linuxCount := 0
 	piCount := 0

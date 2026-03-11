@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
@@ -15,7 +16,7 @@ import (
 type PairingPhase string
 
 const (
-	CurrentSchemaVersion = 2
+	CurrentSchemaVersion = 3
 
 	PairingUnpaired           PairingPhase = "unpaired"
 	PairingCodeEntered        PairingPhase = "pairing_code_entered"
@@ -30,6 +31,7 @@ type Data struct {
 	Pairing       PairingState      `json:"pairing"`
 	Cloud         CloudState        `json:"cloud"`
 	Runtime       RuntimeState      `json:"runtime"`
+	Update        UpdateState       `json:"update"`
 	Metadata      MetadataState     `json:"metadata"`
 }
 
@@ -56,6 +58,7 @@ type PairingState struct {
 
 type CloudState struct {
 	EndpointURL       string    `json:"endpoint_url"`
+	ConfigVersion     string    `json:"config_version,omitempty"`
 	ActivateEndpoint  string    `json:"activate_endpoint,omitempty"`
 	HeartbeatEndpoint string    `json:"heartbeat_endpoint,omitempty"`
 	IngestEndpoint    string    `json:"ingest_endpoint,omitempty"`
@@ -68,8 +71,21 @@ type CloudState struct {
 }
 
 type RuntimeState struct {
-	Profile string `json:"profile,omitempty"`
-	Mode    string `json:"mode,omitempty"`
+	Profile     string `json:"profile,omitempty"`
+	Mode        string `json:"mode,omitempty"`
+	InstallType string `json:"install_type,omitempty"`
+}
+
+type UpdateState struct {
+	Status             string     `json:"status,omitempty"`
+	Summary            string     `json:"summary,omitempty"`
+	Hint               string     `json:"hint,omitempty"`
+	ManifestVersion    string     `json:"manifest_version,omitempty"`
+	ManifestChannel    string     `json:"manifest_channel,omitempty"`
+	RecommendedVersion string     `json:"recommended_version,omitempty"`
+	LastCheckedAt      *time.Time `json:"last_checked_at,omitempty"`
+	LastError          string     `json:"last_error,omitempty"`
+	UpdatedAt          time.Time  `json:"updated_at,omitempty"`
 }
 
 type MetadataState struct {
@@ -193,6 +209,14 @@ func (s *Store) ensureDefaults() (bool, error) {
 		s.data.Pairing.Phase = PairingUnpaired
 		changed = true
 	}
+	if s.data.Runtime.InstallType == "" {
+		s.data.Runtime.InstallType = installTypeFromProfile(s.data.Runtime.Profile)
+		changed = true
+	}
+	if !isKnownUpdateStatus(s.data.Update.Status) {
+		s.data.Update.Status = "unknown"
+		changed = true
+	}
 	return changed, nil
 }
 
@@ -224,6 +248,18 @@ func (s *Store) migrate() (bool, error) {
 			}
 		}
 		version = 2
+		changed = true
+	}
+	if version <= 2 {
+		if s.data.Runtime.InstallType == "" {
+			s.data.Runtime.InstallType = installTypeFromProfile(s.data.Runtime.Profile)
+			changed = true
+		}
+		if !isKnownUpdateStatus(s.data.Update.Status) {
+			s.data.Update.Status = "unknown"
+			changed = true
+		}
+		version = 3
 		changed = true
 	}
 
@@ -293,6 +329,28 @@ func newInstallID() (string, error) {
 func isValidPhase(phase PairingPhase) bool {
 	switch phase {
 	case PairingUnpaired, PairingCodeEntered, PairingBootstrapExchanged, PairingActivated, PairingSteadyState:
+		return true
+	default:
+		return false
+	}
+}
+
+func installTypeFromProfile(profile string) string {
+	switch strings.ToLower(strings.TrimSpace(profile)) {
+	case "appliance-pi":
+		return "pi-appliance"
+	case "linux-service":
+		return "linux-package"
+	case "windows-user":
+		return "windows-user"
+	default:
+		return "manual"
+	}
+}
+
+func isKnownUpdateStatus(status string) bool {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "unknown", "disabled", "current", "outdated", "channel_mismatch", "unsupported", "ahead":
 		return true
 	default:
 		return false

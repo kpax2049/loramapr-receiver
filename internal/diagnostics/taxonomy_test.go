@@ -68,6 +68,16 @@ func TestEvaluateFailureTaxonomy(t *testing.T) {
 			want: FailureCloudUnreachable,
 		},
 		{
+			name: "cloud config incompatible",
+			in: Input{
+				PairingPhase:     "steady_state",
+				CloudReachable:   false,
+				RuntimeLastError: "cloud config version unsupported",
+				Now:              now,
+			},
+			want: FailureCloudConfigIncompat,
+		},
+		{
 			name: "auth invalid",
 			in: Input{
 				PairingPhase:     "steady_state",

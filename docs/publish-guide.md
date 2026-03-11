@@ -91,12 +91,13 @@ Support snapshot is redacted and omits secrets.
 ## 6. Version/Channel Reporting
 
 Release builds stamp binaries with build metadata (`version`, `channel`,
-`commit`) using release `ldflags`. These values surface in:
+`commit`, optional `build_date`, `build_id`) using release `ldflags`.
+These values surface in:
 
 - `/api/status`
 - heartbeat metadata
 - portal advanced details
-- `doctor` and `status` outputs
+- `doctor`, `status`, and `support-snapshot` outputs
 
 ## Related Docs
 

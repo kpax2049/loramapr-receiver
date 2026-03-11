@@ -44,6 +44,9 @@ func TestSupportSnapshotRedactsSecrets(t *testing.T) {
 	if snapshot.Cloud.HasIngestCredential != true {
 		t.Fatal("expected redacted boolean for ingest credential")
 	}
+	if snapshot.Runtime.InstallType == "" {
+		t.Fatal("expected runtime install type in support snapshot")
+	}
 	if snapshot.Pairing.LastError == "" {
 		t.Fatal("expected coarse last error to be present")
 	}

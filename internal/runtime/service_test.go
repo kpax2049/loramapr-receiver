@@ -108,6 +108,7 @@ type mockCloudClient struct {
 	heartbeatErr   error
 	heartbeatCalls int
 	lastHeartbeat  cloudclient.ReceiverHeartbeat
+	ackConfigVer   string
 }
 
 func (m *mockCloudClient) ExchangePairingCode(_ context.Context, _ string) (cloudclient.BootstrapExchange, error) {
@@ -149,6 +150,7 @@ func (m *mockCloudClient) SendReceiverHeartbeat(
 	return cloudclient.ReceiverHeartbeatAck{
 		ReceiverAgentID: "agent-1",
 		OwnerID:         "owner-1",
+		ConfigVersion:   m.ackConfigVer,
 		LastHeartbeatAt: time.Now().UTC(),
 		NodeCount:       len(heartbeat.ObservedNodeIDs),
 	}, nil
@@ -293,6 +295,15 @@ func TestSendHeartbeatPayloadShaping(t *testing.T) {
 	if len(mockCloud.lastHeartbeat.ObservedNodeIDs) != 2 {
 		t.Fatalf("unexpected observed nodes in heartbeat payload")
 	}
+	if _, ok := mockCloud.lastHeartbeat.Status["buildDate"]; !ok {
+		t.Fatalf("expected buildDate in heartbeat status payload")
+	}
+	if _, ok := mockCloud.lastHeartbeat.Status["buildID"]; !ok {
+		t.Fatalf("expected buildID in heartbeat status payload")
+	}
+	if _, ok := mockCloud.lastHeartbeat.Status["updateStatus"]; !ok {
+		t.Fatalf("expected updateStatus in heartbeat status payload")
+	}
 }
 
 func TestLifecycleChangeFromCloudError(t *testing.T) {
@@ -420,5 +431,38 @@ func TestSendHeartbeatLifecycleTransitionRevoked(t *testing.T) {
 	}
 	if len(svc.steady.ingestQueue) != 0 {
 		t.Fatalf("expected ingest queue to be cleared after lifecycle transition")
+	}
+}
+
+func TestProcessSteadyStateBlocksOnUnsupportedCloudConfig(t *testing.T) {
+	t.Parallel()
+
+	statusModel := status.New()
+	svc := &Service{
+		container: &Container{
+			Config: config.Default(),
+			Logger: slog.Default(),
+			Status: statusModel,
+		},
+	}
+
+	svc.processSteadyState(context.Background(), state.Data{
+		Pairing: state.PairingState{Phase: state.PairingSteadyState},
+		Cloud: state.CloudState{
+			EndpointURL:   "https://api.example.com",
+			ConfigVersion: "v2.0",
+		},
+	}, meshtastic.Snapshot{})
+
+	snap := statusModel.Snapshot()
+	if snap.LastError != "cloud config version unsupported" {
+		t.Fatalf("expected cloud config compatibility error, got %q", snap.LastError)
+	}
+	component, ok := snap.Components["cloud_config"]
+	if !ok {
+		t.Fatalf("expected cloud_config component status")
+	}
+	if component.State != "unsupported" {
+		t.Fatalf("expected cloud_config state unsupported, got %q", component.State)
 	}
 }

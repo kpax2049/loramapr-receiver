@@ -9,6 +9,7 @@ ENABLE_PI_IMAGE="${ENABLE_PI_IMAGE:-0}"
 GO_BIN="${GO_BIN:-$(command -v go || true)}"
 GIT_COMMIT="$(git -C "${ROOT_DIR}" rev-parse --short HEAD 2>/dev/null || true)"
 BUILD_DATE="${BUILD_DATE:-}"
+BUILD_ID="${BUILD_ID:-}"
 
 if [[ -z "${GO_BIN}" && -x "/usr/local/go/bin/go" ]]; then
   GO_BIN="/usr/local/go/bin/go"
@@ -36,6 +37,12 @@ fi
 if [[ -z "${BUILD_DATE}" && -n "${SOURCE_DATE_EPOCH:-}" ]]; then
   BUILD_DATE="$(date -u -r "${SOURCE_DATE_EPOCH}" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d "@${SOURCE_DATE_EPOCH}" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || true)"
 fi
+if [[ -z "${BUILD_ID}" ]]; then
+  BUILD_ID="${VERSION}-${CHANNEL}"
+  if [[ -n "${GIT_COMMIT}" ]]; then
+    BUILD_ID="${BUILD_ID}+${GIT_COMMIT}"
+  fi
+fi
 
 DIST_DIR="${ROOT_DIR}/dist/${VERSION}"
 BUILD_DIR="${DIST_DIR}/build"
@@ -50,6 +57,7 @@ ldflags=(
   "-X github.com/loramapr/loramapr-receiver/internal/buildinfo.Version=${VERSION}"
   "-X github.com/loramapr/loramapr-receiver/internal/buildinfo.Channel=${CHANNEL}"
   "-X github.com/loramapr/loramapr-receiver/internal/buildinfo.Commit=${GIT_COMMIT}"
+  "-X github.com/loramapr/loramapr-receiver/internal/buildinfo.BuildID=${BUILD_ID}"
 )
 if [[ -n "${BUILD_DATE}" ]]; then
   ldflags+=("-X github.com/loramapr/loramapr-receiver/internal/buildinfo.BuildDate=${BUILD_DATE}")
@@ -190,6 +198,8 @@ done
   -artifacts-dir "${ARTIFACTS_DIR}" \
   -manifest-out "${ARTIFACTS_DIR}/cloud-manifest.fragment.json" \
   -metadata-out "${ARTIFACTS_DIR}/release-metadata.json" \
-  -git-commit "${GIT_COMMIT}"
+  -git-commit "${GIT_COMMIT}" \
+  -build-date "${BUILD_DATE}" \
+  -build-id "${BUILD_ID}"
 
 echo "Artifacts generated under ${ARTIFACTS_DIR}"

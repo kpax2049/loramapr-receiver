@@ -28,14 +28,16 @@ type DeviceProbe struct {
 type SupportSnapshot struct {
 	GeneratedAt time.Time `json:"generated_at"`
 	Runtime     struct {
-		Version    string `json:"version"`
-		Channel    string `json:"channel"`
-		Commit     string `json:"commit,omitempty"`
-		BuildDate  string `json:"build_date,omitempty"`
-		GoVersion  string `json:"go_version"`
-		Platform   string `json:"platform"`
-		Arch       string `json:"arch"`
-		ConfigPath string `json:"config_path,omitempty"`
+		Version     string `json:"version"`
+		Channel     string `json:"channel"`
+		Commit      string `json:"commit,omitempty"`
+		BuildDate   string `json:"build_date,omitempty"`
+		BuildID     string `json:"build_id,omitempty"`
+		GoVersion   string `json:"go_version"`
+		Platform    string `json:"platform"`
+		Arch        string `json:"arch"`
+		InstallType string `json:"install_type,omitempty"`
+		ConfigPath  string `json:"config_path,omitempty"`
 	} `json:"runtime"`
 	Pairing struct {
 		Phase      state.PairingPhase `json:"phase"`
@@ -60,6 +62,18 @@ type SupportSnapshot struct {
 		ConfiguredPath string      `json:"configured_path,omitempty"`
 		Probe          DeviceProbe `json:"probe"`
 	} `json:"meshtastic"`
+	Update struct {
+		Enabled            bool       `json:"enabled"`
+		ManifestURL        string     `json:"manifest_url,omitempty"`
+		Status             string     `json:"status,omitempty"`
+		Summary            string     `json:"summary,omitempty"`
+		Hint               string     `json:"hint,omitempty"`
+		ManifestVersion    string     `json:"manifest_version,omitempty"`
+		ManifestChannel    string     `json:"manifest_channel,omitempty"`
+		RecommendedVersion string     `json:"recommended_version,omitempty"`
+		LastCheckedAt      *time.Time `json:"last_checked_at,omitempty"`
+		ConfiguredMin      string     `json:"configured_min_supported_version,omitempty"`
+	} `json:"update"`
 	Diagnostics struct {
 		FailureCode    FailureCode `json:"failure_code,omitempty"`
 		FailureSummary string      `json:"failure_summary,omitempty"`
@@ -125,9 +139,11 @@ func CollectSupportSnapshot(cfg config.Config, data state.Data, finding Finding,
 	out.Runtime.Channel = build.Channel
 	out.Runtime.Commit = build.Commit
 	out.Runtime.BuildDate = build.BuildDate
+	out.Runtime.BuildID = build.BuildID
 	out.Runtime.GoVersion = runtime.Version()
 	out.Runtime.Platform = runtime.GOOS
 	out.Runtime.Arch = runtime.GOARCH
+	out.Runtime.InstallType = inferInstallType(data.Runtime.InstallType, cfg.Runtime.Profile)
 	out.Runtime.ConfigPath = opts.ConfigPath
 
 	out.Pairing.Phase = data.Pairing.Phase
@@ -148,6 +164,17 @@ func CollectSupportSnapshot(cfg config.Config, data state.Data, finding Finding,
 	out.Meshtastic.Transport = strings.TrimSpace(cfg.Meshtastic.Transport)
 	out.Meshtastic.ConfiguredPath = strings.TrimSpace(cfg.Meshtastic.Device)
 	out.Meshtastic.Probe = deviceProbe
+
+	out.Update.Enabled = cfg.Update.Enabled
+	out.Update.ManifestURL = strings.TrimSpace(cfg.Update.ManifestURL)
+	out.Update.Status = strings.TrimSpace(data.Update.Status)
+	out.Update.Summary = strings.TrimSpace(data.Update.Summary)
+	out.Update.Hint = strings.TrimSpace(data.Update.Hint)
+	out.Update.ManifestVersion = strings.TrimSpace(data.Update.ManifestVersion)
+	out.Update.ManifestChannel = strings.TrimSpace(data.Update.ManifestChannel)
+	out.Update.RecommendedVersion = strings.TrimSpace(data.Update.RecommendedVersion)
+	out.Update.LastCheckedAt = cloneTimePtr(data.Update.LastCheckedAt)
+	out.Update.ConfiguredMin = strings.TrimSpace(cfg.Update.MinSupportedVersion)
 
 	out.Diagnostics.FailureCode = finding.Code
 	out.Diagnostics.FailureSummary = strings.TrimSpace(finding.Summary)
@@ -208,4 +235,29 @@ func collectRecentErrors(data state.Data, cloud CloudProbe, network NetworkProbe
 		return append([]string(nil), errorsOut[:6]...)
 	}
 	return errorsOut
+}
+
+func cloneTimePtr(input *time.Time) *time.Time {
+	if input == nil {
+		return nil
+	}
+	value := input.UTC()
+	return &value
+}
+
+func inferInstallType(stateInstallType string, profile string) string {
+	value := strings.TrimSpace(stateInstallType)
+	if value != "" {
+		return value
+	}
+	switch strings.ToLower(strings.TrimSpace(profile)) {
+	case "appliance-pi":
+		return "pi-appliance"
+	case "linux-service":
+		return "linux-package"
+	case "windows-user":
+		return "windows-user"
+	default:
+		return "manual"
+	}
 }

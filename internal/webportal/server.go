@@ -52,9 +52,12 @@ type pageData struct {
 	RuntimeVersion       string
 	ReleaseChannel       string
 	BuildCommit          string
+	BuildDate            string
+	BuildID              string
 	GoVersion            string
 	Platform             string
 	Arch                 string
+	InstallType          string
 }
 
 func New(addr string, statusProvider StatusProvider, pairing PairingCodeSubmitter, logger *slog.Logger) *Server {
@@ -341,15 +344,46 @@ func (s *Server) currentSnapshot() status.Snapshot {
 
 func (s *Server) basePageData(title string, snap status.Snapshot) pageData {
 	build := buildinfo.Current()
+	version := snap.ReceiverVersion
+	if version == "" {
+		version = build.Version
+	}
+	channel := snap.ReleaseChannel
+	if channel == "" {
+		channel = build.Channel
+	}
+	commit := snap.BuildCommit
+	if commit == "" {
+		commit = build.Commit
+	}
+	buildDate := snap.BuildDate
+	if buildDate == "" {
+		buildDate = build.BuildDate
+	}
+	buildID := snap.BuildID
+	if buildID == "" {
+		buildID = build.BuildID
+	}
+	platform := snap.Platform
+	if platform == "" {
+		platform = goruntime.GOOS
+	}
+	arch := snap.Arch
+	if arch == "" {
+		arch = goruntime.GOARCH
+	}
 	return pageData{
 		Title:          title,
 		Snapshot:       snap,
-		RuntimeVersion: build.Version,
-		ReleaseChannel: build.Channel,
-		BuildCommit:    build.Commit,
+		RuntimeVersion: version,
+		ReleaseChannel: channel,
+		BuildCommit:    commit,
+		BuildDate:      buildDate,
+		BuildID:        buildID,
 		GoVersion:      goruntime.Version(),
-		Platform:       goruntime.GOOS,
-		Arch:           goruntime.GOARCH,
+		Platform:       platform,
+		Arch:           arch,
+		InstallType:    snap.InstallType,
 	}
 }
 
@@ -463,6 +497,14 @@ func troubleshootingHints(snap status.Snapshot) []string {
 	switch strings.TrimSpace(snap.FailureCode) {
 	case "receiver_credential_revoked", "receiver_disabled", "receiver_replaced":
 		hints = append(hints, "Lifecycle recovery: use reset to clear local credentials, then submit a fresh pairing code.")
+	}
+	switch strings.TrimSpace(snap.UpdateStatus) {
+	case "outdated":
+		hints = append(hints, "Receiver is outdated. Plan an upgrade to the recommended release shown on Progress/Advanced pages.")
+	case "channel_mismatch":
+		hints = append(hints, "Receiver channel differs from manifest channel. Confirm intended rollout channel for this installation.")
+	case "unsupported":
+		hints = append(hints, "Installed receiver version is unsupported for current policy. Upgrade is required for continued support.")
 	}
 	if snap.PairingPhase == "unpaired" {
 		hints = append(hints, "Generate a fresh pairing code in LoRaMapr Cloud and submit it on the Pairing page.")
