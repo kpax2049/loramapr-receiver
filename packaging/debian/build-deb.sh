@@ -47,8 +47,28 @@ map_deb_arch() {
   esac
 }
 
+to_deb_version() {
+  local input="$1"
+  local normalized="${input}"
+
+  # Debian package versions must start with a digit.
+  normalized="${normalized#v}"
+  normalized="${normalized#V}"
+  if [[ -z "${normalized}" ]]; then
+    normalized="0"
+  fi
+
+  # Preserve prerelease ordering semantics using "~" and remove unsupported chars.
+  normalized="${normalized//-/~}"
+  normalized="$(printf '%s' "${normalized}" | sed -E 's/[^0-9A-Za-z.+~:]/./g')"
+  if [[ ! "${normalized}" =~ ^[0-9] ]]; then
+    normalized="0~${normalized}"
+  fi
+  printf '%s' "${normalized}"
+}
+
 DEB_ARCH="$(map_deb_arch "${ARCH_LABEL}")"
-DEB_VERSION="${VERSION}"
+DEB_VERSION="$(to_deb_version "${VERSION}")"
 ARTIFACT_NAME="loramapr-receiver_${VERSION}_linux_${ARCH_LABEL}.deb"
 
 WORK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/loramapr-receiver-deb-${ARCH_LABEL}-XXXXXX")"

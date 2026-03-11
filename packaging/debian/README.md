@@ -17,6 +17,10 @@ Architecture labels map as:
 - `arm64` -> `arm64`
 - `armv7` -> `armhf`
 
+Release tags like `v2.1.0` are automatically normalized for Debian control
+metadata (`2.1.0`) while artifact filenames keep the original receiver version
+string.
+
 ## Package Contents
 
 - `/usr/bin/loramapr-receiverd`
