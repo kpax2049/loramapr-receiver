@@ -8,6 +8,8 @@ OUTPUT_ROOT="${3:-${OUTPUT_ROOT:-${ROOT_DIR}/dist/published}}"
 SIGNING_MODE="${SIGNING_MODE:-optional}" # required|optional|none
 GPG_KEY_ID="${GPG_KEY_ID:-}"
 BASE_URL="${BASE_URL:-https://downloads.loramapr.com}"
+ENABLE_APT="${ENABLE_APT:-1}"
+APT_SUITE="${APT_SUITE:-${CHANNEL}}"
 
 if [[ -z "${VERSION}" ]]; then
   echo "Usage: $0 <version> [channel] [output-root]" >&2
@@ -80,6 +82,26 @@ if [[ "${SIGNING_MODE}" != "none" ]]; then
   fi
 fi
 
+if [[ "${ENABLE_APT}" != "0" ]]; then
+  APT_SUITE="${APT_SUITE}" \
+  SIGNING_MODE="${SIGNING_MODE}" \
+  GPG_KEY_ID="${GPG_KEY_ID}" \
+  BASE_URL="${BASE_URL}" \
+  ARTIFACTS_DIR="${ARTIFACTS_DIR}" \
+  "${ROOT_DIR}/packaging/distribution/apt/publish-apt.sh" "${VERSION}" "${CHANNEL}" "${OUTPUT_ROOT}"
+fi
+
+apt_summary_block=""
+if [[ "${ENABLE_APT}" != "0" ]]; then
+  apt_summary_block=$(cat <<JSON
+  ,
+  "aptRepositoryUrl": "${BASE_URL}/apt/${CHANNEL}",
+  "aptSuite": "${APT_SUITE}",
+  "aptInstallSource": "deb [signed-by=/usr/share/keyrings/loramapr-archive-keyring.gpg] ${BASE_URL}/apt/${CHANNEL} ${APT_SUITE} main"
+JSON
+)
+fi
+
 SUMMARY_PATH="${DEST_DIR}/publish-summary.json"
 cat > "${SUMMARY_PATH}" <<JSON
 {
@@ -88,7 +110,7 @@ cat > "${SUMMARY_PATH}" <<JSON
   "baseUrl": "${BASE_URL}",
   "manifestUrl": "${BASE_URL}/receiver/${CHANNEL}/${VERSION}/cloud-manifest.fragment.json",
   "checksumsUrl": "${BASE_URL}/receiver/${CHANNEL}/${VERSION}/SHA256SUMS",
-  "channelIndexUrl": "${BASE_URL}/receiver/${CHANNEL}/channel-index.json"
+  "channelIndexUrl": "${BASE_URL}/receiver/${CHANNEL}/channel-index.json"${apt_summary_block}
 }
 JSON
 

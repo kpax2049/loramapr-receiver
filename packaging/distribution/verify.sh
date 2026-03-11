@@ -5,6 +5,9 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 VERSION="${1:-${VERSION:-}}"
 CHANNEL="${2:-${CHANNEL:-stable}}"
 PUBLISHED_ROOT="${3:-${PUBLISHED_ROOT:-${ROOT_DIR}/dist/published}}"
+ENABLE_APT="${ENABLE_APT:-1}"
+APT_SUITE="${APT_SUITE:-${CHANNEL}}"
+SIGNING_REQUIRED="${SIGNING_REQUIRED:-0}"
 
 if [[ -z "${VERSION}" ]]; then
   echo "Usage: $0 <version> [channel] [published-root]" >&2
@@ -33,6 +36,11 @@ fi
 if [[ ! -f "${PUBLISHED_ROOT}/receiver/${CHANNEL}/channel-index.json" ]]; then
   echo "missing channel index" >&2
   exit 1
+fi
+
+if [[ "${ENABLE_APT}" != "0" ]]; then
+  APT_SUITE="${APT_SUITE}" SIGNING_REQUIRED="${SIGNING_REQUIRED}" \
+    "${ROOT_DIR}/packaging/distribution/apt/verify-apt.sh" "${CHANNEL}" "${PUBLISHED_ROOT}"
 fi
 
 echo "Published distribution verified: ${TARGET_DIR}"

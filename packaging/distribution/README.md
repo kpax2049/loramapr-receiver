@@ -1,42 +1,45 @@
 # Linux/Pi Distribution Publishing
 
-This directory defines the Linux/Pi-first signed publication flow for LoRaMapr
-Receiver artifacts.
+This directory defines Linux/Pi-first publication for LoRaMapr Receiver release
+outputs.
 
 ## Model
 
-Current distribution model is a signed static artifact repository rooted at:
+Distribution publish now emits both:
 
-- `receiver/<channel>/<version>/...`
+- static release artifacts for cloud/manual download:
+  - `receiver/<channel>/<version>/...`
+- signed APT repository outputs for Debian-family install/update:
+  - `apt/<channel>/pool/...`
+  - `apt/<channel>/dists/<suite>/...`
 
-Key files per release version:
+Static per-version key files:
 
 - `SHA256SUMS`
 - `cloud-manifest.fragment.json`
 - `release-metadata.json`
 - optional detached signatures (`*.asc`)
 
-Channel-level metadata:
+APT metadata key files:
 
-- `receiver/<channel>/channel-index.json`
-- optional `channel-index.json.asc`
-
-This is an "APT-equivalent signed metadata skeleton" for current tarball-based
-runtime distribution and is intended to back cloud onboarding download targets.
+- `Packages` and `Packages.gz` per architecture
+- `Release`
+- `InRelease` and `Release.gpg` (when signed)
+- `loramapr-archive-keyring.asc` and `.gpg` (when signed)
 
 ## Publish Steps
 
 1. Build artifacts:
    - `packaging/release/build-artifacts.sh <version> [channel]`
-2. Publish static repository tree:
+2. Publish static and APT trees:
    - `GPG_KEY_ID=<key-id> SIGNING_MODE=required packaging/distribution/publish.sh <version> [channel]`
 3. Verify publication output:
    - `packaging/distribution/verify.sh <version> [channel]`
-4. Sync `dist/published/` to artifact hosting (for example object storage/CDN).
+4. Sync `dist/published/` to artifact hosting (object storage/CDN).
 
 ## Signing Behavior
 
-`publish.sh` supports:
+`publish.sh` and APT scripts support:
 
 - `SIGNING_MODE=required`: fail without GPG + key
 - `SIGNING_MODE=optional`: sign if available/key configured, otherwise continue
@@ -51,18 +54,18 @@ Cloud onboarding should reference URLs from:
 - `publish-summary.json`
 - `cloud-manifest.fragment.json`
 
-Recommended stable URL pattern:
+Recommended stable URL patterns:
 
-- `https://downloads.loramapr.com/receiver/<channel>/<version>/<artifact-file>`
+- static artifacts: `https://downloads.loramapr.com/receiver/<channel>/<version>/<artifact-file>`
+- apt repo root: `https://downloads.loramapr.com/apt/<channel>/`
 
-## Raspberry Pi and Linux Install Docs
+## Install and APT Docs
 
-See:
-
-- `docs/linux-pi-distribution.md`
+- Linux/Pi install flow: `docs/linux-pi-distribution.md`
+- APT script details: `packaging/distribution/apt/README.md`
 
 ## Future Work
 
-- native APT `.deb` repository metadata once `.deb` artifacts are first-class
+- beta-channel promotion gates for APT publication
 - macOS notarized distribution path
 - Windows signed installer/service packaging path

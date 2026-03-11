@@ -59,6 +59,19 @@ Channel index may also include detached signature:
 APT repository installation is the primary GA path. See
 `packaging/distribution/apt/README.md` for repository layout and publication.
 
+APT installation example:
+
+```bash
+CHANNEL=stable
+curl -fsSL "https://downloads.loramapr.com/apt/${CHANNEL}/loramapr-archive-keyring.asc" \
+  | gpg --dearmor \
+  | sudo tee /usr/share/keyrings/loramapr-archive-keyring.gpg >/dev/null
+echo "deb [signed-by=/usr/share/keyrings/loramapr-archive-keyring.gpg] https://downloads.loramapr.com/apt/${CHANNEL} ${CHANNEL} main" \
+  | sudo tee /etc/apt/sources.list.d/loramapr-receiver.list >/dev/null
+sudo apt-get update
+sudo apt-get install -y loramapr-receiver
+```
+
 Direct package install path (manual fallback):
 
 ```bash
