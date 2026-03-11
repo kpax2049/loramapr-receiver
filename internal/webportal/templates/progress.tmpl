@@ -7,6 +7,7 @@
   <div class="status-grid">
     <div class="status-chip"><div class="label">Pairing State</div><div class="value mono">{{.Snapshot.PairingPhase}}</div></div>
     <div class="status-chip"><div class="label">Cloud Connectivity</div><div class="value">{{.Snapshot.CloudStatus}}</div></div>
+    <div class="status-chip"><div class="label">Network</div><div class="value">{{.NetworkState}}</div></div>
     <div class="status-chip"><div class="label">Service State</div><div class="value">{{.Snapshot.Lifecycle}}</div></div>
     <div class="status-chip"><div class="label">Meshtastic Status</div><div class="value">{{.MeshtasticState}}</div></div>
     <div class="status-chip"><div class="label">Failure State</div><div class="value mono">{{if .Snapshot.FailureCode}}{{.Snapshot.FailureCode}}{{else}}none{{end}}</div></div>

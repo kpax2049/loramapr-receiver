@@ -80,6 +80,36 @@ func TestEvaluateFailureTaxonomy(t *testing.T) {
 			},
 			want: FailureEventsNotForwarding,
 		},
+		{
+			name: "network unavailable",
+			in: Input{
+				RuntimeProfile:        "appliance-pi",
+				NetworkAvailableKnown: true,
+				NetworkAvailable:      false,
+				MeshtasticState:       "connected",
+				Now:                   now,
+			},
+			want: FailureNetworkUnavailable,
+		},
+		{
+			name: "portal unavailable",
+			in: Input{
+				RuntimeProfile: "appliance-pi",
+				PortalState:    "error",
+				Now:            now,
+			},
+			want: FailurePortalUnavailable,
+		},
+		{
+			name: "pairing not completed appliance",
+			in: Input{
+				RuntimeProfile:  "appliance-pi",
+				PairingPhase:    "unpaired",
+				MeshtasticState: "connected",
+				Now:             now,
+			},
+			want: FailurePairingNotCompleted,
+		},
 	}
 
 	for _, tc := range cases {

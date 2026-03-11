@@ -41,6 +41,15 @@ packaging/pi/image/build-image.sh <version>
 - appliance config defaults (`runtime.profile=appliance-pi`)
 - systemd service enabled at boot
 - local portal bind configured for LAN access
+- hostname defaults to `loramapr-receiver`
+- mDNS advertisement (`loramapr-receiver.local`) via Avahi
+
+## Headless Setup Expectations
+
+- Wi-Fi credentials should be configured via Raspberry Pi Imager customization
+  before first boot.
+- Normal setup path does not require SSH; pairing is done via local portal.
+- Fallback discovery is router-assigned LAN IP if `.local` name is unavailable.
 
 ## Validation
 

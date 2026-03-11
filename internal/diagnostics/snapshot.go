@@ -51,6 +51,10 @@ type SupportSnapshot struct {
 		HasIngestCredential bool       `json:"has_ingest_credential"`
 		Probe               CloudProbe `json:"probe"`
 	} `json:"cloud"`
+	Network struct {
+		PortalBind string       `json:"portal_bind"`
+		Probe      NetworkProbe `json:"probe"`
+	} `json:"network"`
 	Meshtastic struct {
 		Transport      string      `json:"transport"`
 		ConfiguredPath string      `json:"configured_path,omitempty"`
@@ -70,6 +74,7 @@ type SupportSnapshot struct {
 type CollectOptions struct {
 	Now          func() time.Time
 	ProbeCloud   func(baseURL string, timeout time.Duration) CloudProbe
+	ProbeNetwork func() NetworkProbe
 	DetectDevice func(cfg config.MeshtasticConfig) (meshtastic.DetectionResult, error)
 	CloudTimeout time.Duration
 	ConfigPath   string
@@ -84,6 +89,10 @@ func CollectSupportSnapshot(cfg config.Config, data state.Data, finding Finding,
 	if probeCloudFn == nil {
 		probeCloudFn = ProbeCloudReachability
 	}
+	probeNetworkFn := opts.ProbeNetwork
+	if probeNetworkFn == nil {
+		probeNetworkFn = ProbeLocalNetwork
+	}
 	detectFn := opts.DetectDevice
 	if detectFn == nil {
 		detectFn = meshtastic.DetectDevice
@@ -95,6 +104,7 @@ func CollectSupportSnapshot(cfg config.Config, data state.Data, finding Finding,
 
 	now := nowFn().UTC()
 	cloudProbe := probeCloudFn(cfg.Cloud.BaseURL, cloudTimeout)
+	networkProbe := probeNetworkFn()
 	detectResult, detectErr := detectFn(cfg.Meshtastic)
 
 	deviceProbe := DeviceProbe{
@@ -132,6 +142,9 @@ func CollectSupportSnapshot(cfg config.Config, data state.Data, finding Finding,
 	out.Cloud.HasIngestCredential = strings.TrimSpace(data.Cloud.IngestAPIKey) != ""
 	out.Cloud.Probe = cloudProbe
 
+	out.Network.PortalBind = strings.TrimSpace(cfg.Portal.BindAddress)
+	out.Network.Probe = networkProbe
+
 	out.Meshtastic.Transport = strings.TrimSpace(cfg.Meshtastic.Transport)
 	out.Meshtastic.ConfiguredPath = strings.TrimSpace(cfg.Meshtastic.Device)
 	out.Meshtastic.Probe = deviceProbe
@@ -139,7 +152,7 @@ func CollectSupportSnapshot(cfg config.Config, data state.Data, finding Finding,
 	out.Diagnostics.FailureCode = finding.Code
 	out.Diagnostics.FailureSummary = strings.TrimSpace(finding.Summary)
 	out.Diagnostics.FailureHint = strings.TrimSpace(finding.Hint)
-	out.Diagnostics.RecentErrors = collectRecentErrors(data, cloudProbe, deviceProbe)
+	out.Diagnostics.RecentErrors = collectRecentErrors(data, cloudProbe, networkProbe, deviceProbe)
 
 	out.Redaction.OmittedFields = []string{
 		"cloud.ingest_api_key_secret",
@@ -177,13 +190,16 @@ func ProbeCloudReachability(baseURL string, timeout time.Duration) CloudProbe {
 	return CloudProbe{Status: "reachable"}
 }
 
-func collectRecentErrors(data state.Data, cloud CloudProbe, device DeviceProbe) []string {
+func collectRecentErrors(data state.Data, cloud CloudProbe, network NetworkProbe, device DeviceProbe) []string {
 	errorsOut := []string{}
 	if value := strings.TrimSpace(data.Pairing.LastError); value != "" {
 		errorsOut = append(errorsOut, value)
 	}
 	if cloud.Status == "unreachable" && strings.TrimSpace(cloud.Detail) != "" {
 		errorsOut = append(errorsOut, "cloud probe: "+cloud.Detail)
+	}
+	if strings.ToLower(strings.TrimSpace(network.Status)) == "unavailable" && strings.TrimSpace(network.Detail) != "" {
+		errorsOut = append(errorsOut, "network probe: "+network.Detail)
 	}
 	if device.State == "error" && strings.TrimSpace(device.Detail) != "" {
 		errorsOut = append(errorsOut, "meshtastic detect: "+device.Detail)

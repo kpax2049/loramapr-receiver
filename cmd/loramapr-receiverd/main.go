@@ -181,13 +181,19 @@ func doctorCommand(args []string) {
 
 	deviceProbe, meshState := detectMeshtastic(cfg.Meshtastic)
 	cloudProbe := diagnostics.ProbeCloudReachability(cfg.Cloud.BaseURL, 3*time.Second)
+	networkProbe := diagnostics.ProbeLocalNetwork()
+	networkAvailable, networkKnown := diagnostics.NetworkAvailable(networkProbe)
 	finding := diagnostics.Evaluate(diagnostics.Input{
-		PairingPhase:      string(snapshot.Pairing.Phase),
-		PairingLastChange: snapshot.Pairing.LastChange,
-		PairingLastError:  snapshot.Pairing.LastError,
-		CloudReachable:    cloudProbe.Status == "reachable",
-		MeshtasticState:   meshState,
-		Now:               time.Now().UTC(),
+		RuntimeProfile:        cfg.Runtime.Profile,
+		PairingPhase:          string(snapshot.Pairing.Phase),
+		PairingLastChange:     snapshot.Pairing.LastChange,
+		PairingLastError:      snapshot.Pairing.LastError,
+		PortalState:           "unknown",
+		NetworkAvailable:      networkAvailable,
+		NetworkAvailableKnown: networkKnown,
+		CloudReachable:        cloudProbe.Status == "reachable",
+		MeshtasticState:       meshState,
+		Now:                   time.Now().UTC(),
 	})
 
 	report := map[string]any{
@@ -200,6 +206,7 @@ func doctorCommand(args []string) {
 		"pairing_last_change":  snapshot.Pairing.LastChange,
 		"cloud_base_url":       cfg.Cloud.BaseURL,
 		"cloud_probe":          cloudProbe,
+		"network_probe":        networkProbe,
 		"meshtastic_transport": cfg.Meshtastic.Transport,
 		"meshtastic_probe":     deviceProbe,
 		"failure_code":         finding.Code,
@@ -258,14 +265,20 @@ func statusCommand(args []string) {
 	}
 	snapshot := store.Snapshot()
 	cloudProbe := diagnostics.ProbeCloudReachability(cfg.Cloud.BaseURL, 3*time.Second)
+	networkProbe := diagnostics.ProbeLocalNetwork()
+	networkAvailable, networkKnown := diagnostics.NetworkAvailable(networkProbe)
 	_, meshState := detectMeshtastic(cfg.Meshtastic)
 	finding := diagnostics.Evaluate(diagnostics.Input{
-		PairingPhase:      string(snapshot.Pairing.Phase),
-		PairingLastChange: snapshot.Pairing.LastChange,
-		PairingLastError:  snapshot.Pairing.LastError,
-		CloudReachable:    cloudProbe.Status == "reachable",
-		MeshtasticState:   meshState,
-		Now:               time.Now().UTC(),
+		RuntimeProfile:        cfg.Runtime.Profile,
+		PairingPhase:          string(snapshot.Pairing.Phase),
+		PairingLastChange:     snapshot.Pairing.LastChange,
+		PairingLastError:      snapshot.Pairing.LastError,
+		PortalState:           "unknown",
+		NetworkAvailable:      networkAvailable,
+		NetworkAvailableKnown: networkKnown,
+		CloudReachable:        cloudProbe.Status == "reachable",
+		MeshtasticState:       meshState,
+		Now:                   time.Now().UTC(),
 	})
 
 	output := map[string]any{
@@ -286,6 +299,7 @@ func statusCommand(args []string) {
 		"failure_summary":  finding.Summary,
 		"failure_hint":     finding.Hint,
 		"cloud_probe":      cloudProbe.Status,
+		"network_probe":    networkProbe,
 		"updated_at":       snapshot.Metadata.UpdatedAt,
 	}
 
@@ -316,18 +330,27 @@ func supportSnapshotCommand(args []string) {
 	snapshot := store.Snapshot()
 	deviceProbe, meshState := detectMeshtastic(cfg.Meshtastic)
 	cloudProbe := diagnostics.ProbeCloudReachability(cfg.Cloud.BaseURL, 3*time.Second)
+	networkProbe := diagnostics.ProbeLocalNetwork()
+	networkAvailable, networkKnown := diagnostics.NetworkAvailable(networkProbe)
 	finding := diagnostics.Evaluate(diagnostics.Input{
-		PairingPhase:      string(snapshot.Pairing.Phase),
-		PairingLastChange: snapshot.Pairing.LastChange,
-		PairingLastError:  snapshot.Pairing.LastError,
-		CloudReachable:    cloudProbe.Status == "reachable",
-		MeshtasticState:   meshState,
-		Now:               time.Now().UTC(),
+		RuntimeProfile:        cfg.Runtime.Profile,
+		PairingPhase:          string(snapshot.Pairing.Phase),
+		PairingLastChange:     snapshot.Pairing.LastChange,
+		PairingLastError:      snapshot.Pairing.LastError,
+		PortalState:           "unknown",
+		NetworkAvailable:      networkAvailable,
+		NetworkAvailableKnown: networkKnown,
+		CloudReachable:        cloudProbe.Status == "reachable",
+		MeshtasticState:       meshState,
+		Now:                   time.Now().UTC(),
 	})
 	report := diagnostics.CollectSupportSnapshot(cfg, snapshot, finding, diagnostics.CollectOptions{
 		Now: func() time.Time { return time.Now().UTC() },
 		ProbeCloud: func(_ string, _ time.Duration) diagnostics.CloudProbe {
 			return cloudProbe
+		},
+		ProbeNetwork: func() diagnostics.NetworkProbe {
+			return networkProbe
 		},
 		DetectDevice: func(_ config.MeshtasticConfig) (meshtastic.DetectionResult, error) {
 			probe := meshtastic.DetectionResult{

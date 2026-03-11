@@ -29,6 +29,9 @@ func TestSupportSnapshotRedactsSecrets(t *testing.T) {
 		ProbeCloud: func(_ string, _ time.Duration) CloudProbe {
 			return CloudProbe{Status: "reachable"}
 		},
+		ProbeNetwork: func() NetworkProbe {
+			return NetworkProbe{Status: "available", Interface: "eth0", Address: "192.168.1.10"}
+		},
 		DetectDevice: func(_ config.MeshtasticConfig) (meshtastic.DetectionResult, error) {
 			return meshtastic.DetectionResult{Device: "/dev/ttyUSB0", Candidates: []string{"/dev/ttyUSB0"}}, nil
 		},

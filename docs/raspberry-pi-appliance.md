@@ -14,6 +14,9 @@ This document defines the Raspberry Pi appliance/image path for LoRaMapr Receive
 6. Wait for pairing to move to `activated` then `steady_state`.
 7. Confirm node detection and packet forwarding on the portal status page.
 
+This normal path is explicitly SSH-optional; setup should complete from the
+portal without shell access.
+
 ## Appliance Defaults
 
 The appliance image uses the same `loramapr-receiverd` runtime and portal, with
@@ -22,8 +25,10 @@ configuration defaults tuned for headless LAN operation:
 - `runtime.profile = appliance-pi`
 - `service.mode = auto` (unpaired boot starts in setup path)
 - `portal.bind_address = 0.0.0.0:8080`
+- hostname: `loramapr-receiver`
 - state path: `/var/lib/loramapr/receiver-state.json`
 - systemd service enabled at boot
+- Avahi/mDNS enabled for `.local` discovery
 
 Reference config: `packaging/pi/receiver.appliance.json`
 
@@ -34,6 +39,20 @@ Reference config: `packaging/pi/receiver.appliance.json`
   serves the local portal for pairing.
 - Once paired, runtime transitions to steady-state forwarding and heartbeat loops
   without switching binaries or runtime forks.
+
+Expected first-boot diagnostics surfaces:
+
+- portal Troubleshooting page
+- `GET /api/status`
+- `loramapr-receiverd doctor` (advanced/fallback)
+
+Appliance-specific failure visibility includes:
+
+- `network_unavailable`
+- `pairing_not_completed`
+- `portal_unavailable`
+- `node_detected_not_connected`
+- `no_serial_device_detected`
 
 ## Image Build Scaffolding
 
@@ -79,5 +98,6 @@ than advanced Linux package/manual service instructions.
 ## Scope and Limits (v1)
 
 - Linux arm64 is the primary appliance image target.
-- Wi-Fi provisioning UX is delegated to Raspberry Pi OS tooling/image setup.
+- Wi-Fi provisioning is expected through Raspberry Pi Imager first-boot settings
+  (SSID/password/country), not an SSH-first setup flow.
 - Image signing and secure-boot are future hardening work.

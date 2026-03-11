@@ -9,7 +9,10 @@ Runtime/portal diagnostics now use these coarse failure codes:
 - `pairing_code_invalid`
 - `pairing_code_expired`
 - `activation_failed`
+- `pairing_not_completed`
 - `cloud_unreachable`
+- `network_unavailable`
+- `portal_unavailable`
 - `receiver_auth_invalid`
 - `no_serial_device_detected`
 - `node_detected_not_connected`
@@ -62,6 +65,7 @@ Snapshot includes:
 - runtime version/platform
 - pairing/activation state
 - cloud reachability probe summary
+- local network availability probe summary
 - meshtastic device detection summary
 - active failure code/summary/hint
 - recent coarse errors

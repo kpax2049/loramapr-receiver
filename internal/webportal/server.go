@@ -46,6 +46,7 @@ type pageData struct {
 	SummaryHintClass     string
 	NextAction           string
 	MeshtasticState      string
+	NetworkState         string
 	TroubleshootingHints []string
 	RuntimeVersion       string
 	ReleaseChannel       string
@@ -233,6 +234,7 @@ func (s *Server) handleProgress(w http.ResponseWriter, r *http.Request) {
 		data.FlashClass = "ok"
 	}
 	data.MeshtasticState = componentState(snap, "meshtastic")
+	data.NetworkState = componentState(snap, "network")
 	s.renderHTML(w, http.StatusOK, "progress", data)
 }
 
@@ -351,8 +353,12 @@ func summaryHint(snap status.Snapshot) (string, string) {
 }
 
 func nextAction(snap status.Snapshot) string {
+	isAppliance := strings.EqualFold(strings.TrimSpace(snap.RuntimeProfile), "appliance-pi")
 	switch snap.PairingPhase {
 	case "unpaired":
+		if isAppliance {
+			return "From another LAN device, open http://loramapr-receiver.local:8080 (or the Pi IP address) and enter your pairing code."
+		}
 		return "Open Pairing and enter the pairing code from LoRaMapr Cloud."
 	case "pairing_code_entered", "bootstrap_exchanged":
 		return "Monitor Progress until the receiver reaches steady state."
@@ -365,6 +371,7 @@ func nextAction(snap status.Snapshot) string {
 
 func troubleshootingHints(snap status.Snapshot) []string {
 	hints := []string{}
+	isAppliance := strings.EqualFold(strings.TrimSpace(snap.RuntimeProfile), "appliance-pi")
 	if strings.TrimSpace(snap.FailureCode) != "" {
 		summary := strings.TrimSpace(snap.FailureSummary)
 		if summary == "" {
@@ -377,6 +384,9 @@ func troubleshootingHints(snap status.Snapshot) []string {
 	}
 	if snap.PairingPhase == "unpaired" {
 		hints = append(hints, "Generate a fresh pairing code in LoRaMapr Cloud and submit it on the Pairing page.")
+	}
+	if isAppliance {
+		hints = append(hints, "Appliance discovery: try http://loramapr-receiver.local:8080 first, then fallback to the Pi LAN IP.")
 	}
 	if snap.CloudStatus == "unknown" {
 		hints = append(hints, "If cloud status stays unknown, verify internet connectivity and cloud base URL configuration.")
@@ -394,6 +404,13 @@ func troubleshootingHints(snap status.Snapshot) []string {
 	}
 	if meshtasticState == "degraded" {
 		hints = append(hints, "Meshtastic adapter is degraded. Verify configured device path and input stream format.")
+	}
+	networkState := componentState(snap, "network")
+	if networkState == "unavailable" {
+		hints = append(hints, "Network is unavailable. Confirm Ethernet/Wi-Fi setup and DHCP address assignment before pairing.")
+	}
+	if networkState == "unknown" && isAppliance {
+		hints = append(hints, "Network probe state is unknown. Wait for boot completion, then refresh this page.")
 	}
 	if snap.LastError != "" {
 		hints = append(hints, "Last runtime error: "+snap.LastError)

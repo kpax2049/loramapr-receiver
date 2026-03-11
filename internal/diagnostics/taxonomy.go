@@ -12,7 +12,10 @@ const (
 	FailurePairingCodeInvalid  FailureCode = "pairing_code_invalid"
 	FailurePairingCodeExpired  FailureCode = "pairing_code_expired"
 	FailureActivationFailed    FailureCode = "activation_failed"
+	FailurePairingNotCompleted FailureCode = "pairing_not_completed"
 	FailureCloudUnreachable    FailureCode = "cloud_unreachable"
+	FailureNetworkUnavailable  FailureCode = "network_unavailable"
+	FailurePortalUnavailable   FailureCode = "portal_unavailable"
 	FailureReceiverAuthInvalid FailureCode = "receiver_auth_invalid"
 	FailureNoSerialDevice      FailureCode = "no_serial_device_detected"
 	FailureNodeNotConnected    FailureCode = "node_detected_not_connected"
@@ -26,16 +29,20 @@ type Finding struct {
 }
 
 type Input struct {
-	PairingPhase      string
-	PairingLastChange string
-	PairingLastError  string
-	RuntimeLastError  string
-	CloudReachable    bool
-	MeshtasticState   string
-	IngestQueueDepth  int
-	LastPacketQueued  *time.Time
-	LastPacketAck     *time.Time
-	Now               time.Time
+	RuntimeProfile        string
+	PairingPhase          string
+	PairingLastChange     string
+	PairingLastError      string
+	RuntimeLastError      string
+	PortalState           string
+	NetworkAvailable      bool
+	NetworkAvailableKnown bool
+	CloudReachable        bool
+	MeshtasticState       string
+	IngestQueueDepth      int
+	LastPacketQueued      *time.Time
+	LastPacketAck         *time.Time
+	Now                   time.Time
 }
 
 func Evaluate(input Input) Finding {
@@ -90,6 +97,20 @@ func Evaluate(input Input) Finding {
 			Hint:    "Re-run pairing to refresh durable receiver credentials.",
 		}
 	}
+	if strings.TrimSpace(input.PortalState) == "error" || strings.Contains(runtimeErr, "local portal failed") || strings.Contains(runtimeErr, "listen tcp") {
+		return Finding{
+			Code:    FailurePortalUnavailable,
+			Summary: "Local setup portal is not available",
+			Hint:    "Confirm the portal bind address is valid and no other service is using port 8080.",
+		}
+	}
+	if input.NetworkAvailableKnown && !input.NetworkAvailable {
+		return Finding{
+			Code:    FailureNetworkUnavailable,
+			Summary: "Local network is unavailable",
+			Hint:    "Check Ethernet/Wi-Fi connectivity and DHCP assignment, then retry portal access.",
+		}
+	}
 
 	if input.PairingPhase == "steady_state" && !input.CloudReachable {
 		return Finding{
@@ -121,6 +142,17 @@ func Evaluate(input Input) Finding {
 				Code:    FailureEventsNotForwarding,
 				Summary: "Packets are queued but not forwarding to cloud",
 				Hint:    "Check cloud reachability and receiver authentication status.",
+			}
+		}
+	}
+
+	if strings.EqualFold(strings.TrimSpace(input.RuntimeProfile), "appliance-pi") {
+		switch strings.TrimSpace(input.PairingPhase) {
+		case "", "unpaired", "pairing_code_entered", "bootstrap_exchanged":
+			return Finding{
+				Code:    FailurePairingNotCompleted,
+				Summary: "Receiver pairing is not completed yet",
+				Hint:    "Open the local portal and enter a valid pairing code from LoRaMapr Cloud.",
 			}
 		}
 	}

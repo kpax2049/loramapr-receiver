@@ -115,6 +115,7 @@ func New(cfg config.Config, logger *slog.Logger) (*Service, error) {
 	statusModel.SetCloud(cfg.Cloud.BaseURL, "unknown")
 	statusModel.SetComponent("runtime", "starting", "initializing service container")
 	statusModel.SetComponent("portal", "stopped", "portal not started yet")
+	statusModel.SetComponent("network", "unknown", "network status not probed yet")
 
 	svc := &Service{}
 	svc.mode = mode
@@ -182,6 +183,7 @@ func (s *Service) Run(ctx context.Context) error {
 	go func() {
 		portalErr <- c.Portal.Run(ctx)
 	}()
+	c.Status.SetComponent("portal", "running", "local setup portal listening on "+c.Config.Portal.BindAddress)
 
 	ticker := time.NewTicker(c.Config.Service.Heartbeat.Std())
 	defer ticker.Stop()
@@ -244,6 +246,10 @@ func (s *Service) Mode() config.RunMode {
 
 func (s *Service) tick(ctx context.Context) {
 	c := s.container
+	networkProbe := diagnostics.ProbeLocalNetwork()
+	networkState, networkMessage := diagnostics.NetworkComponentState(networkProbe)
+	c.Status.SetComponent("network", networkState, networkMessage)
+
 	if err := c.Pairing.Process(ctx); err != nil {
 		c.Logger.Error("pairing lifecycle tick failed", "err", err)
 		c.Status.SetLastError("pairing tick failed")
@@ -280,7 +286,7 @@ func (s *Service) tick(ctx context.Context) {
 		c.Status.SetLastError("unknown runtime mode")
 	}
 
-	s.updateFailureState(snap, meshSnap)
+	s.updateFailureState(snap, meshSnap, networkProbe)
 }
 
 func (s *Service) onMeshtasticEvent(event meshtastic.Event) {
@@ -656,20 +662,29 @@ func meshtasticStatusMessage(snapshot meshtastic.Snapshot) string {
 	return message
 }
 
-func (s *Service) updateFailureState(snapshot state.Data, meshSnap meshtastic.Snapshot) {
+func (s *Service) updateFailureState(snapshot state.Data, meshSnap meshtastic.Snapshot, networkProbe diagnostics.NetworkProbe) {
 	now := time.Now().UTC()
 	current := s.container.Status.Snapshot()
+	networkAvailable, networkKnown := diagnostics.NetworkAvailable(networkProbe)
+	portalState := "unknown"
+	if component, ok := current.Components["portal"]; ok {
+		portalState = component.State
+	}
 	finding := diagnostics.Evaluate(diagnostics.Input{
-		PairingPhase:      string(snapshot.Pairing.Phase),
-		PairingLastChange: snapshot.Pairing.LastChange,
-		PairingLastError:  snapshot.Pairing.LastError,
-		RuntimeLastError:  current.LastError,
-		CloudReachable:    s.steady.cloudReachable,
-		MeshtasticState:   string(meshSnap.State),
-		IngestQueueDepth:  len(s.steady.ingestQueue),
-		LastPacketQueued:  s.steady.lastPacketQueued,
-		LastPacketAck:     s.steady.lastPacketAck,
-		Now:               now,
+		RuntimeProfile:        current.RuntimeProfile,
+		PairingPhase:          string(snapshot.Pairing.Phase),
+		PairingLastChange:     snapshot.Pairing.LastChange,
+		PairingLastError:      snapshot.Pairing.LastError,
+		RuntimeLastError:      current.LastError,
+		PortalState:           portalState,
+		NetworkAvailable:      networkAvailable,
+		NetworkAvailableKnown: networkKnown,
+		CloudReachable:        s.steady.cloudReachable,
+		MeshtasticState:       string(meshSnap.State),
+		IngestQueueDepth:      len(s.steady.ingestQueue),
+		LastPacketQueued:      s.steady.lastPacketQueued,
+		LastPacketAck:         s.steady.lastPacketAck,
+		Now:                   now,
 	})
 
 	if finding.Code == diagnostics.FailureNone {

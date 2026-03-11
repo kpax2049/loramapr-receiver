@@ -16,8 +16,7 @@
     "base_url": "https://api.loramapr.example"
   },
   "meshtastic": {
-    "transport": "serial",
-    "device": "/dev/ttyUSB0"
+    "transport": "serial"
   },
   "logging": {
     "level": "info",

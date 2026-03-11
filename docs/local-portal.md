@@ -43,6 +43,11 @@ Recommended defaults:
 Use loopback by default on general-purpose hosts; expose on LAN only for
 appliance-style usage where setup happens from another device.
 
+Appliance discovery assumptions:
+
+- preferred hostname URL: `http://loramapr-receiver.local:8080`
+- fallback URL: `http://<lan-ip>:8080`
+
 ## Security Behavior
 
 Portal intentionally omits sensitive values from rendered pages and `/api/status`:
@@ -60,7 +65,10 @@ Portal pages now surface coarse receiver failure taxonomy with actionable hints:
 - `pairing_code_invalid`
 - `pairing_code_expired`
 - `activation_failed`
+- `pairing_not_completed`
 - `cloud_unreachable`
+- `network_unavailable`
+- `portal_unavailable`
 - `receiver_auth_invalid`
 - `no_serial_device_detected`
 - `node_detected_not_connected`

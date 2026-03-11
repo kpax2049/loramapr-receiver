@@ -163,6 +163,34 @@ func TestTroubleshootingShowsFailureHint(t *testing.T) {
 	}
 }
 
+func TestTroubleshootingApplianceDiscoveryHints(t *testing.T) {
+	t.Parallel()
+
+	snap := sampleSnapshot()
+	snap.RuntimeProfile = "appliance-pi"
+	snap.Components["network"] = status.ComponentStatus{
+		State:     "unavailable",
+		Message:   "network unavailable",
+		UpdatedAt: time.Now().UTC(),
+	}
+
+	srv := New("127.0.0.1:0", staticStatusProvider{snapshot: snap}, &recordingPairingSubmitter{}, nil)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/troubleshooting", nil)
+	srv.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "loramapr-receiver.local:8080") {
+		t.Fatalf("expected appliance local discovery hint")
+	}
+	if !strings.Contains(body, "Network is unavailable") {
+		t.Fatalf("expected appliance network hint")
+	}
+}
+
 func newTestServer(t *testing.T) *Server {
 	t.Helper()
 	return New("127.0.0.1:0", staticStatusProvider{snapshot: sampleSnapshot()}, &recordingPairingSubmitter{}, nil)
