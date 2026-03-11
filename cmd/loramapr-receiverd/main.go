@@ -176,58 +176,83 @@ func doctorCommand(args []string) {
 
 	cfg, err := config.Load(*configPath)
 	if err != nil {
-		fmt.Printf("[FAIL] config load: %v\n", err)
+		printDoctorLoadFailure(*jsonOutput, *configPath, "", err)
 		os.Exit(1)
 	}
 
 	store, err := state.Open(cfg.Paths.StateFile)
 	if err != nil {
-		fmt.Printf("[FAIL] state open: %v\n", err)
-		if hint := upgradeCompatibilityHint(err); hint != "" {
-			fmt.Printf("[HINT] %s\n", hint)
-		}
+		printDoctorLoadFailure(*jsonOutput, *configPath, cfg.Paths.StateFile, err)
 		os.Exit(1)
 	}
 	snapshot := store.Snapshot()
 
+	now := time.Now().UTC()
 	deviceProbe, meshState := detectMeshtastic(cfg.Meshtastic)
 	cloudProbe := diagnostics.ProbeCloudReachability(cfg.Cloud.BaseURL, 3*time.Second)
 	networkProbe := diagnostics.ProbeLocalNetwork()
+	localProbe := diagnostics.ProbeLocalRuntimeStatus(cfg.Portal.BindAddress, 2*time.Second)
 	networkAvailable, networkKnown := diagnostics.NetworkAvailable(networkProbe)
 	finding := diagnostics.Evaluate(diagnostics.Input{
 		RuntimeProfile:        cfg.Runtime.Profile,
 		PairingPhase:          string(snapshot.Pairing.Phase),
 		PairingLastChange:     snapshot.Pairing.LastChange,
 		PairingLastError:      snapshot.Pairing.LastError,
-		PortalState:           "unknown",
+		RuntimeLastError:      localProbeRuntimeLastError(localProbe),
+		PortalState:           localProbeComponentState(localProbe, "portal"),
 		NetworkAvailable:      networkAvailable,
 		NetworkAvailableKnown: networkKnown,
-		CloudReachable:        cloudProbe.Status == "reachable",
-		MeshtasticState:       meshState,
-		Now:                   time.Now().UTC(),
+		CloudReachable:        localProbeCloudReachable(localProbe, cloudProbe),
+		MeshtasticState:       localProbeMeshtasticState(localProbe, meshState),
+		UpdateStatus:          localProbeUpdateStatus(localProbe, snapshot.Update.Status),
+		IngestQueueDepth:      localProbeIngestQueueDepth(localProbe),
+		LastPacketQueued:      localProbeLastPacketQueued(localProbe),
+		LastPacketAck:         localProbeLastPacketAck(localProbe),
+		Now:                   now,
 	})
 
+	ops := diagnostics.EvaluateOperational(diagnostics.OperationalInput{
+		Now:                 now,
+		Lifecycle:           localProbeLifecycle(localProbe, snapshot.Runtime.Mode),
+		Ready:               localProbeReady(localProbe),
+		ReadyReason:         localProbeReadyReason(localProbe),
+		PairingPhase:        string(snapshot.Pairing.Phase),
+		HasIngestCredential: pairingAuthorized(snapshot),
+		CloudReachable:      localProbeCloudReachable(localProbe, cloudProbe),
+		CloudProbeStatus:    cloudProbe.Status,
+		MeshtasticState:     localProbeMeshtasticState(localProbe, meshState),
+		IngestQueueDepth:    localProbeIngestQueueDepth(localProbe),
+		LastPacketQueued:    localProbeLastPacketQueued(localProbe),
+		LastPacketAck:       localProbeLastPacketAck(localProbe),
+		UpdateStatus:        localProbeUpdateStatus(localProbe, snapshot.Update.Status),
+	})
+
+	build := buildinfo.Current()
 	report := map[string]any{
-		"receiver_version":     buildinfo.Current().Version,
-		"release_channel":      buildinfo.Current().Channel,
-		"build_commit":         buildinfo.Current().Commit,
-		"build_date":           buildinfo.Current().BuildDate,
-		"build_id":             buildinfo.Current().BuildID,
-		"platform":             goruntime.GOOS,
-		"arch":                 goruntime.GOARCH,
-		"install_type":         installType(snapshot.Runtime.InstallType, cfg.Runtime.Profile),
-		"config_path":          *configPath,
-		"state_path":           cfg.Paths.StateFile,
-		"pairing_phase":        snapshot.Pairing.Phase,
-		"pairing_last_change":  snapshot.Pairing.LastChange,
-		"cloud_base_url":       cfg.Cloud.BaseURL,
-		"cloud_probe":          cloudProbe,
-		"network_probe":        networkProbe,
-		"cloud_config_version": snapshot.Cloud.ConfigVersion,
-		"update_status":        snapshot.Update.Status,
-		"update_summary":       snapshot.Update.Summary,
-		"update_hint":          snapshot.Update.Hint,
-		"update_checked_at":    snapshot.Update.LastCheckedAt,
+		"receiver_version":      build.Version,
+		"release_channel":       build.Channel,
+		"build_commit":          build.Commit,
+		"build_date":            build.BuildDate,
+		"build_id":              build.BuildID,
+		"platform":              goruntime.GOOS,
+		"arch":                  goruntime.GOARCH,
+		"install_type":          installType(snapshot.Runtime.InstallType, cfg.Runtime.Profile),
+		"config_path":           *configPath,
+		"state_path":            cfg.Paths.StateFile,
+		"config_schema_version": cfg.SchemaVersion,
+		"state_schema_version":  snapshot.SchemaVersion,
+		"pairing_phase":         snapshot.Pairing.Phase,
+		"pairing_last_change":   snapshot.Pairing.LastChange,
+		"pairing_authorized":    pairingAuthorized(snapshot),
+		"cloud_base_url":        cfg.Cloud.BaseURL,
+		"cloud_probe":           cloudProbe,
+		"network_probe":         networkProbe,
+		"local_runtime_probe":   summarizeLocalProbeForOutput(localProbe),
+		"cloud_config_version":  snapshot.Cloud.ConfigVersion,
+		"update_status":         snapshot.Update.Status,
+		"update_summary":        snapshot.Update.Summary,
+		"update_hint":           snapshot.Update.Hint,
+		"update_checked_at":     snapshot.Update.LastCheckedAt,
 		"update_manifest": map[string]any{
 			"version":     snapshot.Update.ManifestVersion,
 			"channel":     snapshot.Update.ManifestChannel,
@@ -238,6 +263,9 @@ func doctorCommand(args []string) {
 		"failure_code":         finding.Code,
 		"failure_summary":      finding.Summary,
 		"failure_hint":         finding.Hint,
+		"operational_status":   ops.Overall,
+		"operational_summary":  ops.Summary,
+		"operational_checks":   ops.Checks,
 	}
 
 	if *jsonOutput {
@@ -254,16 +282,22 @@ func doctorCommand(args []string) {
 	fmt.Printf("[OK] state open: %s\n", cfg.Paths.StateFile)
 	fmt.Printf("[INFO] pairing phase: %s (%s)\n", snapshot.Pairing.Phase, snapshot.Pairing.LastChange)
 	fmt.Printf("[INFO] build: version=%s channel=%s build_id=%s platform=%s/%s install_type=%s\n",
-		buildinfo.Current().Version,
-		buildinfo.Current().Channel,
-		buildinfo.Current().BuildID,
+		build.Version,
+		build.Channel,
+		build.BuildID,
 		goruntime.GOOS,
 		goruntime.GOARCH,
 		installType(snapshot.Runtime.InstallType, cfg.Runtime.Profile),
 	)
+	fmt.Printf("[INFO] config/state schema: config=%d state=%d\n", cfg.SchemaVersion, snapshot.SchemaVersion)
 	fmt.Printf("[INFO] cloud probe: %s", cloudProbe.Status)
 	if cloudProbe.Detail != "" {
 		fmt.Printf(" (%s)", cloudProbe.Detail)
+	}
+	fmt.Println()
+	fmt.Printf("[INFO] local runtime probe: %s", localProbe.Status)
+	if localProbe.Detail != "" {
+		fmt.Printf(" (%s)", localProbe.Detail)
 	}
 	fmt.Println()
 	fmt.Printf("[INFO] meshtastic probe: %s", meshState)
@@ -285,6 +319,13 @@ func doctorCommand(args []string) {
 			fmt.Printf(" (%s)", summary)
 		}
 		fmt.Println()
+	}
+	fmt.Printf("[INFO] operational status: %s (%s)\n", ops.Overall, ops.Summary)
+	for _, check := range ops.Checks {
+		fmt.Printf("[CHECK] %s: %s - %s\n", check.Level, check.ID, check.Summary)
+		if check.Hint != "" {
+			fmt.Printf("[HINT] %s\n", check.Hint)
+		}
 	}
 	fmt.Println("Doctor checks completed.")
 }
@@ -308,8 +349,10 @@ func statusCommand(args []string) {
 		os.Exit(1)
 	}
 	snapshot := store.Snapshot()
+	now := time.Now().UTC()
 	cloudProbe := diagnostics.ProbeCloudReachability(cfg.Cloud.BaseURL, 3*time.Second)
 	networkProbe := diagnostics.ProbeLocalNetwork()
+	localProbe := diagnostics.ProbeLocalRuntimeStatus(cfg.Portal.BindAddress, 2*time.Second)
 	networkAvailable, networkKnown := diagnostics.NetworkAvailable(networkProbe)
 	_, meshState := detectMeshtastic(cfg.Meshtastic)
 	finding := diagnostics.Evaluate(diagnostics.Input{
@@ -317,49 +360,77 @@ func statusCommand(args []string) {
 		PairingPhase:          string(snapshot.Pairing.Phase),
 		PairingLastChange:     snapshot.Pairing.LastChange,
 		PairingLastError:      snapshot.Pairing.LastError,
-		PortalState:           "unknown",
+		RuntimeLastError:      localProbeRuntimeLastError(localProbe),
+		PortalState:           localProbeComponentState(localProbe, "portal"),
 		NetworkAvailable:      networkAvailable,
 		NetworkAvailableKnown: networkKnown,
-		CloudReachable:        cloudProbe.Status == "reachable",
-		MeshtasticState:       meshState,
-		Now:                   time.Now().UTC(),
+		CloudReachable:        localProbeCloudReachable(localProbe, cloudProbe),
+		MeshtasticState:       localProbeMeshtasticState(localProbe, meshState),
+		UpdateStatus:          localProbeUpdateStatus(localProbe, snapshot.Update.Status),
+		IngestQueueDepth:      localProbeIngestQueueDepth(localProbe),
+		LastPacketQueued:      localProbeLastPacketQueued(localProbe),
+		LastPacketAck:         localProbeLastPacketAck(localProbe),
+		Now:                   now,
+	})
+	ops := diagnostics.EvaluateOperational(diagnostics.OperationalInput{
+		Now:                 now,
+		Lifecycle:           localProbeLifecycle(localProbe, snapshot.Runtime.Mode),
+		Ready:               localProbeReady(localProbe),
+		ReadyReason:         localProbeReadyReason(localProbe),
+		PairingPhase:        string(snapshot.Pairing.Phase),
+		HasIngestCredential: pairingAuthorized(snapshot),
+		CloudReachable:      localProbeCloudReachable(localProbe, cloudProbe),
+		CloudProbeStatus:    cloudProbe.Status,
+		MeshtasticState:     localProbeMeshtasticState(localProbe, meshState),
+		IngestQueueDepth:    localProbeIngestQueueDepth(localProbe),
+		LastPacketQueued:    localProbeLastPacketQueued(localProbe),
+		LastPacketAck:       localProbeLastPacketAck(localProbe),
+		UpdateStatus:        localProbeUpdateStatus(localProbe, snapshot.Update.Status),
 	})
 
+	build := buildinfo.Current()
 	output := map[string]any{
-		"receiver_version":     buildinfo.Current().Version,
-		"release_channel":      buildinfo.Current().Channel,
-		"build_commit":         buildinfo.Current().Commit,
-		"build_date":           buildinfo.Current().BuildDate,
-		"build_id":             buildinfo.Current().BuildID,
-		"platform":             goruntime.GOOS,
-		"arch":                 goruntime.GOARCH,
-		"config_path":          *configPath,
-		"state_path":           cfg.Paths.StateFile,
-		"installation_id":      snapshot.Installation.ID,
-		"pairing_phase":        snapshot.Pairing.Phase,
-		"cloud_endpoint":       cfg.Cloud.BaseURL,
-		"runtime_mode":         snapshot.Runtime.Mode,
-		"runtime_profile":      snapshot.Runtime.Profile,
-		"install_type":         installType(snapshot.Runtime.InstallType, cfg.Runtime.Profile),
-		"meshtastic_mode":      cfg.Meshtastic.Transport,
-		"meshtastic_state":     meshState,
-		"cloud_config_version": snapshot.Cloud.ConfigVersion,
-		"update_status":        snapshot.Update.Status,
-		"update_summary":       snapshot.Update.Summary,
-		"update_hint":          snapshot.Update.Hint,
-		"update_checked_at":    snapshot.Update.LastCheckedAt,
+		"receiver_version":      build.Version,
+		"release_channel":       build.Channel,
+		"build_commit":          build.Commit,
+		"build_date":            build.BuildDate,
+		"build_id":              build.BuildID,
+		"platform":              goruntime.GOOS,
+		"arch":                  goruntime.GOARCH,
+		"config_path":           *configPath,
+		"state_path":            cfg.Paths.StateFile,
+		"config_schema_version": cfg.SchemaVersion,
+		"state_schema_version":  snapshot.SchemaVersion,
+		"installation_id":       snapshot.Installation.ID,
+		"pairing_phase":         snapshot.Pairing.Phase,
+		"pairing_authorized":    pairingAuthorized(snapshot),
+		"cloud_endpoint":        cfg.Cloud.BaseURL,
+		"runtime_mode":          snapshot.Runtime.Mode,
+		"runtime_profile":       snapshot.Runtime.Profile,
+		"install_type":          installType(snapshot.Runtime.InstallType, cfg.Runtime.Profile),
+		"meshtastic_mode":       cfg.Meshtastic.Transport,
+		"meshtastic_state":      localProbeMeshtasticState(localProbe, meshState),
+		"local_runtime_probe":   summarizeLocalProbeForOutput(localProbe),
+		"cloud_config_version":  snapshot.Cloud.ConfigVersion,
+		"update_status":         snapshot.Update.Status,
+		"update_summary":        snapshot.Update.Summary,
+		"update_hint":           snapshot.Update.Hint,
+		"update_checked_at":     snapshot.Update.LastCheckedAt,
 		"update_manifest": map[string]any{
 			"version":     snapshot.Update.ManifestVersion,
 			"channel":     snapshot.Update.ManifestChannel,
 			"recommended": snapshot.Update.RecommendedVersion,
 		},
-		"last_pairing_err": snapshot.Pairing.LastError,
-		"failure_code":     finding.Code,
-		"failure_summary":  finding.Summary,
-		"failure_hint":     finding.Hint,
-		"cloud_probe":      cloudProbe.Status,
-		"network_probe":    networkProbe,
-		"updated_at":       snapshot.Metadata.UpdatedAt,
+		"last_pairing_err":    snapshot.Pairing.LastError,
+		"failure_code":        finding.Code,
+		"failure_summary":     finding.Summary,
+		"failure_hint":        finding.Hint,
+		"cloud_probe":         cloudProbe.Status,
+		"network_probe":       networkProbe,
+		"operational_status":  ops.Overall,
+		"operational_summary": ops.Summary,
+		"operational_checks":  ops.Checks,
+		"updated_at":          snapshot.Metadata.UpdatedAt,
 	}
 
 	encoder := json.NewEncoder(os.Stdout)
@@ -378,14 +449,29 @@ func supportSnapshotCommand(args []string) {
 
 	cfg, err := config.Load(*configPath)
 	if err != nil {
-		slog.Error("support snapshot failed: load config", "err", err)
+		configSchema, statePath := bestEffortConfigMarkers(*configPath)
+		stateSchema := bestEffortStateSchema(statePath)
+		snapshot := buildCompatibilitySupportSnapshot(*configPath, statePath, configSchema, stateSchema, err)
+		if writeErr := writeSupportSnapshot(snapshot, *outputPath); writeErr != nil {
+			slog.Error("support snapshot failed: write compatibility snapshot", "err", writeErr)
+			os.Exit(1)
+		}
 		os.Exit(1)
 	}
 	store, err := state.Open(cfg.Paths.StateFile)
 	if err != nil {
-		slog.Error("support snapshot failed: open state", "err", err)
-		if hint := upgradeCompatibilityHint(err); hint != "" {
-			slog.Error("support snapshot compatibility hint", "hint", hint)
+		configSchema, statePath := bestEffortConfigMarkers(*configPath)
+		stateSchema := bestEffortStateSchema(cfg.Paths.StateFile)
+		if configSchema == 0 {
+			configSchema = cfg.SchemaVersion
+		}
+		if statePath == "" {
+			statePath = cfg.Paths.StateFile
+		}
+		snapshot := buildCompatibilitySupportSnapshot(*configPath, statePath, configSchema, stateSchema, err)
+		if writeErr := writeSupportSnapshot(snapshot, *outputPath); writeErr != nil {
+			slog.Error("support snapshot failed: write compatibility snapshot", "err", writeErr)
+			os.Exit(1)
 		}
 		os.Exit(1)
 	}
@@ -393,17 +479,23 @@ func supportSnapshotCommand(args []string) {
 	deviceProbe, meshState := detectMeshtastic(cfg.Meshtastic)
 	cloudProbe := diagnostics.ProbeCloudReachability(cfg.Cloud.BaseURL, 3*time.Second)
 	networkProbe := diagnostics.ProbeLocalNetwork()
+	localProbe := diagnostics.ProbeLocalRuntimeStatus(cfg.Portal.BindAddress, 2*time.Second)
 	networkAvailable, networkKnown := diagnostics.NetworkAvailable(networkProbe)
 	finding := diagnostics.Evaluate(diagnostics.Input{
 		RuntimeProfile:        cfg.Runtime.Profile,
 		PairingPhase:          string(snapshot.Pairing.Phase),
 		PairingLastChange:     snapshot.Pairing.LastChange,
 		PairingLastError:      snapshot.Pairing.LastError,
-		PortalState:           "unknown",
+		RuntimeLastError:      localProbeRuntimeLastError(localProbe),
+		PortalState:           localProbeComponentState(localProbe, "portal"),
 		NetworkAvailable:      networkAvailable,
 		NetworkAvailableKnown: networkKnown,
-		CloudReachable:        cloudProbe.Status == "reachable",
-		MeshtasticState:       meshState,
+		CloudReachable:        localProbeCloudReachable(localProbe, cloudProbe),
+		MeshtasticState:       localProbeMeshtasticState(localProbe, meshState),
+		UpdateStatus:          localProbeUpdateStatus(localProbe, snapshot.Update.Status),
+		IngestQueueDepth:      localProbeIngestQueueDepth(localProbe),
+		LastPacketQueued:      localProbeLastPacketQueued(localProbe),
+		LastPacketAck:         localProbeLastPacketAck(localProbe),
 		Now:                   time.Now().UTC(),
 	})
 	report := diagnostics.CollectSupportSnapshot(cfg, snapshot, finding, diagnostics.CollectOptions{
@@ -413,6 +505,9 @@ func supportSnapshotCommand(args []string) {
 		},
 		ProbeNetwork: func() diagnostics.NetworkProbe {
 			return networkProbe
+		},
+		ProbeLocal: func(_ string, _ time.Duration) diagnostics.LocalStatusProbe {
+			return localProbe
 		},
 		DetectDevice: func(_ config.MeshtasticConfig) (meshtastic.DetectionResult, error) {
 			probe := meshtastic.DetectionResult{
@@ -425,24 +520,13 @@ func supportSnapshotCommand(args []string) {
 			return probe, nil
 		},
 		ConfigPath: *configPath,
+		StatePath:  cfg.Paths.StateFile,
 	})
 
-	payload, err := json.MarshalIndent(report, "", "  ")
-	if err != nil {
-		slog.Error("support snapshot failed: encode", "err", err)
+	if err := writeSupportSnapshot(report, *outputPath); err != nil {
+		slog.Error("support snapshot failed", "err", err, "path", *outputPath)
 		os.Exit(1)
 	}
-	payload = append(payload, '\n')
-
-	if strings.TrimSpace(*outputPath) == "" {
-		_, _ = os.Stdout.Write(payload)
-		return
-	}
-	if err := os.WriteFile(*outputPath, payload, 0o600); err != nil {
-		slog.Error("support snapshot failed: write file", "err", err, "path", *outputPath)
-		os.Exit(1)
-	}
-	fmt.Printf("Support snapshot written: %s\n", *outputPath)
 }
 
 func resetPairingCommand(args []string) {
@@ -529,6 +613,256 @@ func asStringSlice(value string) []string {
 		out = append(out, text)
 	}
 	return out
+}
+
+func printDoctorLoadFailure(jsonOutput bool, configPath string, statePath string, err error) {
+	if !jsonOutput {
+		fmt.Printf("[FAIL] diagnostics initialization: %v\n", err)
+		if hint := upgradeCompatibilityHint(err); hint != "" {
+			fmt.Printf("[HINT] %s\n", hint)
+		}
+		return
+	}
+
+	configSchema, parsedStatePath := bestEffortConfigMarkers(configPath)
+	if strings.TrimSpace(statePath) == "" {
+		statePath = parsedStatePath
+	}
+	stateSchema := bestEffortStateSchema(statePath)
+	report := map[string]any{
+		"receiver_version":      buildinfo.Current().Version,
+		"release_channel":       buildinfo.Current().Channel,
+		"build_commit":          buildinfo.Current().Commit,
+		"build_date":            buildinfo.Current().BuildDate,
+		"build_id":              buildinfo.Current().BuildID,
+		"config_path":           configPath,
+		"state_path":            statePath,
+		"config_schema_version": configSchema,
+		"state_schema_version":  stateSchema,
+		"failure_code":          diagnostics.FailureLocalSchemaIncompat,
+		"failure_summary":       "Local config or state schema is incompatible with this runtime",
+		"failure_hint":          upgradeCompatibilityHint(err),
+		"error":                 strings.TrimSpace(err.Error()),
+	}
+	encoder := json.NewEncoder(os.Stdout)
+	encoder.SetIndent("", "  ")
+	_ = encoder.Encode(report)
+}
+
+func summarizeLocalProbeForOutput(probe diagnostics.LocalStatusProbe) map[string]any {
+	out := map[string]any{
+		"status": probe.Status,
+		"detail": probe.Detail,
+		"url":    probe.URL,
+	}
+	if probe.Snapshot == nil {
+		return out
+	}
+	out["lifecycle"] = probe.Snapshot.Lifecycle
+	out["ready"] = probe.Snapshot.Ready
+	out["ready_reason"] = probe.Snapshot.ReadyReason
+	out["pairing_phase"] = probe.Snapshot.PairingPhase
+	out["cloud_reachable"] = probe.Snapshot.CloudReachable
+	out["update_status"] = probe.Snapshot.UpdateStatus
+	out["ingest_queue_depth"] = probe.Snapshot.IngestQueueDepth
+	out["last_packet_ack"] = probe.Snapshot.LastPacketAck
+	return out
+}
+
+func localProbeComponentState(probe diagnostics.LocalStatusProbe, name string) string {
+	if probe.Snapshot == nil || probe.Snapshot.Components == nil {
+		return "unknown"
+	}
+	component, ok := probe.Snapshot.Components[name]
+	if !ok {
+		return "unknown"
+	}
+	value := strings.TrimSpace(component.State)
+	if value == "" {
+		return "unknown"
+	}
+	return value
+}
+
+func localProbeMeshtasticState(probe diagnostics.LocalStatusProbe, fallback string) string {
+	value := localProbeComponentState(probe, "meshtastic")
+	if value == "unknown" {
+		return strings.TrimSpace(fallback)
+	}
+	return value
+}
+
+func localProbeCloudReachable(probe diagnostics.LocalStatusProbe, cloudProbe diagnostics.CloudProbe) bool {
+	if probe.Snapshot != nil {
+		return probe.Snapshot.CloudReachable
+	}
+	return cloudProbe.Status == "reachable"
+}
+
+func localProbeRuntimeLastError(probe diagnostics.LocalStatusProbe) string {
+	if probe.Snapshot == nil {
+		return ""
+	}
+	return strings.TrimSpace(probe.Snapshot.LastError)
+}
+
+func localProbeUpdateStatus(probe diagnostics.LocalStatusProbe, fallback string) string {
+	if probe.Snapshot == nil {
+		return strings.TrimSpace(fallback)
+	}
+	value := strings.TrimSpace(probe.Snapshot.UpdateStatus)
+	if value == "" {
+		return strings.TrimSpace(fallback)
+	}
+	return value
+}
+
+func localProbeIngestQueueDepth(probe diagnostics.LocalStatusProbe) int {
+	if probe.Snapshot == nil {
+		return 0
+	}
+	return probe.Snapshot.IngestQueueDepth
+}
+
+func localProbeLastPacketQueued(probe diagnostics.LocalStatusProbe) *time.Time {
+	if probe.Snapshot == nil {
+		return nil
+	}
+	return probe.Snapshot.LastPacketQueued
+}
+
+func localProbeLastPacketAck(probe diagnostics.LocalStatusProbe) *time.Time {
+	if probe.Snapshot == nil {
+		return nil
+	}
+	return probe.Snapshot.LastPacketAck
+}
+
+func localProbeLifecycle(probe diagnostics.LocalStatusProbe, fallback string) string {
+	if probe.Snapshot == nil {
+		return strings.TrimSpace(fallback)
+	}
+	return strings.TrimSpace(string(probe.Snapshot.Lifecycle))
+}
+
+func localProbeReady(probe diagnostics.LocalStatusProbe) bool {
+	if probe.Snapshot == nil {
+		return false
+	}
+	return probe.Snapshot.Ready
+}
+
+func localProbeReadyReason(probe diagnostics.LocalStatusProbe) string {
+	if probe.Snapshot == nil {
+		return ""
+	}
+	return strings.TrimSpace(probe.Snapshot.ReadyReason)
+}
+
+func pairingAuthorized(snapshot state.Data) bool {
+	return snapshot.Pairing.Phase == state.PairingSteadyState && strings.TrimSpace(snapshot.Cloud.IngestAPIKey) != ""
+}
+
+func writeSupportSnapshot(report diagnostics.SupportSnapshot, outputPath string) error {
+	payload, err := json.MarshalIndent(report, "", "  ")
+	if err != nil {
+		return err
+	}
+	payload = append(payload, '\n')
+
+	if strings.TrimSpace(outputPath) == "" {
+		_, _ = os.Stdout.Write(payload)
+		return nil
+	}
+	if err := os.WriteFile(outputPath, payload, 0o600); err != nil {
+		return err
+	}
+	fmt.Printf("Support snapshot written: %s\n", outputPath)
+	return nil
+}
+
+func buildCompatibilitySupportSnapshot(configPath string, statePath string, configSchema int, stateSchema int, err error) diagnostics.SupportSnapshot {
+	now := time.Now().UTC()
+	build := buildinfo.Current()
+	report := diagnostics.SupportSnapshot{
+		GeneratedAt: now,
+	}
+	report.Runtime.Version = build.Version
+	report.Runtime.Channel = build.Channel
+	report.Runtime.Commit = build.Commit
+	report.Runtime.BuildDate = build.BuildDate
+	report.Runtime.BuildID = build.BuildID
+	report.Runtime.GoVersion = goruntime.Version()
+	report.Runtime.Platform = goruntime.GOOS
+	report.Runtime.Arch = goruntime.GOARCH
+	report.Runtime.ConfigPath = strings.TrimSpace(configPath)
+
+	report.Config.SchemaVersion = configSchema
+	report.Config.StateSchema = stateSchema
+	report.Config.StatePath = strings.TrimSpace(statePath)
+
+	report.Diagnostics.FailureCode = diagnostics.FailureLocalSchemaIncompat
+	report.Diagnostics.FailureSummary = "Local config or state schema is incompatible with this runtime"
+	report.Diagnostics.FailureHint = upgradeCompatibilityHint(err)
+	report.Diagnostics.RecentErrors = []string{strings.TrimSpace(err.Error())}
+
+	report.Redaction.OmittedFields = []string{
+		"cloud.ingest_api_key_secret",
+		"pairing.pairing_code",
+		"pairing.activation_token",
+		"cloud.credential_ref",
+	}
+	return report
+}
+
+func bestEffortConfigMarkers(path string) (schemaVersion int, statePath string) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return 0, ""
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return 0, ""
+	}
+	if raw, ok := payload["schema_version"]; ok {
+		schemaVersion = asInt(raw)
+	}
+	if rawPaths, ok := payload["paths"].(map[string]any); ok {
+		if rawStatePath, ok := rawPaths["state_file"]; ok {
+			if value, ok := rawStatePath.(string); ok {
+				statePath = strings.TrimSpace(value)
+			}
+		}
+	}
+	return schemaVersion, statePath
+}
+
+func bestEffortStateSchema(path string) int {
+	if strings.TrimSpace(path) == "" {
+		return 0
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return 0
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return 0
+	}
+	return asInt(payload["schema_version"])
+}
+
+func asInt(raw any) int {
+	switch value := raw.(type) {
+	case float64:
+		return int(value)
+	case int:
+		return value
+	case int64:
+		return int(value)
+	default:
+		return 0
+	}
 }
 
 func upgradeCompatibilityHint(err error) string {

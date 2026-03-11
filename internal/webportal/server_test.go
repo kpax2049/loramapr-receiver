@@ -105,6 +105,26 @@ func TestPairingAPI(t *testing.T) {
 	}
 }
 
+func TestOpsAPI(t *testing.T) {
+	t.Parallel()
+
+	srv := newTestServer(t)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/ops", nil)
+	srv.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "\"overall\"") {
+		t.Fatalf("expected operational summary payload")
+	}
+	if !strings.Contains(body, "pairing_authorized") {
+		t.Fatalf("expected operational checks list")
+	}
+}
+
 func TestResetRoute(t *testing.T) {
 	t.Parallel()
 
@@ -258,6 +278,29 @@ func TestTroubleshootingLifecycleResetHint(t *testing.T) {
 	body := rec.Body.String()
 	if !strings.Contains(body, "Reset And Re-pair") {
 		t.Fatalf("expected lifecycle reset action in troubleshooting page")
+	}
+}
+
+func TestTroubleshootingUnsupportedVersionHint(t *testing.T) {
+	t.Parallel()
+
+	snap := sampleSnapshot()
+	snap.FailureCode = "receiver_version_unsupported"
+	snap.FailureSummary = "Installed receiver version is no longer supported"
+	snap.FailureHint = "Upgrade receiver using the supported package or appliance release path."
+	snap.UpdateStatus = "unsupported"
+
+	srv := New("127.0.0.1:0", staticStatusProvider{snapshot: snap}, &recordingPairingSubmitter{}, nil)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/troubleshooting", nil)
+	srv.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "unsupported") {
+		t.Fatalf("expected unsupported guidance in troubleshooting page")
 	}
 }
 

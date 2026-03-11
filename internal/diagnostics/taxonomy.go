@@ -16,6 +16,9 @@ const (
 	FailureReceiverRevoked     FailureCode = "receiver_credential_revoked"
 	FailureReceiverDisabled    FailureCode = "receiver_disabled"
 	FailureReceiverReplaced    FailureCode = "receiver_replaced"
+	FailureReceiverOutdated    FailureCode = "receiver_outdated"
+	FailureReceiverUnsupported FailureCode = "receiver_version_unsupported"
+	FailureLocalSchemaIncompat FailureCode = "local_schema_incompatible"
 	FailureCloudConfigIncompat FailureCode = "cloud_config_incompatible"
 	FailureCloudUnreachable    FailureCode = "cloud_unreachable"
 	FailureNetworkUnavailable  FailureCode = "network_unavailable"
@@ -43,6 +46,7 @@ type Input struct {
 	NetworkAvailableKnown bool
 	CloudReachable        bool
 	MeshtasticState       string
+	UpdateStatus          string
 	IngestQueueDepth      int
 	LastPacketQueued      *time.Time
 	LastPacketAck         *time.Time
@@ -140,6 +144,14 @@ func Evaluate(input Input) Finding {
 			Hint:    "Upgrade receiver to a compatible version for the active cloud config contract.",
 		}
 	}
+	if strings.Contains(runtimeErr, "state schema version is newer") ||
+		(strings.Contains(runtimeErr, "config schema version") && strings.Contains(runtimeErr, "newer")) {
+		return Finding{
+			Code:    FailureLocalSchemaIncompat,
+			Summary: "Local config or state schema is newer than this receiver runtime",
+			Hint:    "Install a newer receiver build or use compatible config/state schema versions.",
+		}
+	}
 	if strings.Contains(runtimeErr, "status=401") || strings.Contains(runtimeErr, "status=403") || strings.Contains(runtimeErr, "authentication rejected") {
 		return Finding{
 			Code:    FailureReceiverAuthInvalid,
@@ -170,6 +182,15 @@ func Evaluate(input Input) Finding {
 		}
 	}
 
+	switch strings.TrimSpace(input.PairingPhase) {
+	case "", "unpaired", "pairing_code_entered", "bootstrap_exchanged":
+		return Finding{
+			Code:    FailurePairingNotCompleted,
+			Summary: "Receiver pairing is not completed yet",
+			Hint:    "Open the local portal and enter a valid pairing code from LoRaMapr Cloud.",
+		}
+	}
+
 	meshState := strings.ToLower(strings.TrimSpace(input.MeshtasticState))
 	switch meshState {
 	case "not_present":
@@ -196,14 +217,18 @@ func Evaluate(input Input) Finding {
 		}
 	}
 
-	if strings.EqualFold(strings.TrimSpace(input.RuntimeProfile), "appliance-pi") {
-		switch strings.TrimSpace(input.PairingPhase) {
-		case "", "unpaired", "pairing_code_entered", "bootstrap_exchanged":
-			return Finding{
-				Code:    FailurePairingNotCompleted,
-				Summary: "Receiver pairing is not completed yet",
-				Hint:    "Open the local portal and enter a valid pairing code from LoRaMapr Cloud.",
-			}
+	switch strings.ToLower(strings.TrimSpace(input.UpdateStatus)) {
+	case "unsupported":
+		return Finding{
+			Code:    FailureReceiverUnsupported,
+			Summary: "Installed receiver version is no longer supported",
+			Hint:    "Upgrade receiver using the supported package or appliance release path.",
+		}
+	case "outdated":
+		return Finding{
+			Code:    FailureReceiverOutdated,
+			Summary: "Receiver is behind the recommended release",
+			Hint:    "Plan an upgrade to the recommended release version.",
 		}
 	}
 

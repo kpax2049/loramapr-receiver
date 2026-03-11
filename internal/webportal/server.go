@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/loramapr/loramapr-receiver/internal/buildinfo"
+	"github.com/loramapr/loramapr-receiver/internal/diagnostics"
 	"github.com/loramapr/loramapr-receiver/internal/status"
 )
 
@@ -49,6 +50,9 @@ type pageData struct {
 	MeshtasticState      string
 	NetworkState         string
 	TroubleshootingHints []string
+	OperationalOverall   string
+	OperationalSummary   string
+	OperationalChecks    []diagnostics.OperationalCheck
 	RuntimeVersion       string
 	ReleaseChannel       string
 	BuildCommit          string
@@ -82,6 +86,7 @@ func New(addr string, statusProvider StatusProvider, pairing PairingCodeSubmitte
 	mux.HandleFunc("/healthz", s.handleHealth)
 	mux.HandleFunc("/readyz", s.handleReady)
 	mux.HandleFunc("/api/status", s.handleStatus)
+	mux.HandleFunc("/api/ops", s.handleOps)
 	mux.HandleFunc("/api/pairing/code", s.handlePairingCode)
 	mux.HandleFunc("/api/lifecycle/reset", s.handleLifecycleReset)
 	mux.HandleFunc("/pairing", s.routePairing)
@@ -156,6 +161,22 @@ func (s *Server) handleStatus(w http.ResponseWriter, _ *http.Request) {
 	if err != nil {
 		s.logger.Error("status encoding failed", "err", err)
 		http.Error(w, "status encoding failed", http.StatusInternalServerError)
+		return
+	}
+	_, _ = w.Write(payload)
+}
+
+func (s *Server) handleOps(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	if s.status == nil {
+		http.Error(w, "status unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	ops := evaluateOperationalFromSnapshot(s.status.CurrentStatus())
+	payload, err := json.Marshal(ops)
+	if err != nil {
+		s.logger.Error("ops encoding failed", "err", err)
+		http.Error(w, "ops encoding failed", http.StatusInternalServerError)
 		return
 	}
 	_, _ = w.Write(payload)
@@ -312,6 +333,10 @@ func (s *Server) handleProgress(w http.ResponseWriter, r *http.Request) {
 	}
 	data.MeshtasticState = componentState(snap, "meshtastic")
 	data.NetworkState = componentState(snap, "network")
+	ops := evaluateOperationalFromSnapshot(snap)
+	data.OperationalOverall = ops.Overall
+	data.OperationalSummary = ops.Summary
+	data.OperationalChecks = append([]diagnostics.OperationalCheck(nil), ops.Checks...)
 	s.renderHTML(w, http.StatusOK, "progress", data)
 }
 
@@ -319,6 +344,10 @@ func (s *Server) handleTroubleshooting(w http.ResponseWriter, _ *http.Request) {
 	snap := s.currentSnapshot()
 	data := s.basePageData("Troubleshooting", snap)
 	data.TroubleshootingHints = troubleshootingHints(snap)
+	ops := evaluateOperationalFromSnapshot(snap)
+	data.OperationalOverall = ops.Overall
+	data.OperationalSummary = ops.Summary
+	data.OperationalChecks = append([]diagnostics.OperationalCheck(nil), ops.Checks...)
 	s.renderHTML(w, http.StatusOK, "troubleshooting", data)
 }
 
@@ -497,6 +526,12 @@ func troubleshootingHints(snap status.Snapshot) []string {
 	switch strings.TrimSpace(snap.FailureCode) {
 	case "receiver_credential_revoked", "receiver_disabled", "receiver_replaced":
 		hints = append(hints, "Lifecycle recovery: use reset to clear local credentials, then submit a fresh pairing code.")
+	case "receiver_version_unsupported":
+		hints = append(hints, "Receiver build is unsupported and should be upgraded before continued operation.")
+	case "receiver_outdated":
+		hints = append(hints, "Receiver is outdated. Upgrade is recommended to stay aligned with release policy.")
+	case "local_schema_incompatible":
+		hints = append(hints, "Local config/state schema is incompatible with this runtime. Upgrade receiver binary or restore compatible schema.")
 	}
 	switch strings.TrimSpace(snap.UpdateStatus) {
 	case "outdated":
@@ -549,6 +584,24 @@ func troubleshootingHints(snap status.Snapshot) []string {
 		hints = append(hints, "No active issues detected. Continue monitoring Progress for node and ingest updates.")
 	}
 	return hints
+}
+
+func evaluateOperationalFromSnapshot(snap status.Snapshot) diagnostics.OperationalSummary {
+	return diagnostics.EvaluateOperational(diagnostics.OperationalInput{
+		Now:                 time.Now().UTC(),
+		Lifecycle:           string(snap.Lifecycle),
+		Ready:               snap.Ready,
+		ReadyReason:         snap.ReadyReason,
+		PairingPhase:        snap.PairingPhase,
+		HasIngestCredential: strings.TrimSpace(snap.PairingPhase) == "steady_state",
+		CloudReachable:      snap.CloudReachable,
+		CloudProbeStatus:    snap.CloudStatus,
+		MeshtasticState:     componentState(snap, "meshtastic"),
+		IngestQueueDepth:    snap.IngestQueueDepth,
+		LastPacketQueued:    snap.LastPacketQueued,
+		LastPacketAck:       snap.LastPacketAck,
+		UpdateStatus:        snap.UpdateStatus,
+	})
 }
 
 func parseDeauthorizeValue(raw string, defaultValue bool) bool {

@@ -15,6 +15,21 @@
   </div>
 </section>
 <section class="panel">
+  <h2>Operational Checks</h2>
+  <p><strong>{{if .OperationalOverall}}{{.OperationalOverall}}{{else}}unknown{{end}}</strong>{{if .OperationalSummary}}: {{.OperationalSummary}}{{end}}</p>
+  <table>
+    <tr><th>Check</th><th>Level</th><th>Summary</th><th>Guidance</th></tr>
+    {{range .OperationalChecks}}
+    <tr>
+      <td class="mono">{{.ID}}</td>
+      <td class="mono">{{.Level}}</td>
+      <td>{{.Summary}}</td>
+      <td>{{if .Hint}}{{.Hint}}{{else}}-{{end}}</td>
+    </tr>
+    {{end}}
+  </table>
+</section>
+<section class="panel">
   <h2>Status Details</h2>
   <table>
     <tr><th>Ready</th><td>{{if .Snapshot.Ready}}yes{{else}}no{{end}} {{if .Snapshot.ReadyReason}}({{.Snapshot.ReadyReason}}){{end}}</td></tr>

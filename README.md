@@ -6,7 +6,7 @@ Standalone runtime for deploying a **LoRaMapr Receiver** appliance that pairs wi
 Current scope includes pairing/bootstrap lifecycle, embedded local portal,
 Meshtastic adapter integration, steady-state ingest/heartbeat loops,
 Linux/Pi GA packaging paths, lifecycle management, and update/upgrade safety
-reporting.
+reporting, plus support-bundle export and coarse operational diagnostics.
 
 ## Product Direction
 
@@ -68,6 +68,7 @@ Default `auto` mode chooses:
 - `GET /healthz` liveness
 - `GET /readyz` readiness (mode/pairing aware)
 - `GET /api/status` structured runtime status snapshot
+- `GET /api/ops` coarse operational checks
 - `POST /api/pairing/code` submit pairing code (`{"pairingCode":"LMR-..."}`)
 - `POST /api/lifecycle/reset` reset/deauthorize local pairing state
 
@@ -83,6 +84,8 @@ This repository currently contains:
 - Meshtastic detection/connection and packet normalization boundary
 - steady-state ingest, heartbeat, and receiver/node status reporting with retry/backoff
 - embedded local setup/status portal and diagnostics taxonomy
+- support-snapshot export with redaction and compatibility snapshot fallback
+- coarse operational checks across doctor/status/portal
 - Linux/Pi existing-OS `.deb`/APT path and Pi appliance image path scaffolding
 - version/channel/build reporting, upgrade-safe schema handling, and thin update-status reasoning
 
@@ -93,6 +96,7 @@ This repository currently contains:
 - [v2.2.0 GA Plan: Raspberry Pi Appliance](./docs/ga-v2.2.0-raspberry-pi-appliance.md)
 - [v2.3.0 Plan: Receiver Lifecycle Management](./docs/ga-v2.3.0-receiver-lifecycle-management.md)
 - [v2.4.0 Plan: Update Channels and Upgrade Safety](./docs/ga-v2.4.0-update-channels-upgrade-safety.md)
+- [v2.5.0 Plan: Support and Operations Maturity](./docs/ga-v2.5.0-support-operations-maturity.md)
 - [Config and State Layout](./docs/runtime-config-state.md)
 - [Pairing and Bootstrap Lifecycle](./docs/pairing-lifecycle.md)
 - [Receiver Lifecycle Management](./docs/receiver-lifecycle.md)
@@ -100,6 +104,7 @@ This repository currently contains:
 - [Meshtastic Adapter Behavior](./docs/meshtastic-adapter.md)
 - [Steady-State Cloud Loop](./docs/steady-state.md)
 - [Diagnostics and Failure Taxonomy](./docs/diagnostics.md)
+- [Support and Operations Workflow](./docs/support-operations-workflow.md)
 - [Version, Channel, and Upgrade Safety](./docs/version-channel-upgrades.md)
 - [Service and Install Model](./docs/service-install.md)
 - [Debian Package Lifecycle Behavior](./docs/linux-package-lifecycle.md)
@@ -109,6 +114,7 @@ This repository currently contains:
 - [Publish Guide](./docs/publish-guide.md)
 - [Release Notes](./docs/release-notes.md)
 - [Release Notes v2.4.0](./docs/release-notes-v2.4.0.md)
+- [Release Notes v2.5.0](./docs/release-notes-v2.5.0.md)
 - [Release Notes v2.3.0](./docs/release-notes-v2.3.0.md)
 - [Release Notes v2.2.0](./docs/release-notes-v2.2.0.md)
 - [Release Notes v2.1.0](./docs/release-notes-v2.1.0.md)

@@ -78,6 +78,14 @@ func TestEvaluateFailureTaxonomy(t *testing.T) {
 			want: FailureCloudConfigIncompat,
 		},
 		{
+			name: "local schema incompatible",
+			in: Input{
+				RuntimeLastError: "state schema version is newer than this runtime",
+				Now:              now,
+			},
+			want: FailureLocalSchemaIncompat,
+		},
+		{
 			name: "auth invalid",
 			in: Input{
 				PairingPhase:     "steady_state",
@@ -90,6 +98,8 @@ func TestEvaluateFailureTaxonomy(t *testing.T) {
 		{
 			name: "no serial device",
 			in: Input{
+				PairingPhase:    "steady_state",
+				CloudReachable:  true,
 				MeshtasticState: "not_present",
 				Now:             now,
 			},
@@ -98,6 +108,8 @@ func TestEvaluateFailureTaxonomy(t *testing.T) {
 		{
 			name: "node not connected",
 			in: Input{
+				PairingPhase:    "steady_state",
+				CloudReachable:  true,
 				MeshtasticState: "detected",
 				Now:             now,
 			},
@@ -106,6 +118,8 @@ func TestEvaluateFailureTaxonomy(t *testing.T) {
 		{
 			name: "events not forwarding",
 			in: Input{
+				PairingPhase:     "steady_state",
+				CloudReachable:   true,
 				MeshtasticState:  "connected",
 				IngestQueueDepth: 5,
 				LastPacketQueued: &queued,
@@ -113,6 +127,28 @@ func TestEvaluateFailureTaxonomy(t *testing.T) {
 				Now:              now,
 			},
 			want: FailureEventsNotForwarding,
+		},
+		{
+			name: "unsupported update policy",
+			in: Input{
+				PairingPhase:    "steady_state",
+				CloudReachable:  true,
+				MeshtasticState: "connected",
+				UpdateStatus:    "unsupported",
+				Now:             now,
+			},
+			want: FailureReceiverUnsupported,
+		},
+		{
+			name: "outdated update policy",
+			in: Input{
+				PairingPhase:    "steady_state",
+				CloudReachable:  true,
+				MeshtasticState: "connected",
+				UpdateStatus:    "outdated",
+				Now:             now,
+			},
+			want: FailureReceiverOutdated,
 		},
 		{
 			name: "network unavailable",

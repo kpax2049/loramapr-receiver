@@ -32,10 +32,14 @@ func TestSupportSnapshotRedactsSecrets(t *testing.T) {
 		ProbeNetwork: func() NetworkProbe {
 			return NetworkProbe{Status: "available", Interface: "eth0", Address: "192.168.1.10"}
 		},
+		ProbeLocal: func(_ string, _ time.Duration) LocalStatusProbe {
+			return LocalStatusProbe{Status: "unreachable", Detail: "connection refused"}
+		},
 		DetectDevice: func(_ config.MeshtasticConfig) (meshtastic.DetectionResult, error) {
 			return meshtastic.DetectionResult{Device: "/dev/ttyUSB0", Candidates: []string{"/dev/ttyUSB0"}}, nil
 		},
 		ConfigPath: "/etc/loramapr/receiver.json",
+		StatePath:  "/var/lib/loramapr/receiver-state.json",
 	})
 
 	if snapshot.Pairing.HasCode != true || snapshot.Pairing.HasToken != true {
@@ -52,5 +56,24 @@ func TestSupportSnapshotRedactsSecrets(t *testing.T) {
 	}
 	if snapshot.Redaction.OmittedFields == nil || len(snapshot.Redaction.OmittedFields) == 0 {
 		t.Fatal("expected omitted fields list")
+	}
+	assertContains := func(value string) {
+		t.Helper()
+		for _, item := range snapshot.Redaction.OmittedFields {
+			if item == value {
+				return
+			}
+		}
+		t.Fatalf("expected omitted fields to contain %q", value)
+	}
+	assertContains("cloud.ingest_api_key_secret")
+	assertContains("pairing.pairing_code")
+	assertContains("pairing.activation_token")
+	assertContains("cloud.credential_ref")
+	if snapshot.Config.StatePath == "" || snapshot.Config.SchemaVersion == 0 {
+		t.Fatal("expected config/state markers in support snapshot")
+	}
+	if len(snapshot.Operations.Checks) == 0 {
+		t.Fatal("expected operational checks in support snapshot")
 	}
 }

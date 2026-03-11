@@ -1,102 +1,93 @@
 # Embedded Local Setup Portal
 
-`loramapr-receiverd` serves an embedded local web portal for first-run setup,
-runtime visibility, lifecycle recovery, and update-status visibility.
+`loramapr-receiverd` serves an embedded local web portal for setup, status, and
+support-safe troubleshooting.
 
 ## Purpose
 
-The portal is the normal operator interface for:
+Portal is the normal operator interface for:
 
-- entering pairing code from LoRaMapr Cloud
-- monitoring bootstrap/activation progress
-- checking service/cloud/meshtastic readiness
-- understanding actionable failure states
-- viewing non-sensitive advanced runtime/build details
+- pairing/bootstrap progress
+- service/cloud/node status
+- lifecycle recovery guidance
+- update-supportability visibility
+- coarse operational checks
 
 ## Routes
 
 UI:
 
-- `GET /` welcome + summary
-- `GET /pairing` pairing form
-- `POST /pairing` pairing submit
+- `GET /` welcome/summary
+- `GET /pairing` pairing code form
+- `POST /pairing` pairing submission
 - `POST /reset` local reset/deauthorize
-- `GET /progress` setup/runtime progress
-- `GET /troubleshooting` human-readable guidance
-- `GET /advanced` runtime/build/install details
+- `GET /progress` runtime progress + operational checks
+- `GET /troubleshooting` actionable guidance
+- `GET /advanced` build/runtime/install details
 
 API:
 
 - `GET /healthz`
 - `GET /readyz`
 - `GET /api/status`
+- `GET /api/ops` (coarse operational checks)
 - `POST /api/pairing/code`
 - `POST /api/lifecycle/reset`
 
-## Binding Strategy
+## Operational Checks in Portal
 
-Configured by `portal.bind_address`.
+Progress/Troubleshooting surfaces include check results for:
 
-Recommended defaults:
+- service health/running
+- pairing authorized
+- cloud reachability
+- node connection state
+- forwarding recent activity
+- update supportability state
 
-- desktop/local host path: `127.0.0.1:8080`
-- Pi appliance path: `0.0.0.0:8080`
+Each check uses coarse levels:
 
-Discovery assumptions for appliance profile:
+- `ok`
+- `warn`
+- `fail`
+- `unknown`
 
-- preferred: `http://loramapr-receiver.local:8080`
-- fallback: `http://<lan-ip>:8080`
+Overall operational state:
+
+- `ok`
+- `degraded`
+- `blocked`
 
 ## Security Model
 
-Portal pages and `/api/status` intentionally omit secrets:
+Portal intentionally omits secrets from rendered content and `/api/status`:
 
-- ingest API secret
-- activation token
 - pairing code value
+- activation token
+- ingest API secret
 
-Secret-bearing fields remain only in local state storage with restricted file
-permissions.
+Only support-safe metadata is exposed.
 
-## Status and Diagnostics Integration
+## Troubleshooting Guidance
 
-Progress/Troubleshooting pages surface:
+Portal guidance aligns to stable receiver taxonomy:
 
-- pairing phase
-- cloud connectivity/reachability
-- service lifecycle/readiness
-- meshtastic state
-- update status (`disabled`, `unknown`, `current`, `outdated`, `channel_mismatch`, `unsupported`, `ahead`)
-- failure code/summary/hint
+- pairing/setup: `pairing_code_invalid`, `pairing_code_expired`, `activation_failed`, `pairing_not_completed`
+- lifecycle/auth: `receiver_credential_revoked`, `receiver_disabled`, `receiver_replaced`, `receiver_auth_invalid`
+- connectivity/runtime: `cloud_unreachable`, `network_unavailable`, `portal_unavailable`, `cloud_config_incompatible`, `local_schema_incompatible`
+- node/forwarding: `no_serial_device_detected`, `node_detected_not_connected`, `events_not_forwarding`
+- release supportability: `receiver_outdated`, `receiver_version_unsupported`
 
-Advanced page surfaces:
+## Binding and Discovery
 
-- version/channel
-- build commit/date/id
-- platform/arch
-- install type/profile/mode
-- update manifest/recommendation/check timestamp
+Configured by `portal.bind_address`.
 
-## Failure Taxonomy Visibility
+Recommended:
 
-Portal aligns with diagnostics taxonomy codes, including:
+- desktop/local: `127.0.0.1:8080`
+- Pi appliance: `0.0.0.0:8080`
 
-- pairing/bootstrap: `pairing_code_invalid`, `pairing_code_expired`, `activation_failed`, `pairing_not_completed`
-- lifecycle: `receiver_credential_revoked`, `receiver_disabled`, `receiver_replaced`
-- connectivity/runtime: `cloud_unreachable`, `network_unavailable`, `portal_unavailable`, `receiver_auth_invalid`
-- meshtastic/forwarding: `no_serial_device_detected`, `node_detected_not_connected`, `events_not_forwarding`
-- upgrade compatibility: `cloud_config_incompatible`
+Pi discovery assumptions:
 
-## Lifecycle Recovery Path
-
-- Troubleshooting page includes reset/re-pair action.
-- Reset deauthorizes durable credentials by default.
-- Receiver returns to `unpaired` and user submits fresh pairing code.
-
-## Update Status Scope
-
-Portal update-state display is informational only:
-
-- no automatic update install
-- no background package/image mutation
-- manual upgrade path remains package/appliance release workflow
+- preferred: `http://loramapr-receiver.local:8080`
+- fallback: `http://<lan-ip>:8080`

@@ -900,6 +900,7 @@ func (s *Service) updateFailureState(snapshot state.Data, meshSnap meshtastic.Sn
 		NetworkAvailableKnown: networkKnown,
 		CloudReachable:        s.steady.cloudReachable,
 		MeshtasticState:       string(meshSnap.State),
+		UpdateStatus:          current.UpdateStatus,
 		IngestQueueDepth:      len(s.steady.ingestQueue),
 		LastPacketQueued:      s.steady.lastPacketQueued,
 		LastPacketAck:         s.steady.lastPacketAck,
