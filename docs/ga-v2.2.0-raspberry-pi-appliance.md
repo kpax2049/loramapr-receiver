@@ -1,6 +1,6 @@
 # v2.2.0 GA Plan: Raspberry Pi Appliance
 
-Status: Draft for implementation
+Status: Implemented (v2.2.0)
 Date: 2026-03-11
 Milestone: `v2.2.0`
 

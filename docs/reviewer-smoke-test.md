@@ -1,90 +1,88 @@
-# Reviewer Smoke Test Guide (v2.1.0)
+# Reviewer Smoke Test Guide (v2.2.0)
 
-This guide validates Linux/Pi Existing-OS GA behavior from artifact build to
-pairing-ready runtime.
+This guide validates Raspberry Pi Appliance GA end-to-end behavior. The
+existing-OS package path remains a supported alternate path and is listed in the
+final section.
 
 ## Prerequisites
 
-- Build host with Go and Debian packaging tools (`dpkg-deb`, `dpkg-scanpackages`)
-- Debian-family test host (Debian/Ubuntu/Raspberry Pi OS) with systemd
-- Optional reachable `loramapr-cloud` environment for real pairing/forwarding
+- Build host with Go and release dependencies
+- `pi-gen` workspace for real image generation
+- Raspberry Pi 4/5/400 (`arm64`) + SD card
+- LAN with DHCP and internet access
+- Optional Meshtastic device for node/packet checks
 
-## 1. Build and Validate Artifacts
+## 1. Build Artifacts (Including Pi Image)
 
 ```bash
-GOCACHE=/tmp/go-build-cache GOTMPDIR=/tmp GO_BIN=/usr/local/go/bin/go \
-  packaging/release/build-artifacts.sh v2.1.0-smoke stable
-packaging/debian/validate-deb.sh dist/v2.1.0-smoke/artifacts/loramapr-receiver_v2.1.0-smoke_linux_amd64.deb
-packaging/debian/validate-lifecycle.sh dist/v2.1.0-smoke/artifacts/loramapr-receiver_v2.1.0-smoke_linux_amd64.deb
+VERSION=v2.2.0-smoke
+CHANNEL=stable
+PI_GEN_DIR=/path/to/pi-gen \
+ENABLE_PI_IMAGE=1 \
+packaging/release/build-artifacts.sh "${VERSION}" "${CHANNEL}"
 ```
 
-Expected under `dist/v2.1.0-smoke/artifacts/`:
+Expected under `dist/${VERSION}/artifacts/`:
 
-- linux `.deb` packages (`amd64`, `arm64`, `armv7`)
-- linux systemd layout tarballs (fallback path)
-- `SHA256SUMS`
-- `cloud-manifest.fragment.json`
-- `release-metadata.json`
+- `loramapr-receiver_${VERSION}_pi_arm64.img.xz`
+- `loramapr-receiver_${VERSION}_pi_arm64.image-metadata.json`
+- standard platform archives and checksums/manifest metadata
 
-## 2. Publish and Verify Repository Output
+Validate the Pi image artifact:
 
 ```bash
-SIGNING_MODE=none packaging/distribution/publish.sh v2.1.0-smoke stable
-SIGNING_REQUIRED=0 packaging/distribution/verify.sh v2.1.0-smoke stable
+packaging/pi/image/validate-image.sh dist/${VERSION}/artifacts/loramapr-receiver_${VERSION}_pi_arm64.img.xz
 ```
 
-Expected output trees:
-
-- `dist/published/receiver/stable/v2.1.0-smoke/`
-- `dist/published/apt/stable/pool/main/l/loramapr-receiver/`
-- `dist/published/apt/stable/dists/stable/main/binary-*/`
-
-## 3. Install from APT Repository (Primary Path)
-
-For local unsigned smoke repo:
+## 2. Publish and Verify Distribution Output
 
 ```bash
-REPO_PATH="$(pwd)/dist/published/apt/stable"
-echo "deb [trusted=yes] file://${REPO_PATH} stable main" \
-  | sudo tee /etc/apt/sources.list.d/loramapr-receiver-smoke.list
-sudo apt-get update
-sudo apt-get install -y loramapr-receiver
-```
-
-For real signed hosted repo, use keyring flow from
-`packaging/distribution/apt/README.md`.
-
-## 4. Verify Service and Pairing-Ready State
-
-```bash
-sudo systemctl status loramapr-receiverd --no-pager
-curl -sS http://127.0.0.1:8080/healthz
-curl -sS http://127.0.0.1:8080/readyz
-curl -sS http://127.0.0.1:8080/api/status | jq
+SIGNING_MODE=none packaging/distribution/publish.sh "${VERSION}" "${CHANNEL}"
+PI_IMAGE_REQUIRED=1 SIGNING_REQUIRED=0 packaging/distribution/verify.sh "${VERSION}" "${CHANNEL}"
 ```
 
 Expected:
 
-- service active
-- portal reachable
-- receiver reports pairing-ready state when unpaired
+- published static receiver tree
+- published APT tree (existing-OS alternate path)
+- Pi image verification passes from published path
 
-## 5. Local Portal Pairing Submission
+## 3. Flash and Boot Pi Appliance
 
-```bash
-curl -sS -X POST http://127.0.0.1:8080/api/pairing/code \
-  -H 'Content-Type: application/json' \
-  -d '{"pairingCode":"LMR-TEST-CODE"}'
-curl -sS http://127.0.0.1:8080/api/status | jq
-```
+1. Flash `loramapr-receiver_${VERSION}_pi_arm64.img.xz` to SD card.
+2. In Raspberry Pi Imager custom settings, preconfigure Wi-Fi/country/hostname
+   settings if needed.
+3. Boot Pi on LAN and wait for service startup.
 
-Expected: pairing phase and diagnostics fields update consistently.
+## 4. Discover and Open Local Portal (No SSH Path)
 
-## 6. Cloud and Node Checks (If Environment Available)
+From another LAN device:
 
-1. Confirm `/api/status` reaches paired steady state after valid cloud flow.
-2. Confirm Meshtastic component transitions toward `connected` when device is attached.
-3. Confirm packet forwarding fields update (`last_packet_queued`, `last_packet_ack`).
+- `http://loramapr-receiver.local:8080`
+- fallback `http://<pi-lan-ip>:8080`
+
+Expected:
+
+- welcome/progress pages load
+- status shows pairing-ready state when unpaired
+- troubleshooting page shows actionable guidance if blocked
+
+## 5. Pairing and Runtime Progress
+
+1. Submit pairing code in portal (or `POST /api/pairing/code`).
+2. Observe phase progression:
+   - `unpaired` -> `pairing_code_entered` -> `bootstrap_exchanged` -> `activated` -> `steady_state`
+3. Confirm no persistent failure code after successful pairing.
+
+## 6. Node and Packet Checks
+
+With Meshtastic device attached:
+
+1. Confirm status transitions from detection toward `connected`.
+2. Confirm packet telemetry fields advance:
+   - `last_packet_queued`
+   - `last_packet_ack`
+3. Confirm no persistent `events_not_forwarding` state.
 
 ## 7. Diagnostics Capture
 
@@ -97,31 +95,20 @@ cat /tmp/receiver-support.json | jq
 
 Expected:
 
-- failure code/summary/hint are human-readable
-- support snapshot is redacted (no secret values)
+- appliance-specific failure states are explicit (`network_unavailable`,
+  `pairing_not_completed`, `portal_unavailable`, etc.)
+- support snapshot remains redacted (no secrets)
 
-## 8. Lifecycle Operations
+## 8. Existing-OS Alternate Path (Sanity)
 
-```bash
-sudo apt-get remove -y loramapr-receiver
-sudo test -f /etc/loramapr/receiver.json
-sudo apt-get install -y loramapr-receiver
-sudo systemctl status loramapr-receiverd --no-pager
-sudo apt-get purge -y loramapr-receiver
-```
-
-Expected:
-
-- `remove` keeps config/state
-- reinstall starts service again
-- `purge` clears config/state per lifecycle policy
-
-## 9. Fallback Path Sanity (Advanced)
-
-Validate that fallback/manual artifacts are still present:
+Confirm existing-OS package path is still intact:
 
 ```bash
-ls dist/v2.1.0-smoke/artifacts/loramapr-receiver_v2.1.0-smoke_linux_amd64_systemd.tar.gz
+VERSION=v2.2.0-smoke
+CHANNEL=stable
+SIGNING_MODE=none packaging/distribution/publish.sh "${VERSION}" "${CHANNEL}"
+SIGNING_REQUIRED=0 packaging/distribution/verify.sh "${VERSION}" "${CHANNEL}"
 ```
 
-Fallback tarball path remains advanced/manual, not primary.
+Then install via APT on Debian-family host and confirm service/portal startup as
+documented in `docs/linux-pi-distribution.md`.

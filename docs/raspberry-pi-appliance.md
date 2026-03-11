@@ -122,3 +122,12 @@ than advanced Linux package/manual service instructions.
 - Wi-Fi provisioning is expected through Raspberry Pi Imager first-boot settings
   (SSID/password/country), not an SSH-first setup flow.
 - Image signing and secure-boot are future hardening work.
+
+## Difference vs Existing-OS Path
+
+- Appliance image path:
+  - flash image, boot Pi, open local portal, pair
+  - optimized for novice setup with minimal host administration
+- Existing-OS package path (`docs/linux-pi-distribution.md`):
+  - apt install on a pre-existing Debian-family OS
+  - preferred when user manages their own OS lifecycle and package updates

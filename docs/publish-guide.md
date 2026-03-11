@@ -1,4 +1,4 @@
-# Receiver Publish Guide (v2.1.0 Linux/Pi Existing-OS GA)
+# Receiver Publish Guide (v2.2.0 Raspberry Pi Appliance GA)
 
 This guide ties together artifact generation, signed Linux/Pi publication,
 APT repository publication, diagnostics support workflow, and version/channel
@@ -8,6 +8,13 @@ reporting.
 
 ```bash
 packaging/release/build-artifacts.sh <version> <channel>
+```
+
+For Pi image releases:
+
+```bash
+PI_GEN_DIR=/path/to/pi-gen ENABLE_PI_IMAGE=1 \
+  packaging/release/build-artifacts.sh <version> <channel>
 ```
 
 Outputs in `dist/<version>/artifacts/` include:

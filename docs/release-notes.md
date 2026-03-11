@@ -1,5 +1,8 @@
 # LoRaMapr Receiver Release Notes
 
+For Raspberry Pi Appliance GA notes targeting `v2.2.0`, see
+`docs/release-notes-v2.2.0.md`.
+
 For Linux/Pi Existing-OS GA notes targeting `v2.1.0`, see
 `docs/release-notes-v2.1.0.md`.
 
