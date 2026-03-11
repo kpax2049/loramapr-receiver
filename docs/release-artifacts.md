@@ -11,6 +11,13 @@ Use:
 packaging/release/build-artifacts.sh <version> [channel]
 ```
 
+Enable Pi appliance image output:
+
+```bash
+PI_GEN_DIR=/path/to/pi-gen ENABLE_PI_IMAGE=1 \
+  packaging/release/build-artifacts.sh <version> [channel]
+```
+
 Artifacts are generated in `dist/<version>/artifacts/` with a shared
 `SHA256SUMS` file.
 
@@ -54,6 +61,7 @@ When publishing to `loramapr-cloud` receiver artifact catalog, map each artifact
 - `channel`: `stable` or `beta`
 - `platform`: one of `raspberry_pi`, `linux`, `macos`, `windows`
 - `arch`: `amd64`, `arm64`, or `armv7`
+- `kind`: `binary`, `systemd_layout`, `deb_package`, or `appliance_image`
 - `downloadUrl`: hosted URL to artifact file
 - `checksumSha256`: sha256 from `SHA256SUMS`
 - `signatureUrl`: optional (future signing pipeline)

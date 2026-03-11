@@ -113,7 +113,7 @@ This aligns with the Linux-first service/install model.
 - `channel`
 - artifact entries with:
   - `platform`, `arch`
-  - `kind` (`binary`, `systemd_layout`)
+  - `kind` (`binary`, `systemd_layout`, `deb_package`, `appliance_image`)
   - `filename`
   - `checksumSha256`
   - `sizeBytes`

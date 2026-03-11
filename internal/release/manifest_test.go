@@ -13,11 +13,13 @@ func TestBuildManifestIncludesLinuxAndPiEntries(t *testing.T) {
 	mustWrite(t, filepath.Join(dir, "loramapr-receiver_v1.1.0_linux_arm64_systemd.tar.gz"), []byte("a"))
 	mustWrite(t, filepath.Join(dir, "loramapr-receiver_v1.1.0_linux_amd64.tar.gz"), []byte("b"))
 	mustWrite(t, filepath.Join(dir, "loramapr-receiver_v1.1.0_linux_arm64.deb"), []byte("d"))
+	mustWrite(t, filepath.Join(dir, "loramapr-receiver_v1.1.0_pi_arm64.img.xz"), []byte("img"))
 	mustWrite(t, filepath.Join(dir, "loramapr-receiver_v1.1.0_windows_amd64.zip"), []byte("c"))
 	mustWrite(t, filepath.Join(dir, "SHA256SUMS"), []byte(
 		"aaaabbbb loramapr-receiver_v1.1.0_linux_arm64_systemd.tar.gz\n"+
 			"ccccdddd loramapr-receiver_v1.1.0_linux_amd64.tar.gz\n"+
 			"11112222 loramapr-receiver_v1.1.0_linux_arm64.deb\n"+
+			"33334444 loramapr-receiver_v1.1.0_pi_arm64.img.xz\n"+
 			"eeeeffff loramapr-receiver_v1.1.0_windows_amd64.zip\n",
 	))
 
@@ -41,6 +43,7 @@ func TestBuildManifestIncludesLinuxAndPiEntries(t *testing.T) {
 	var hasPi bool
 	var hasLinuxDeb bool
 	var hasPiDeb bool
+	var hasPiImage bool
 	for _, artifact := range manifest.Artifacts {
 		if artifact.Platform == "linux" && artifact.Arch == "arm64" && artifact.Kind == "systemd_layout" {
 			hasLinux = true
@@ -63,6 +66,12 @@ func TestBuildManifestIncludesLinuxAndPiEntries(t *testing.T) {
 				t.Fatal("expected raspberry_pi arm64 deb artifact to be recommended")
 			}
 		}
+		if artifact.Platform == "raspberry_pi" && artifact.Arch == "arm64" && artifact.Kind == "appliance_image" {
+			hasPiImage = true
+			if !artifact.Recommended {
+				t.Fatal("expected raspberry_pi appliance image artifact to be recommended")
+			}
+		}
 	}
 
 	if !hasLinux {
@@ -76,6 +85,9 @@ func TestBuildManifestIncludesLinuxAndPiEntries(t *testing.T) {
 	}
 	if !hasPiDeb {
 		t.Fatal("expected raspberry_pi arm64 deb artifact entry")
+	}
+	if !hasPiImage {
+		t.Fatal("expected raspberry_pi arm64 appliance image artifact entry")
 	}
 }
 
@@ -114,6 +126,27 @@ func TestParseArtifactNameDebArmhf(t *testing.T) {
 	}
 	if arch != "armv7" {
 		t.Fatalf("expected armv7 arch mapping, got: %s", arch)
+	}
+}
+
+func TestParseArtifactNamePiImage(t *testing.T) {
+	t.Parallel()
+
+	kind, format, goos, arch, err := parseArtifactName("v2.2.0", "loramapr-receiver_v2.2.0_pi_arm64.img.xz")
+	if err != nil {
+		t.Fatalf("parseArtifactName returned error: %v", err)
+	}
+	if kind != "appliance_image" {
+		t.Fatalf("unexpected kind: %s", kind)
+	}
+	if format != "img.xz" {
+		t.Fatalf("unexpected format: %s", format)
+	}
+	if goos != "pi" {
+		t.Fatalf("unexpected goos: %s", goos)
+	}
+	if arch != "arm64" {
+		t.Fatalf("unexpected arch: %s", arch)
 	}
 }
 

@@ -3,6 +3,9 @@
 This document defines the Linux/Pi Existing-OS distribution path for
 LoRaMapr Receiver `v2.1.x`.
 
+For the Raspberry Pi appliance image path (`flash image` flow), see
+`docs/raspberry-pi-appliance.md`.
+
 ## Supported Targets
 
 - Debian-family operating systems only:

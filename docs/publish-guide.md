@@ -15,6 +15,7 @@ Outputs in `dist/<version>/artifacts/` include:
 - platform archives
 - Linux/Pi `.deb` packages
 - Linux/Pi systemd layout archives
+- optional Pi appliance image (`ENABLE_PI_IMAGE=1`)
 - `SHA256SUMS`
 - `cloud-manifest.fragment.json`
 - `release-metadata.json`
@@ -48,6 +49,12 @@ packaging/distribution/verify.sh <version> <channel>
 This checks static file integrity and APT repository metadata/signature
 structure.
 
+If Pi image is part of the release:
+
+```bash
+PI_IMAGE_REQUIRED=1 packaging/distribution/verify.sh <version> <channel>
+```
+
 ## 4. Cloud Onboarding Mapping
 
 Cloud should consume:
@@ -56,7 +63,10 @@ Cloud should consume:
 - published URL pattern `receiver/<channel>/<version>/<artifact-file>`
 
 Pi onboarding should use `platform=raspberry_pi` entries from the manifest and
-prefer `kind=deb_package` for existing-OS install paths.
+prefer:
+
+- `kind=appliance_image` for flash-image appliance path
+- `kind=deb_package` for existing-OS package path
 
 ## 5. Runtime Diagnostics and Support
 

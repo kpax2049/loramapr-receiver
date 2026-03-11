@@ -114,6 +114,9 @@ func BuildManifest(opts BuildOptions) (Manifest, error) {
 		if goos == "linux" && kind == "deb_package" {
 			artifact.Recommended = true
 		}
+		if platform == "raspberry_pi" && kind == "appliance_image" && arch == "arm64" {
+			artifact.Recommended = true
+		}
 		if goos == "linux" && arch == "arm64" && kind == "systemd_layout" {
 			artifact.Recommended = true
 		}
@@ -195,6 +198,9 @@ func parseArtifactName(version string, name string) (kind string, format string,
 
 	rest := strings.TrimPrefix(name, prefix)
 	switch {
+	case strings.HasSuffix(rest, ".img.xz"):
+		format = "img.xz"
+		rest = strings.TrimSuffix(rest, ".img.xz")
 	case strings.HasSuffix(rest, ".tar.gz"):
 		format = "tar.gz"
 		rest = strings.TrimSuffix(rest, ".tar.gz")
@@ -211,6 +217,9 @@ func parseArtifactName(version string, name string) (kind string, format string,
 	kind = "binary"
 	if format == "deb" {
 		kind = "deb_package"
+	}
+	if format == "img.xz" {
+		kind = "appliance_image"
 	}
 	if strings.HasSuffix(rest, "_systemd") {
 		kind = "systemd_layout"
@@ -234,6 +243,8 @@ func mapPlatform(goos string) string {
 	switch strings.ToLower(strings.TrimSpace(goos)) {
 	case "linux":
 		return "linux"
+	case "pi", "raspberrypi":
+		return "raspberry_pi"
 	case "darwin":
 		return "macos"
 	case "windows":

@@ -60,3 +60,9 @@ packaging/pi/image/validate-image.sh dist/<version>/artifacts/loramapr-receiver_
 ```
 
 Validation checks compressed image integrity and basic size sanity.
+
+For publish-path verification once released:
+
+```bash
+PI_IMAGE_REQUIRED=1 packaging/distribution/verify.sh <version> <channel>
+```

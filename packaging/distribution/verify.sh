@@ -8,6 +8,7 @@ PUBLISHED_ROOT="${3:-${PUBLISHED_ROOT:-${ROOT_DIR}/dist/published}}"
 ENABLE_APT="${ENABLE_APT:-1}"
 APT_SUITE="${APT_SUITE:-${CHANNEL}}"
 SIGNING_REQUIRED="${SIGNING_REQUIRED:-0}"
+PI_IMAGE_REQUIRED="${PI_IMAGE_REQUIRED:-0}"
 
 if [[ -z "${VERSION}" ]]; then
   echo "Usage: $0 <version> [channel] [published-root]" >&2
@@ -41,6 +42,14 @@ fi
 if [[ "${ENABLE_APT}" != "0" ]]; then
   APT_SUITE="${APT_SUITE}" SIGNING_REQUIRED="${SIGNING_REQUIRED}" \
     "${ROOT_DIR}/packaging/distribution/apt/verify-apt.sh" "${CHANNEL}" "${PUBLISHED_ROOT}"
+fi
+
+PI_IMAGE_PATH="${TARGET_DIR}/loramapr-receiver_${VERSION}_pi_arm64.img.xz"
+if [[ -f "${PI_IMAGE_PATH}" ]]; then
+  "${ROOT_DIR}/packaging/pi/image/validate-image.sh" "${PI_IMAGE_PATH}"
+elif [[ "${PI_IMAGE_REQUIRED}" == "1" ]]; then
+  echo "pi image required but not found: ${PI_IMAGE_PATH}" >&2
+  exit 1
 fi
 
 echo "Published distribution verified: ${TARGET_DIR}"

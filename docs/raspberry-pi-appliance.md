@@ -83,6 +83,27 @@ Image contents include:
 - appliance config defaults
 - boot-time systemd enablement
 
+## Artifact Verification and Publication
+
+Pi appliance releases publish the image artifact alongside standard release
+checksums:
+
+- `loramapr-receiver_<version>_pi_arm64.img.xz`
+- `SHA256SUMS`
+- optional detached signatures (`*.asc`) when signing is enabled
+
+Verify downloaded image before flashing:
+
+```bash
+sha256sum -c SHA256SUMS --ignore-missing
+```
+
+Maintainer publish verification (including Pi image validation):
+
+```bash
+PI_IMAGE_REQUIRED=1 packaging/distribution/verify.sh <version> <channel>
+```
+
 ## Cloud Onboarding Host-Choice Mapping
 
 Cloud onboarding host-choice UI should expose a first-class
