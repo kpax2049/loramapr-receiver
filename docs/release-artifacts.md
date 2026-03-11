@@ -8,7 +8,7 @@ manifest consumed by onboarding flows.
 Use:
 
 ```bash
-packaging/release/build-artifacts.sh <version>
+packaging/release/build-artifacts.sh <version> [channel]
 ```
 
 Artifacts are generated in `dist/<version>/artifacts/` with a shared
@@ -25,6 +25,11 @@ Linux systemd layout archives:
 
 - `loramapr-receiver_<version>_linux_<arch>_systemd.tar.gz`
 
+Manifest and metadata outputs:
+
+- `cloud-manifest.fragment.json`
+- `release-metadata.json`
+
 ## Cloud Manifest Fields
 
 When publishing to `loramapr-cloud` receiver artifact catalog, map each artifact:
@@ -38,6 +43,10 @@ When publishing to `loramapr-cloud` receiver artifact catalog, map each artifact
 - `signatureUrl`: optional (future signing pipeline)
 - `recommended`: policy-controlled flag
 
+Cloud-ready mapping is produced directly by `cloud-manifest.fragment.json`. This
+fragment already includes platform/arch/checksum/relative URL for each artifact,
+including Raspberry Pi aliases for Linux systemd arm64/armv7 outputs.
+
 ## Suggested URL Pattern
 
 Suggested host path convention:
@@ -46,3 +55,6 @@ Suggested host path convention:
 
 This is compatible with existing cloud catalog patterns and keeps receiver
 versioning explicit in URL path.
+
+The generated `relativeUrl` values in the manifest fragment are based on this
+path pattern (`receiver/<channel>/<version>/<artifact-file>`).

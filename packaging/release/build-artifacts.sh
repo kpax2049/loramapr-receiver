@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 VERSION="${1:-${VERSION:-}}"
+CHANNEL="${2:-${CHANNEL:-stable}}"
 GO_BIN="${GO_BIN:-$(command -v go || true)}"
 
 if [[ -z "${GO_BIN}" && -x "/usr/local/go/bin/go" ]]; then
@@ -15,7 +16,7 @@ if [[ -z "${GO_BIN}" ]]; then
 fi
 
 if [[ -z "${VERSION}" ]]; then
-  echo "Usage: $0 <version>  (or set VERSION env var)" >&2
+  echo "Usage: $0 <version> [channel]  (or set VERSION/CHANNEL env vars)" >&2
   exit 1
 fi
 
@@ -103,6 +104,22 @@ for target in "${targets[@]}"; do
   fi
 done
 
+required_linux=(
+  "loramapr-receiver_${VERSION}_linux_amd64.tar.gz"
+  "loramapr-receiver_${VERSION}_linux_arm64.tar.gz"
+  "loramapr-receiver_${VERSION}_linux_armv7.tar.gz"
+  "loramapr-receiver_${VERSION}_linux_amd64_systemd.tar.gz"
+  "loramapr-receiver_${VERSION}_linux_arm64_systemd.tar.gz"
+  "loramapr-receiver_${VERSION}_linux_armv7_systemd.tar.gz"
+)
+
+for required_file in "${required_linux[@]}"; do
+  if [[ ! -f "${ARTIFACTS_DIR}/${required_file}" ]]; then
+    echo "required artifact missing: ${required_file}" >&2
+    exit 1
+  fi
+done
+
 (
   cd "${ARTIFACTS_DIR}"
   if command -v sha256sum >/dev/null 2>&1; then
@@ -111,5 +128,14 @@ done
     shasum -a 256 * > SHA256SUMS
   fi
 )
+
+GIT_COMMIT="$(git -C "${ROOT_DIR}" rev-parse --short HEAD 2>/dev/null || true)"
+"${GO_BIN}" run ./cmd/loramapr-release-manifest \
+  -version "${VERSION}" \
+  -channel "${CHANNEL}" \
+  -artifacts-dir "${ARTIFACTS_DIR}" \
+  -manifest-out "${ARTIFACTS_DIR}/cloud-manifest.fragment.json" \
+  -metadata-out "${ARTIFACTS_DIR}/release-metadata.json" \
+  -git-commit "${GIT_COMMIT}"
 
 echo "Artifacts generated under ${ARTIFACTS_DIR}"

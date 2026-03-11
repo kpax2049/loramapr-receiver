@@ -1,6 +1,7 @@
 BINARY_NAME := loramapr-receiverd
 BIN_DIR := bin
 VERSION ?= dev
+CHANNEL ?= stable
 GO ?= $(shell command -v go 2>/dev/null || echo /usr/local/go/bin/go)
 
 .PHONY: build run test fmt tidy release clean
@@ -22,7 +23,7 @@ tidy:
 	$(GO) mod tidy
 
 release:
-	packaging/release/build-artifacts.sh $(VERSION)
+	packaging/release/build-artifacts.sh $(VERSION) $(CHANNEL)
 
 clean:
 	rm -rf $(BIN_DIR)

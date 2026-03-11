@@ -6,6 +6,10 @@ on:
       version:
         description: Release version (for example v1.0.0)
         required: true
+      channel:
+        description: Release channel (stable or beta)
+        required: true
+        default: stable
   push:
     tags:
       - 'v*'
@@ -23,23 +27,26 @@ jobs:
           go-version-file: go.mod
 
       - name: Resolve Version
-        id: version
+        id: release
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             VERSION="${{ github.event.inputs.version }}"
+            CHANNEL="${{ github.event.inputs.channel }}"
           else
             VERSION="${GITHUB_REF_NAME}"
+            CHANNEL="stable"
           fi
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "channel=${CHANNEL}" >> "$GITHUB_OUTPUT"
 
       - name: Run Tests
         run: go test ./...
 
       - name: Build Artifacts
-        run: packaging/release/build-artifacts.sh "${{ steps.version.outputs.version }}"
+        run: packaging/release/build-artifacts.sh "${{ steps.release.outputs.version }}" "${{ steps.release.outputs.channel }}"
 
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: receiver-artifacts-${{ steps.version.outputs.version }}
-          path: dist/${{ steps.version.outputs.version }}/artifacts/
+          name: receiver-artifacts-${{ steps.release.outputs.version }}-${{ steps.release.outputs.channel }}
+          path: dist/${{ steps.release.outputs.version }}/artifacts/

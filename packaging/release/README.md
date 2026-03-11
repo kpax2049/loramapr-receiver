@@ -21,6 +21,12 @@ From repository root:
 packaging/release/build-artifacts.sh v1.0.0
 ```
 
+Optional channel override:
+
+```bash
+packaging/release/build-artifacts.sh v1.0.0 beta
+```
+
 Outputs are written to:
 
 - `dist/<version>/build/`
@@ -41,6 +47,11 @@ Checksum file:
 
 - `SHA256SUMS` (sha256 over all files in `artifacts/`)
 
+Cloud-manifest metadata:
+
+- `cloud-manifest.fragment.json` (machine-consumable artifact mapping)
+- `release-metadata.json` (build summary for maintainers/publish pipelines)
+
 ## Linux Layout Archive
 
 `*_systemd.tar.gz` archives include:
@@ -52,3 +63,21 @@ Checksum file:
 - `usr/share/loramapr/scripts/uninstall.sh`
 
 This aligns with the Linux-first service/install model.
+
+## Cloud Manifest Fragment
+
+`cloud-manifest.fragment.json` is generated directly from artifact filenames and
+`SHA256SUMS` and includes:
+
+- `receiverVersion`
+- `channel`
+- artifact entries with:
+  - `platform`, `arch`
+  - `kind` (`binary`, `systemd_layout`)
+  - `filename`
+  - `checksumSha256`
+  - `sizeBytes`
+  - `relativeUrl`
+
+Raspberry Pi aliases are emitted for Linux arm64/armv7 systemd layout archives
+using `platform = raspberry_pi`.
