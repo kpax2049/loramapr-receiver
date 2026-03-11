@@ -34,6 +34,7 @@ Use:
 
 ```bash
 packaging/debian/validate-deb.sh <deb-file>
+packaging/debian/validate-lifecycle.sh <deb-file>
 ```
 
 This checks package metadata and expected content paths.

@@ -7,8 +7,10 @@ fi
 
 case "${1:-}" in
   purge)
+    rm -f /etc/loramapr/receiver.json || true
     rm -f /var/lib/loramapr/receiver-state.json || true
     rm -rf /var/lib/loramapr /var/log/loramapr || true
+    rmdir /etc/loramapr >/dev/null 2>&1 || true
     ;;
 esac
 

@@ -12,6 +12,7 @@ Architecture decisions and product runtime specifications for LoRaMapr Receiver.
 - [Diagnostics and Failure Taxonomy](./diagnostics.md)
 - [Version, Channel, and Upgrade Safety](./version-channel-upgrades.md)
 - [Service and Install Model](./service-install.md)
+- [Debian Package Lifecycle Behavior](./linux-package-lifecycle.md)
 - [Release Artifact Mapping](./release-artifacts.md)
 - [Linux/Pi Distribution Path](./linux-pi-distribution.md)
 - [Raspberry Pi Appliance Path](./raspberry-pi-appliance.md)

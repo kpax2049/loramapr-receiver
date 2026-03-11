@@ -93,6 +93,7 @@ This repository currently contains:
 - [Diagnostics and Failure Taxonomy](./docs/diagnostics.md)
 - [Version, Channel, and Upgrade Safety](./docs/version-channel-upgrades.md)
 - [Service and Install Model](./docs/service-install.md)
+- [Debian Package Lifecycle Behavior](./docs/linux-package-lifecycle.md)
 - [Release Artifact Mapping](./docs/release-artifacts.md)
 - [Linux/Pi Distribution Path](./docs/linux-pi-distribution.md)
 - [Raspberry Pi Appliance Path](./docs/raspberry-pi-appliance.md)

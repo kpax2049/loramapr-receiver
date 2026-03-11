@@ -29,6 +29,9 @@ Generated files:
 Manual/systemd tarball fallback still uses the existing `install` command path
 when package-based install is not available.
 
+For package lifecycle semantics (`install`, `upgrade`, `remove`, `purge`,
+tarball migration behavior), see `docs/linux-package-lifecycle.md`.
+
 ## Advanced / Packaging Path
 
 For staged builds/chroots/package assembly, commands support:

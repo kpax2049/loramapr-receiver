@@ -111,6 +111,14 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now loramapr-receiverd
 ```
 
+## Package Lifecycle Expectations
+
+- `apt upgrade`: preserves config/state and restarts service safely
+- `apt remove`: stops service and keeps config/state
+- `apt purge`: removes config/state and resets local receiver data
+
+Detailed lifecycle policy: `docs/linux-package-lifecycle.md`.
+
 ## Maintainer Publish Flow
 
 1. Build release artifacts:

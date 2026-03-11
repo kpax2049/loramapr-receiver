@@ -19,13 +19,38 @@ create_service_user() {
   fi
 }
 
-reload_and_start_service() {
+normalize_legacy_systemd_unit() {
+  legacy_unit="/etc/systemd/system/loramapr-receiverd.service"
+  packaged_unit="/lib/systemd/system/loramapr-receiverd.service"
+  if [ ! -f "${legacy_unit}" ]; then
+    return
+  fi
+  if [ ! -f "${packaged_unit}" ]; then
+    return
+  fi
+
+  if cmp -s "${legacy_unit}" "${packaged_unit}"; then
+    rm -f "${legacy_unit}" || true
+    return
+  fi
+
+  echo "Keeping legacy unit override at ${legacy_unit}; review if migration is required." >&2
+}
+
+start_or_restart_service() {
   if ! command -v systemctl >/dev/null 2>&1; then
     return
   fi
 
   systemctl daemon-reload || true
-  systemctl enable loramapr-receiverd.service >/dev/null 2>&1 || true
+  action="${1:-install}"
+  if [ "${action}" = "install" ]; then
+    systemctl enable loramapr-receiverd.service >/dev/null 2>&1 || true
+  fi
+
+  if ! systemctl is-enabled --quiet loramapr-receiverd.service; then
+    return
+  fi
 
   if systemctl is-active --quiet loramapr-receiverd.service; then
     systemctl restart loramapr-receiverd.service || true
@@ -37,13 +62,19 @@ reload_and_start_service() {
 case "${1:-}" in
   configure|reconfigure)
     create_service_user
+    normalize_legacy_systemd_unit
     mkdir -p /etc/loramapr /var/lib/loramapr /var/log/loramapr
     chown -R loramapr:loramapr /var/lib/loramapr /var/log/loramapr || true
     if [ -f /etc/loramapr/receiver.json ]; then
       chown root:loramapr /etc/loramapr/receiver.json || true
       chmod 0640 /etc/loramapr/receiver.json || true
     fi
-    reload_and_start_service
+
+    if [ -n "${2:-}" ]; then
+      start_or_restart_service "upgrade"
+    else
+      start_or_restart_service "install"
+    fi
     ;;
 esac
 

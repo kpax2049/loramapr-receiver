@@ -83,3 +83,19 @@ Only boolean presence indicators are included for secret-bearing fields.
 
 This keeps terminology aligned between local receiver support and cloud onboarding
 status surfaces.
+
+## Package Lifecycle Troubleshooting
+
+For Debian-family package lifecycle issues:
+
+1. Check package/service status:
+   - `systemctl status loramapr-receiverd --no-pager`
+   - `dpkg -s loramapr-receiver`
+2. Check config/state preservation expectations in:
+   - `docs/linux-package-lifecycle.md`
+3. Confirm install mode path:
+   - `.deb`/APT path is primary
+   - tarball/systemd extraction is fallback/advanced
+
+When escalating support, include whether issue occurred during install, upgrade,
+remove, purge, or tarball-to-package migration.
