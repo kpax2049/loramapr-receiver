@@ -4,10 +4,10 @@ import (
 	"net"
 	"net/url"
 	"runtime"
-	"runtime/debug"
 	"strings"
 	"time"
 
+	"github.com/loramapr/loramapr-receiver/internal/buildinfo"
 	"github.com/loramapr/loramapr-receiver/internal/config"
 	"github.com/loramapr/loramapr-receiver/internal/meshtastic"
 	"github.com/loramapr/loramapr-receiver/internal/state"
@@ -29,6 +29,9 @@ type SupportSnapshot struct {
 	GeneratedAt time.Time `json:"generated_at"`
 	Runtime     struct {
 		Version    string `json:"version"`
+		Channel    string `json:"channel"`
+		Commit     string `json:"commit,omitempty"`
+		BuildDate  string `json:"build_date,omitempty"`
 		GoVersion  string `json:"go_version"`
 		Platform   string `json:"platform"`
 		Arch       string `json:"arch"`
@@ -106,9 +109,12 @@ func CollectSupportSnapshot(cfg config.Config, data state.Data, finding Finding,
 		deviceProbe.DetectedDevice = detectResult.Device
 	}
 
-	runtimeVersion := readRuntimeVersion()
+	build := buildinfo.Current()
 	out := SupportSnapshot{GeneratedAt: now}
-	out.Runtime.Version = runtimeVersion
+	out.Runtime.Version = build.Version
+	out.Runtime.Channel = build.Channel
+	out.Runtime.Commit = build.Commit
+	out.Runtime.BuildDate = build.BuildDate
 	out.Runtime.GoVersion = runtime.Version()
 	out.Runtime.Platform = runtime.GOOS
 	out.Runtime.Arch = runtime.GOARCH
@@ -169,14 +175,6 @@ func ProbeCloudReachability(baseURL string, timeout time.Duration) CloudProbe {
 	}
 	_ = conn.Close()
 	return CloudProbe{Status: "reachable"}
-}
-
-func readRuntimeVersion() string {
-	info, ok := debug.ReadBuildInfo()
-	if !ok || info.Main.Version == "" || info.Main.Version == "(devel)" {
-		return "dev"
-	}
-	return info.Main.Version
 }
 
 func collectRecentErrors(data state.Data, cloud CloudProbe, device DeviceProbe) []string {

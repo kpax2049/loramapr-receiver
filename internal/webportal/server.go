@@ -10,10 +10,10 @@ import (
 	"log/slog"
 	"net/http"
 	goruntime "runtime"
-	"runtime/debug"
 	"strings"
 	"time"
 
+	"github.com/loramapr/loramapr-receiver/internal/buildinfo"
 	"github.com/loramapr/loramapr-receiver/internal/status"
 )
 
@@ -48,6 +48,8 @@ type pageData struct {
 	MeshtasticState      string
 	TroubleshootingHints []string
 	RuntimeVersion       string
+	ReleaseChannel       string
+	BuildCommit          string
 	GoVersion            string
 	Platform             string
 	Arch                 string
@@ -262,10 +264,13 @@ func (s *Server) currentSnapshot() status.Snapshot {
 }
 
 func (s *Server) basePageData(title string, snap status.Snapshot) pageData {
+	build := buildinfo.Current()
 	return pageData{
 		Title:          title,
 		Snapshot:       snap,
-		RuntimeVersion: runtimeVersion(),
+		RuntimeVersion: build.Version,
+		ReleaseChannel: build.Channel,
+		BuildCommit:    build.Commit,
 		GoVersion:      goruntime.Version(),
 		Platform:       goruntime.GOOS,
 		Arch:           goruntime.GOARCH,
@@ -403,12 +408,4 @@ func troubleshootingHints(snap status.Snapshot) []string {
 		hints = append(hints, "No active issues detected. Continue monitoring Progress for node and ingest updates.")
 	}
 	return hints
-}
-
-func runtimeVersion() string {
-	info, ok := debug.ReadBuildInfo()
-	if !ok || info.Main.Version == "" || info.Main.Version == "(devel)" {
-		return "dev"
-	}
-	return info.Main.Version
 }

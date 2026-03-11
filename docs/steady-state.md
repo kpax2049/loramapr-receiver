@@ -45,6 +45,9 @@ Heartbeat is sent on runtime tick interval (`service.heartbeat`) and includes:
 
 `/api/status` now includes cloud/forwarding observability fields:
 
+- `receiver_version`
+- `release_channel`
+- `build_commit`
 - `cloud_reachable`
 - `heartbeat_fresh`
 - `last_heartbeat_sent`

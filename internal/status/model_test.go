@@ -84,3 +84,21 @@ func TestFailureLifecycle(t *testing.T) {
 		t.Fatalf("expected history to be retained, got %d", len(snap.RecentFailures))
 	}
 }
+
+func TestBuildInfo(t *testing.T) {
+	t.Parallel()
+
+	model := New()
+	model.SetBuildInfo("v1.1.0", "stable", "abc123")
+	snap := model.Snapshot()
+
+	if snap.ReceiverVersion != "v1.1.0" {
+		t.Fatalf("unexpected receiver_version: %q", snap.ReceiverVersion)
+	}
+	if snap.ReleaseChannel != "stable" {
+		t.Fatalf("unexpected release_channel: %q", snap.ReleaseChannel)
+	}
+	if snap.BuildCommit != "abc123" {
+		t.Fatalf("unexpected build_commit: %q", snap.BuildCommit)
+	}
+}

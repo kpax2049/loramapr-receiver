@@ -90,6 +90,7 @@ This repository currently contains:
 - [Meshtastic Adapter Behavior](./docs/meshtastic-adapter.md)
 - [Steady-State Cloud Loop](./docs/steady-state.md)
 - [Diagnostics and Failure Taxonomy](./docs/diagnostics.md)
+- [Version, Channel, and Upgrade Safety](./docs/version-channel-upgrades.md)
 - [Service and Install Model](./docs/service-install.md)
 - [Release Artifact Mapping](./docs/release-artifacts.md)
 - [Linux/Pi Distribution Path](./docs/linux-pi-distribution.md)

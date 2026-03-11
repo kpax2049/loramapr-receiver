@@ -5,6 +5,8 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 VERSION="${1:-${VERSION:-}}"
 CHANNEL="${2:-${CHANNEL:-stable}}"
 GO_BIN="${GO_BIN:-$(command -v go || true)}"
+GIT_COMMIT="$(git -C "${ROOT_DIR}" rev-parse --short HEAD 2>/dev/null || true)"
+BUILD_DATE="${BUILD_DATE:-}"
 
 if [[ -z "${GO_BIN}" && -x "/usr/local/go/bin/go" ]]; then
   GO_BIN="/usr/local/go/bin/go"
@@ -20,12 +22,28 @@ if [[ -z "${VERSION}" ]]; then
   exit 1
 fi
 
+if [[ -z "${BUILD_DATE}" && -n "${SOURCE_DATE_EPOCH:-}" ]]; then
+  BUILD_DATE="$(date -u -r "${SOURCE_DATE_EPOCH}" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d "@${SOURCE_DATE_EPOCH}" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || true)"
+fi
+
 DIST_DIR="${ROOT_DIR}/dist/${VERSION}"
 BUILD_DIR="${DIST_DIR}/build"
 ARTIFACTS_DIR="${DIST_DIR}/artifacts"
 
 rm -rf "${DIST_DIR}"
 mkdir -p "${BUILD_DIR}" "${ARTIFACTS_DIR}"
+
+ldflags=(
+  "-s"
+  "-w"
+  "-X github.com/loramapr/loramapr-receiver/internal/buildinfo.Version=${VERSION}"
+  "-X github.com/loramapr/loramapr-receiver/internal/buildinfo.Channel=${CHANNEL}"
+  "-X github.com/loramapr/loramapr-receiver/internal/buildinfo.Commit=${GIT_COMMIT}"
+)
+if [[ -n "${BUILD_DATE}" ]]; then
+  ldflags+=("-X github.com/loramapr/loramapr-receiver/internal/buildinfo.BuildDate=${BUILD_DATE}")
+fi
+ldflags_str="${ldflags[*]}"
 
 targets=(
   "linux amd64 '' tar.gz"
@@ -62,10 +80,10 @@ for target in "${targets[@]}"; do
   echo "Building ${TARGET_ID}"
   if [[ -n "${GOARM_TARGET}" && "${GOARCH_TARGET}" == "arm" ]]; then
     GOOS="${GOOS_TARGET}" GOARCH="${GOARCH_TARGET}" GOARM="${GOARM_TARGET}" \
-      CGO_ENABLED=0 "${GO_BIN}" build -trimpath -ldflags "-s -w" -o "${BIN_PATH}" ./cmd/loramapr-receiverd
+      CGO_ENABLED=0 "${GO_BIN}" build -buildvcs=false -trimpath -ldflags "${ldflags_str}" -o "${BIN_PATH}" ./cmd/loramapr-receiverd
   else
     GOOS="${GOOS_TARGET}" GOARCH="${GOARCH_TARGET}" CGO_ENABLED=0 \
-      "${GO_BIN}" build -trimpath -ldflags "-s -w" -o "${BIN_PATH}" ./cmd/loramapr-receiverd
+      "${GO_BIN}" build -buildvcs=false -trimpath -ldflags "${ldflags_str}" -o "${BIN_PATH}" ./cmd/loramapr-receiverd
   fi
 
   ARTIFACT_BASE="loramapr-receiver_${VERSION}_${GOOS_TARGET}_${ARCH_LABEL}"
@@ -129,7 +147,6 @@ done
   fi
 )
 
-GIT_COMMIT="$(git -C "${ROOT_DIR}" rev-parse --short HEAD 2>/dev/null || true)"
 "${GO_BIN}" run ./cmd/loramapr-release-manifest \
   -version "${VERSION}" \
   -channel "${CHANNEL}" \

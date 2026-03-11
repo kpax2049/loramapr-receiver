@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/loramapr/loramapr-receiver/internal/buildinfo"
 	"github.com/loramapr/loramapr-receiver/internal/config"
 	"github.com/loramapr/loramapr-receiver/internal/diagnostics"
 	"github.com/loramapr/loramapr-receiver/internal/install"
@@ -190,6 +191,9 @@ func doctorCommand(args []string) {
 	})
 
 	report := map[string]any{
+		"receiver_version":     buildinfo.Current().Version,
+		"release_channel":      buildinfo.Current().Channel,
+		"build_commit":         buildinfo.Current().Commit,
 		"config_path":          *configPath,
 		"state_path":           cfg.Paths.StateFile,
 		"pairing_phase":        snapshot.Pairing.Phase,
@@ -265,6 +269,9 @@ func statusCommand(args []string) {
 	})
 
 	output := map[string]any{
+		"receiver_version": buildinfo.Current().Version,
+		"release_channel":  buildinfo.Current().Channel,
+		"build_commit":     buildinfo.Current().Commit,
 		"config_path":      *configPath,
 		"state_path":       cfg.Paths.StateFile,
 		"installation_id":  snapshot.Installation.ID,

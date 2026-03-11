@@ -3,6 +3,8 @@
   <h2>Advanced Details</h2>
   <table>
     <tr><th>Runtime Version</th><td class="mono">{{.RuntimeVersion}}</td></tr>
+    <tr><th>Release Channel</th><td class="mono">{{.ReleaseChannel}}</td></tr>
+    <tr><th>Build Commit</th><td class="mono">{{if .BuildCommit}}{{.BuildCommit}}{{else}}unknown{{end}}</td></tr>
     <tr><th>Go Version</th><td class="mono">{{.GoVersion}}</td></tr>
     <tr><th>Platform</th><td class="mono">{{.Platform}}/{{.Arch}}</td></tr>
     <tr><th>Service Mode</th><td class="mono">{{.Snapshot.Mode}}</td></tr>

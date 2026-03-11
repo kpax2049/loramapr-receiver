@@ -15,6 +15,8 @@ import (
 type PairingPhase string
 
 const (
+	CurrentSchemaVersion = 2
+
 	PairingUnpaired           PairingPhase = "unpaired"
 	PairingCodeEntered        PairingPhase = "pairing_code_entered"
 	PairingBootstrapExchanged PairingPhase = "bootstrap_exchanged"
@@ -23,11 +25,12 @@ const (
 )
 
 type Data struct {
-	Installation InstallationState `json:"installation"`
-	Pairing      PairingState      `json:"pairing"`
-	Cloud        CloudState        `json:"cloud"`
-	Runtime      RuntimeState      `json:"runtime"`
-	Metadata     MetadataState     `json:"metadata"`
+	SchemaVersion int               `json:"schema_version"`
+	Installation  InstallationState `json:"installation"`
+	Pairing       PairingState      `json:"pairing"`
+	Cloud         CloudState        `json:"cloud"`
+	Runtime       RuntimeState      `json:"runtime"`
+	Metadata      MetadataState     `json:"metadata"`
 }
 
 type InstallationState struct {
@@ -99,11 +102,15 @@ func Open(path string) (*Store, error) {
 		return nil, err
 	}
 
+	migrated, err := s.migrate()
+	if err != nil {
+		return nil, err
+	}
 	changed, err := s.ensureDefaults()
 	if err != nil {
 		return nil, err
 	}
-	if changed {
+	if changed || migrated {
 		if err := s.Save(); err != nil {
 			return nil, err
 		}
@@ -159,6 +166,10 @@ func (s *Store) ensureDefaults() (bool, error) {
 	defer s.mu.Unlock()
 
 	changed := false
+	if s.data.SchemaVersion == 0 {
+		s.data.SchemaVersion = CurrentSchemaVersion
+		changed = true
+	}
 	if s.data.Installation.ID == "" {
 		id, err := newInstallID()
 		if err != nil {
@@ -180,6 +191,48 @@ func (s *Store) ensureDefaults() (bool, error) {
 
 	if s.data.Pairing.Phase == "" {
 		s.data.Pairing.Phase = PairingUnpaired
+		changed = true
+	}
+	return changed, nil
+}
+
+func (s *Store) migrate() (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	changed := false
+	version := s.data.SchemaVersion
+	if version == 0 {
+		version = 1
+		changed = true
+	}
+
+	if version <= 1 {
+		switch s.data.Pairing.Phase {
+		case "paired", "ready":
+			s.data.Pairing.Phase = PairingSteadyState
+			changed = true
+		case "pairing":
+			s.data.Pairing.Phase = PairingCodeEntered
+			changed = true
+		case "":
+			// default assignment is handled in ensureDefaults
+		default:
+			if !isValidPhase(s.data.Pairing.Phase) {
+				s.data.Pairing.Phase = PairingUnpaired
+				changed = true
+			}
+		}
+		version = 2
+		changed = true
+	}
+
+	if version > CurrentSchemaVersion {
+		return false, errors.New("state schema version is newer than this runtime")
+	}
+
+	if s.data.SchemaVersion != version {
+		s.data.SchemaVersion = version
 		changed = true
 	}
 	return changed, nil
@@ -235,4 +288,13 @@ func newInstallID() (string, error) {
 		return "", err
 	}
 	return hex.EncodeToString(buf), nil
+}
+
+func isValidPhase(phase PairingPhase) bool {
+	switch phase {
+	case PairingUnpaired, PairingCodeEntered, PairingBootstrapExchanged, PairingActivated, PairingSteadyState:
+		return true
+	default:
+		return false
+	}
 }

@@ -69,6 +69,7 @@ Example shape:
 
 Persisted fields currently include:
 
+- schema version (`schema_version`)
 - installation identity (`installation.id`)
 - installation timestamps (`created_at`, `last_started_at`)
 - pairing/bootstrap phase and retry/error metadata (`pairing.*`)
@@ -84,6 +85,21 @@ Important persisted pairing/cloud fields:
 - `cloud.ingest_api_key_secret` (durable ingest credential)
 
 These values are intentionally **not** exposed by `/api/status`.
+
+## Upgrade and Migration Handling
+
+State store now enforces `schema_version` with in-process migrations.
+
+Current schema: `2`
+
+Migration behavior:
+
+- legacy `pairing.phase` values (`paired`, `ready`) migrate to `steady_state`
+- legacy `pairing.phase = pairing` migrates to `pairing_code_entered`
+- unknown invalid pairing phase values reset to `unpaired`
+
+If on-disk state schema is newer than the running binary supports, startup fails
+fast to prevent destructive downgrades.
 
 ## Typical Packaged Paths (Planned Linux-first)
 

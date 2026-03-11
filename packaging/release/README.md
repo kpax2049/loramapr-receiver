@@ -32,6 +32,13 @@ Outputs are written to:
 - `dist/<version>/build/`
 - `dist/<version>/artifacts/`
 
+Receiver binaries are stamped with build metadata via `ldflags`:
+
+- version
+- channel
+- commit
+- optional build date (`BUILD_DATE` or `SOURCE_DATE_EPOCH`)
+
 ## Naming Convention
 
 Binary archives:

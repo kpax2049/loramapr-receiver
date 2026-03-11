@@ -1,6 +1,7 @@
 package state
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 )
@@ -15,6 +16,9 @@ func TestOpenInitializesDefaults(t *testing.T) {
 	}
 
 	snapshot := store.Snapshot()
+	if snapshot.SchemaVersion != CurrentSchemaVersion {
+		t.Fatalf("expected schema version %d, got %d", CurrentSchemaVersion, snapshot.SchemaVersion)
+	}
 	if snapshot.Installation.ID == "" {
 		t.Fatal("expected installation ID to be generated")
 	}
@@ -52,6 +56,9 @@ func TestUpdatePersistsAcrossRestart(t *testing.T) {
 	}
 
 	snapshot := store2.Snapshot()
+	if snapshot.SchemaVersion != CurrentSchemaVersion {
+		t.Fatalf("expected schema version %d, got %d", CurrentSchemaVersion, snapshot.SchemaVersion)
+	}
 	if snapshot.Pairing.Phase != PairingActivated {
 		t.Fatalf("expected phase %q, got %q", PairingActivated, snapshot.Pairing.Phase)
 	}
@@ -66,5 +73,33 @@ func TestUpdatePersistsAcrossRestart(t *testing.T) {
 	}
 	if snapshot.Runtime.Mode != "service" {
 		t.Fatalf("unexpected mode: %q", snapshot.Runtime.Mode)
+	}
+}
+
+func TestOpenMigratesLegacyState(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "receiver-state.json")
+	legacy := `{
+  "installation": {"id":"legacy-install"},
+  "pairing": {"phase":"paired"},
+  "cloud": {"endpoint_url":"https://api.example.com"},
+  "runtime": {"profile":"linux-service","mode":"service"},
+  "metadata": {}
+}`
+	if err := os.WriteFile(path, []byte(legacy), 0o600); err != nil {
+		t.Fatalf("write legacy state: %v", err)
+	}
+
+	store, err := Open(path)
+	if err != nil {
+		t.Fatalf("open migrated state: %v", err)
+	}
+	snapshot := store.Snapshot()
+	if snapshot.SchemaVersion != CurrentSchemaVersion {
+		t.Fatalf("expected schema version %d, got %d", CurrentSchemaVersion, snapshot.SchemaVersion)
+	}
+	if snapshot.Pairing.Phase != PairingSteadyState {
+		t.Fatalf("expected migrated pairing phase %q, got %q", PairingSteadyState, snapshot.Pairing.Phase)
 	}
 }

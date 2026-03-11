@@ -31,6 +31,9 @@ type FailureEvent struct {
 
 type Snapshot struct {
 	InstallationID    string                     `json:"installation_id"`
+	ReceiverVersion   string                     `json:"receiver_version,omitempty"`
+	ReleaseChannel    string                     `json:"release_channel,omitempty"`
+	BuildCommit       string                     `json:"build_commit,omitempty"`
 	Mode              string                     `json:"mode"`
 	RuntimeProfile    string                     `json:"runtime_profile"`
 	Lifecycle         Lifecycle                  `json:"lifecycle"`
@@ -120,6 +123,14 @@ func (m *Model) SetRuntimeProfile(profile string) {
 func (m *Model) SetInstallationID(id string) {
 	m.Update(func(s *Snapshot) {
 		s.InstallationID = id
+	})
+}
+
+func (m *Model) SetBuildInfo(version, channel, commit string) {
+	m.Update(func(s *Snapshot) {
+		s.ReceiverVersion = normalize(version)
+		s.ReleaseChannel = normalize(channel)
+		s.BuildCommit = normalize(commit)
 	})
 }
 

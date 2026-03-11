@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/loramapr/loramapr-receiver/internal/buildinfo"
 	"github.com/loramapr/loramapr-receiver/internal/cloudclient"
 	"github.com/loramapr/loramapr-receiver/internal/config"
 	"github.com/loramapr/loramapr-receiver/internal/diagnostics"
@@ -44,6 +45,7 @@ type Service struct {
 	container *Container
 	mode      config.RunMode
 	steady    steadyState
+	build     buildinfo.Info
 }
 
 type Container struct {
@@ -105,6 +107,8 @@ func New(cfg config.Config, logger *slog.Logger) (*Service, error) {
 	current = store.Snapshot()
 	statusModel := status.New()
 	statusModel.SetInstallationID(current.Installation.ID)
+	build := buildinfo.Current()
+	statusModel.SetBuildInfo(build.Version, build.Channel, build.Commit)
 	statusModel.SetMode(string(mode))
 	statusModel.SetRuntimeProfile(profile)
 	statusModel.SetPairingPhase(string(current.Pairing.Phase))
@@ -114,6 +118,7 @@ func New(cfg config.Config, logger *slog.Logger) (*Service, error) {
 
 	svc := &Service{}
 	svc.mode = mode
+	svc.build = build
 	svc.steady = steadyState{
 		ingestQueue: make([]queuedIngestEvent, 0, 64),
 	}
@@ -137,7 +142,11 @@ func New(cfg config.Config, logger *slog.Logger) (*Service, error) {
 			cloud,
 			logger,
 			pairing.ActivationIdentity{
-				RuntimeVersion: "0.1.0-dev",
+				RuntimeVersion: build.Version,
+				Metadata: map[string]any{
+					"releaseChannel": build.Channel,
+					"buildCommit":    build.Commit,
+				},
 			},
 		),
 	}
@@ -150,6 +159,9 @@ func (s *Service) Run(ctx context.Context) error {
 	c := s.container
 	c.Logger.Info(
 		"starting loramapr-receiverd",
+		"version", s.build.Version,
+		"channel", s.build.Channel,
+		"commit", s.build.Commit,
 		"mode", s.mode,
 		"profile", c.Status.Snapshot().RuntimeProfile,
 		"state_file", c.State.Path(),
@@ -397,7 +409,7 @@ func (s *Service) sendHeartbeat(ctx context.Context, snapshot state.Data, meshSn
 	}
 
 	ack, err := s.container.Cloud.SendReceiverHeartbeat(ctx, endpoint, apiKey, cloudclient.ReceiverHeartbeat{
-		RuntimeVersion:  "0.1.0-dev",
+		RuntimeVersion:  s.build.Version,
 		Platform:        goruntime.GOOS,
 		Arch:            goruntime.GOARCH,
 		LocalNodeID:     meshSnap.LocalNodeID,
@@ -408,6 +420,8 @@ func (s *Service) sendHeartbeat(ctx context.Context, snapshot state.Data, meshSn
 			"meshtasticState":     meshSnap.State,
 			"ingestQueueDepth":    len(s.steady.ingestQueue),
 			"coarseFailureReason": coarseFailure,
+			"releaseChannel":      s.build.Channel,
+			"buildCommit":         s.build.Commit,
 		},
 	})
 	if err != nil {
