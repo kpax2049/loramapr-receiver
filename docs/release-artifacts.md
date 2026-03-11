@@ -31,6 +31,11 @@ Linux Debian packages:
 - `loramapr-receiver_<version>_linux_arm64.deb`
 - `loramapr-receiver_<version>_linux_armv7.deb` (`armhf` package architecture)
 
+Raspberry Pi appliance image artifacts (when Pi image build is enabled):
+
+- `loramapr-receiver_<version>_pi_arm64.img.xz`
+- `loramapr-receiver_<version>_pi_arm64.image-metadata.json`
+
 Manifest and metadata outputs:
 
 - `cloud-manifest.fragment.json`
@@ -39,6 +44,7 @@ Manifest and metadata outputs:
 Validation helper:
 
 - `packaging/debian/validate-deb.sh <deb-file>`
+- `packaging/pi/image/validate-image.sh <image-artifact>`
 
 ## Cloud Manifest Fields
 

@@ -37,7 +37,7 @@ Reference config: `packaging/pi/receiver.appliance.json`
 
 ## Image Build Scaffolding
 
-Image build scaffolding is provided in `packaging/pi/image/`.
+Image build automation is provided in `packaging/pi/image/`.
 
 Inputs:
 
@@ -45,11 +45,20 @@ Inputs:
   `loramapr-receiver_<version>_linux_arm64_systemd.tar.gz`
 - Raspberry Pi OS image builder (`pi-gen`) workspace
 
-Entry point:
+Entry points:
 
-- `packaging/pi/image/build-image.sh <version>`
+- direct image build:
+  - `packaging/pi/image/build-image.sh <version> [channel]`
+- release-integrated image build:
+  - `PI_GEN_DIR=/path/to/pi-gen ENABLE_PI_IMAGE=1 packaging/release/build-artifacts.sh <version> <channel>`
 
-This prepares a `stage-loramapr` layer for `pi-gen` that installs:
+The build flow prepares `stage-loramapr` for `pi-gen`, runs image generation,
+and emits:
+
+- `loramapr-receiver_<version>_pi_arm64.img.xz`
+- `loramapr-receiver_<version>_pi_arm64.image-metadata.json`
+
+Image contents include:
 
 - receiver binary + config + service unit
 - appliance config defaults

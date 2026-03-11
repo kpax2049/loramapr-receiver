@@ -19,7 +19,12 @@ Expected release artifact input for image build:
 
 - `loramapr-receiver_<version>_linux_arm64_systemd.tar.gz`
 
-This artifact is produced by the Prompt 8 release pipeline.
+This artifact is produced by the release pipeline and used to construct the Pi
+appliance image.
+
+Release image output:
+
+- `loramapr-receiver_<version>_pi_arm64.img.xz`
 
 GA planning reference:
 

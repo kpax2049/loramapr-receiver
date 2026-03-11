@@ -1,36 +1,53 @@
-# Raspberry Pi Image Build Scaffolding
+# Raspberry Pi Image Build
 
-This directory provides a practical skeleton for building a Raspberry Pi image
-that includes LoRaMapr Receiver preinstalled and enabled at boot.
+This directory contains Raspberry Pi appliance image build automation based on
+the existing `pi-gen` stage integration.
 
-## Prerequisites
+## Release-oriented Build
 
-1. A release artifact from this repository:
-   - `dist/<version>/artifacts/loramapr-receiver_<version>_linux_arm64_systemd.tar.gz`
-2. A local `pi-gen` workspace for Raspberry Pi OS image builds.
+From repository root:
 
-## Prepare Build
+```bash
+VERSION=v2.2.0-rc1
+CHANNEL=stable
+PI_GEN_DIR=/path/to/pi-gen \
+ENABLE_PI_IMAGE=1 \
+packaging/release/build-artifacts.sh "${VERSION}" "${CHANNEL}"
+```
+
+This produces image output under:
+
+- `dist/<version>/artifacts/loramapr-receiver_<version>_pi_arm64.img.xz`
+- `dist/<version>/artifacts/loramapr-receiver_<version>_pi_arm64.image-metadata.json`
+
+## Direct Image Build
 
 ```bash
 PI_GEN_DIR=/path/to/pi-gen \
-packaging/pi/image/build-image.sh v1.0.0
+packaging/pi/image/build-image.sh <version> [channel]
 ```
 
-Optional override for artifact path:
+Optional prep-only mode (no image build):
 
 ```bash
 PI_GEN_DIR=/path/to/pi-gen \
-LORAMAPR_ARM64_SYSTEMD_TARBALL=/tmp/loramapr-receiver_v1.0.0_linux_arm64_systemd.tar.gz \
-packaging/pi/image/build-image.sh v1.0.0
+PI_IMAGE_PREP_ONLY=1 \
+packaging/pi/image/build-image.sh <version>
 ```
 
-## Build Image
+## Expected Image Contents
 
-After preparation, run from `pi-gen` root:
+- LoRaMapr Receiver runtime preinstalled (`arm64` service layout payload)
+- appliance config defaults (`runtime.profile=appliance-pi`)
+- systemd service enabled at boot
+- local portal bind configured for LAN access
+
+## Validation
+
+Validate produced image artifact:
 
 ```bash
-./build-docker.sh -c loramapr.config
+packaging/pi/image/validate-image.sh dist/<version>/artifacts/loramapr-receiver_<version>_pi_arm64.img.xz
 ```
 
-The resulting image under `pi-gen/deploy/` contains the receiver runtime,
-appliance config defaults, and service enablement symlink.
+Validation checks compressed image integrity and basic size sanity.

@@ -34,6 +34,13 @@ environments:
 ENABLE_DEB=0 packaging/release/build-artifacts.sh v1.0.0 beta
 ```
 
+Enable Raspberry Pi appliance image output (requires `PI_GEN_DIR`):
+
+```bash
+PI_GEN_DIR=/path/to/pi-gen ENABLE_PI_IMAGE=1 \
+  packaging/release/build-artifacts.sh v1.0.0 stable
+```
+
 Outputs are written to:
 
 - `dist/<version>/build/`
@@ -62,6 +69,11 @@ Linux Debian packages:
 - `loramapr-receiver_<version>_linux_amd64.deb`
 - `loramapr-receiver_<version>_linux_arm64.deb`
 - `loramapr-receiver_<version>_linux_armv7.deb`
+
+Raspberry Pi appliance image (when `ENABLE_PI_IMAGE=1`):
+
+- `loramapr-receiver_<version>_pi_arm64.img.xz`
+- `loramapr-receiver_<version>_pi_arm64.image-metadata.json`
 
 Checksum file:
 
