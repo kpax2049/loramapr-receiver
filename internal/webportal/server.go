@@ -318,6 +318,18 @@ func componentState(snap status.Snapshot, component string) string {
 }
 
 func summaryHint(snap status.Snapshot) (string, string) {
+	if strings.TrimSpace(snap.FailureCode) != "" {
+		summary := strings.TrimSpace(snap.FailureSummary)
+		if summary == "" {
+			summary = "Receiver reported failure state: " + snap.FailureCode
+		}
+		hint := strings.TrimSpace(snap.FailureHint)
+		if hint != "" {
+			summary += " " + hint
+		}
+		return summary, "err"
+	}
+
 	switch snap.PairingPhase {
 	case "unpaired":
 		return "Receiver is waiting for a pairing code.", "warn"
@@ -348,6 +360,16 @@ func nextAction(snap status.Snapshot) string {
 
 func troubleshootingHints(snap status.Snapshot) []string {
 	hints := []string{}
+	if strings.TrimSpace(snap.FailureCode) != "" {
+		summary := strings.TrimSpace(snap.FailureSummary)
+		if summary == "" {
+			summary = snap.FailureCode
+		}
+		hints = append(hints, "Current failure: "+summary)
+		if hint := strings.TrimSpace(snap.FailureHint); hint != "" {
+			hints = append(hints, "Suggested action: "+hint)
+		}
+	}
 	if snap.PairingPhase == "unpaired" {
 		hints = append(hints, "Generate a fresh pairing code in LoRaMapr Cloud and submit it on the Pairing page.")
 	}
@@ -370,6 +392,12 @@ func troubleshootingHints(snap status.Snapshot) []string {
 	}
 	if snap.LastError != "" {
 		hints = append(hints, "Last runtime error: "+snap.LastError)
+	}
+	for _, recent := range snap.RecentFailures {
+		if recent.Code == "" || recent.Summary == "" {
+			continue
+		}
+		hints = append(hints, fmt.Sprintf("Recent failure [%s]: %s", recent.Code, recent.Summary))
 	}
 	if len(hints) == 0 {
 		hints = append(hints, "No active issues detected. Continue monitoring Progress for node and ingest updates.")

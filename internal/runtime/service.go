@@ -16,6 +16,7 @@ import (
 
 	"github.com/loramapr/loramapr-receiver/internal/cloudclient"
 	"github.com/loramapr/loramapr-receiver/internal/config"
+	"github.com/loramapr/loramapr-receiver/internal/diagnostics"
 	"github.com/loramapr/loramapr-receiver/internal/meshtastic"
 	"github.com/loramapr/loramapr-receiver/internal/pairing"
 	"github.com/loramapr/loramapr-receiver/internal/state"
@@ -266,6 +267,8 @@ func (s *Service) tick(ctx context.Context) {
 		c.Status.SetReady(false, "unknown runtime mode")
 		c.Status.SetLastError("unknown runtime mode")
 	}
+
+	s.updateFailureState(snap, meshSnap)
 }
 
 func (s *Service) onMeshtasticEvent(event meshtastic.Event) {
@@ -336,19 +339,24 @@ func (s *Service) processSteadyState(ctx context.Context, snapshot state.Data, m
 		return
 	}
 
-	if err := s.sendHeartbeat(ctx, snapshot, meshSnap); err != nil {
-		if cloudclient.IsRetryable(err) {
-			c.Logger.Warn("heartbeat failed", "err", err)
+	heartbeatErr := s.sendHeartbeat(ctx, snapshot, meshSnap)
+	if heartbeatErr != nil {
+		if cloudclient.IsRetryable(heartbeatErr) {
+			c.Logger.Warn("heartbeat failed", "err", heartbeatErr)
 		} else {
-			c.Logger.Error("heartbeat failed", "err", err)
+			c.Logger.Error("heartbeat failed", "err", heartbeatErr)
 		}
 	}
-	if err := s.drainIngestQueue(ctx, snapshot); err != nil {
-		if cloudclient.IsRetryable(err) {
-			c.Logger.Warn("ingest delivery failed", "err", err)
+	ingestErr := s.drainIngestQueue(ctx, snapshot)
+	if ingestErr != nil {
+		if cloudclient.IsRetryable(ingestErr) {
+			c.Logger.Warn("ingest delivery failed", "err", ingestErr)
 		} else {
-			c.Logger.Error("ingest delivery failed", "err", err)
+			c.Logger.Error("ingest delivery failed", "err", ingestErr)
 		}
+	}
+	if heartbeatErr == nil && ingestErr == nil {
+		c.Status.SetLastError("")
 	}
 
 	fresh := isHeartbeatFresh(s.steady.lastHeartbeatAck, c.Config.Service.Heartbeat.Std())
@@ -404,6 +412,7 @@ func (s *Service) sendHeartbeat(ctx context.Context, snapshot state.Data, meshSn
 	})
 	if err != nil {
 		s.steady.cloudReachable = false
+		s.container.Status.SetLastError(coarseCloudError(err))
 		return err
 	}
 
@@ -452,12 +461,14 @@ func (s *Service) drainIngestQueue(ctx context.Context, snapshot state.Data) err
 			item.nextAttemptAt = now.Add(deliveryRetryDelay(item.attempts))
 			s.steady.cloudReachable = false
 			s.container.Status.SetComponent("ingest", "retrying", fmt.Sprintf("retrying in %s", time.Until(item.nextAttemptAt).Round(time.Second)))
+			s.container.Status.SetLastError(coarseCloudError(err))
 			return err
 		}
 
 		s.container.Logger.Warn("dropping non-retryable ingest event", "err", err)
 		s.steady.ingestQueue = s.steady.ingestQueue[1:]
 		s.container.Status.SetComponent("ingest", "dropped", "non-retryable ingest failure")
+		s.container.Status.SetLastError(coarseCloudError(err))
 	}
 
 	return nil
@@ -629,6 +640,53 @@ func meshtasticStatusMessage(snapshot meshtastic.Snapshot) string {
 		message += " error=" + snapshot.LastError
 	}
 	return message
+}
+
+func (s *Service) updateFailureState(snapshot state.Data, meshSnap meshtastic.Snapshot) {
+	now := time.Now().UTC()
+	current := s.container.Status.Snapshot()
+	finding := diagnostics.Evaluate(diagnostics.Input{
+		PairingPhase:      string(snapshot.Pairing.Phase),
+		PairingLastChange: snapshot.Pairing.LastChange,
+		PairingLastError:  snapshot.Pairing.LastError,
+		RuntimeLastError:  current.LastError,
+		CloudReachable:    s.steady.cloudReachable,
+		MeshtasticState:   string(meshSnap.State),
+		IngestQueueDepth:  len(s.steady.ingestQueue),
+		LastPacketQueued:  s.steady.lastPacketQueued,
+		LastPacketAck:     s.steady.lastPacketAck,
+		Now:               now,
+	})
+
+	if finding.Code == diagnostics.FailureNone {
+		s.container.Status.SetFailure("", "", "")
+		return
+	}
+	s.container.Status.SetFailure(string(finding.Code), finding.Summary, finding.Hint)
+}
+
+func coarseCloudError(err error) string {
+	if err == nil {
+		return ""
+	}
+	var apiErr *cloudclient.APIError
+	if errors.As(err, &apiErr) {
+		switch apiErr.StatusCode {
+		case 401, 403:
+			return "cloud authentication rejected"
+		case 408, 429:
+			return "cloud request throttled or timed out"
+		default:
+			if apiErr.StatusCode >= 500 {
+				return "cloud service unavailable"
+			}
+			return "cloud request failed"
+		}
+	}
+	if cloudclient.IsRetryable(err) {
+		return "cloud endpoint unreachable"
+	}
+	return "cloud request failed"
 }
 
 func minInt(a, b int) int {

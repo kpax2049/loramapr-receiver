@@ -138,6 +138,31 @@ func TestAdvancedPage(t *testing.T) {
 	}
 }
 
+func TestTroubleshootingShowsFailureHint(t *testing.T) {
+	t.Parallel()
+
+	snap := sampleSnapshot()
+	snap.FailureCode = "cloud_unreachable"
+	snap.FailureSummary = "Cloud endpoint is currently unreachable"
+	snap.FailureHint = "Check DNS and outbound network connectivity."
+
+	srv := New("127.0.0.1:0", staticStatusProvider{snapshot: snap}, &recordingPairingSubmitter{}, nil)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/troubleshooting", nil)
+	srv.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "cloud_unreachable") {
+		t.Fatalf("expected failure code in troubleshooting page")
+	}
+	if !strings.Contains(body, "Check DNS and outbound network connectivity.") {
+		t.Fatalf("expected failure hint in troubleshooting page")
+	}
+}
+
 func newTestServer(t *testing.T) *Server {
 	t.Helper()
 	return New("127.0.0.1:0", staticStatusProvider{snapshot: sampleSnapshot()}, &recordingPairingSubmitter{}, nil)

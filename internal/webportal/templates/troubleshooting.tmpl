@@ -2,6 +2,12 @@
 <section class="panel">
   <h2>Troubleshooting</h2>
   <p>Use these checks before escalating support issues.</p>
+  {{if .Snapshot.FailureCode}}
+  <div class="hint err">
+    <strong>{{.Snapshot.FailureCode}}</strong>: {{.Snapshot.FailureSummary}}
+    {{if .Snapshot.FailureHint}}<br>{{.Snapshot.FailureHint}}{{end}}
+  </div>
+  {{end}}
   <ul>
     {{range .TroubleshootingHints}}
     <li>{{.}}</li>

@@ -1,6 +1,7 @@
 package status
 
 import (
+	"strings"
 	"sync"
 	"time"
 )
@@ -18,6 +19,13 @@ const (
 type ComponentStatus struct {
 	State     string    `json:"state"`
 	Message   string    `json:"message,omitempty"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+type FailureEvent struct {
+	Code      string    `json:"code"`
+	Summary   string    `json:"summary"`
+	Hint      string    `json:"hint,omitempty"`
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
@@ -40,6 +48,11 @@ type Snapshot struct {
 	LastPacketSent    *time.Time                 `json:"last_packet_sent,omitempty"`
 	LastPacketAck     *time.Time                 `json:"last_packet_ack,omitempty"`
 	IngestQueueDepth  int                        `json:"ingest_queue_depth,omitempty"`
+	FailureCode       string                     `json:"failure_code,omitempty"`
+	FailureSummary    string                     `json:"failure_summary,omitempty"`
+	FailureHint       string                     `json:"failure_hint,omitempty"`
+	FailureSince      *time.Time                 `json:"failure_since,omitempty"`
+	RecentFailures    []FailureEvent             `json:"recent_failures,omitempty"`
 	StartedAt         time.Time                  `json:"started_at"`
 	UpdatedAt         time.Time                  `json:"updated_at"`
 	Components        map[string]ComponentStatus `json:"components,omitempty"`
@@ -74,6 +87,8 @@ func (m *Model) Snapshot() Snapshot {
 	for key, val := range m.snap.Components {
 		out.Components[key] = val
 	}
+	out.RecentFailures = append([]FailureEvent(nil), m.snap.RecentFailures...)
+	out.FailureSince = cloneTimePtr(m.snap.FailureSince)
 	return out
 }
 
@@ -168,6 +183,45 @@ func (m *Model) SetComponent(name, state, message string) {
 			UpdatedAt: m.now().UTC(),
 		}
 	})
+}
+
+func (m *Model) SetFailure(code, summary, hint string) {
+	m.Update(func(s *Snapshot) {
+		now := m.now().UTC()
+		normalizedCode := normalize(code)
+		normalizedSummary := normalize(summary)
+		normalizedHint := normalize(hint)
+
+		if normalizedCode == "" {
+			s.FailureCode = ""
+			s.FailureSummary = ""
+			s.FailureHint = ""
+			s.FailureSince = nil
+			return
+		}
+
+		if s.FailureCode != normalizedCode || s.FailureSummary != normalizedSummary || s.FailureHint != normalizedHint {
+			updatedAt := now
+			s.FailureSince = &updatedAt
+			s.RecentFailures = append(s.RecentFailures, FailureEvent{
+				Code:      normalizedCode,
+				Summary:   normalizedSummary,
+				Hint:      normalizedHint,
+				UpdatedAt: now,
+			})
+			if len(s.RecentFailures) > 8 {
+				s.RecentFailures = append([]FailureEvent(nil), s.RecentFailures[len(s.RecentFailures)-8:]...)
+			}
+		}
+
+		s.FailureCode = normalizedCode
+		s.FailureSummary = normalizedSummary
+		s.FailureHint = normalizedHint
+	})
+}
+
+func normalize(value string) string {
+	return strings.TrimSpace(value)
 }
 
 func cloneTimePtr(input *time.Time) *time.Time {

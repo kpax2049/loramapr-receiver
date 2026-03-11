@@ -52,3 +52,19 @@ Portal intentionally omits sensitive values from rendered pages and `/api/status
 - persisted pairing code
 
 Those remain in local state storage with restricted file permissions.
+
+## Diagnostics Integration
+
+Portal pages now surface coarse receiver failure taxonomy with actionable hints:
+
+- `pairing_code_invalid`
+- `pairing_code_expired`
+- `activation_failed`
+- `cloud_unreachable`
+- `receiver_auth_invalid`
+- `no_serial_device_detected`
+- `node_detected_not_connected`
+- `events_not_forwarding`
+
+This keeps setup failures human-readable while staying aligned with cloud/onboarding
+terminology.

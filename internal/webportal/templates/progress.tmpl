@@ -9,6 +9,7 @@
     <div class="status-chip"><div class="label">Cloud Connectivity</div><div class="value">{{.Snapshot.CloudStatus}}</div></div>
     <div class="status-chip"><div class="label">Service State</div><div class="value">{{.Snapshot.Lifecycle}}</div></div>
     <div class="status-chip"><div class="label">Meshtastic Status</div><div class="value">{{.MeshtasticState}}</div></div>
+    <div class="status-chip"><div class="label">Failure State</div><div class="value mono">{{if .Snapshot.FailureCode}}{{.Snapshot.FailureCode}}{{else}}none{{end}}</div></div>
   </div>
 </section>
 <section class="panel">
@@ -25,6 +26,8 @@
     <tr><th>Cloud Endpoint</th><td class="mono">{{.Snapshot.CloudEndpoint}}</td></tr>
     <tr><th>Mode</th><td class="mono">{{.Snapshot.Mode}}</td></tr>
     <tr><th>Runtime Profile</th><td class="mono">{{.Snapshot.RuntimeProfile}}</td></tr>
+    <tr><th>Failure Summary</th><td>{{if .Snapshot.FailureSummary}}{{.Snapshot.FailureSummary}}{{else}}none{{end}}</td></tr>
+    <tr><th>Failure Guidance</th><td>{{if .Snapshot.FailureHint}}{{.Snapshot.FailureHint}}{{else}}none{{end}}</td></tr>
     <tr><th>Last Error</th><td>{{if .Snapshot.LastError}}{{.Snapshot.LastError}}{{else}}none{{end}}</td></tr>
   </table>
 </section>

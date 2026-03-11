@@ -53,6 +53,9 @@ Heartbeat is sent on runtime tick interval (`service.heartbeat`) and includes:
 - `last_packet_queued`
 - `last_packet_sent`
 - `last_packet_ack`
+- `failure_code`
+- `failure_summary`
+- `failure_hint`
 
 These are used by the local portal progress screen.
 

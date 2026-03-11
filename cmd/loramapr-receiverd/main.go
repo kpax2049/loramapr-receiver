@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -10,10 +11,13 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/loramapr/loramapr-receiver/internal/config"
+	"github.com/loramapr/loramapr-receiver/internal/diagnostics"
 	"github.com/loramapr/loramapr-receiver/internal/install"
 	"github.com/loramapr/loramapr-receiver/internal/logging"
+	"github.com/loramapr/loramapr-receiver/internal/meshtastic"
 	"github.com/loramapr/loramapr-receiver/internal/runtime"
 	"github.com/loramapr/loramapr-receiver/internal/state"
 )
@@ -37,6 +41,8 @@ func main() {
 		doctorCommand(args[1:])
 	case "status":
 		statusCommand(args[1:])
+	case "support-snapshot":
+		supportSnapshotCommand(args[1:])
 	default:
 		if strings.HasPrefix(cmd, "-") {
 			runCommand(args)
@@ -156,6 +162,7 @@ func uninstallCommand(args []string) {
 func doctorCommand(args []string) {
 	flags := flag.NewFlagSet("doctor", flag.ExitOnError)
 	configPath := flags.String("config", config.DefaultPath, "path to receiver config file")
+	jsonOutput := flags.Bool("json", false, "print diagnostics report as json")
 	_ = flags.Parse(args)
 
 	cfg, err := config.Load(*configPath)
@@ -163,7 +170,6 @@ func doctorCommand(args []string) {
 		fmt.Printf("[FAIL] config load: %v\n", err)
 		os.Exit(1)
 	}
-	fmt.Printf("[OK] config load: %s\n", *configPath)
 
 	store, err := state.Open(cfg.Paths.StateFile)
 	if err != nil {
@@ -171,10 +177,63 @@ func doctorCommand(args []string) {
 		os.Exit(1)
 	}
 	snapshot := store.Snapshot()
+
+	deviceProbe, meshState := detectMeshtastic(cfg.Meshtastic)
+	cloudProbe := diagnostics.ProbeCloudReachability(cfg.Cloud.BaseURL, 3*time.Second)
+	finding := diagnostics.Evaluate(diagnostics.Input{
+		PairingPhase:      string(snapshot.Pairing.Phase),
+		PairingLastChange: snapshot.Pairing.LastChange,
+		PairingLastError:  snapshot.Pairing.LastError,
+		CloudReachable:    cloudProbe.Status == "reachable",
+		MeshtasticState:   meshState,
+		Now:               time.Now().UTC(),
+	})
+
+	report := map[string]any{
+		"config_path":          *configPath,
+		"state_path":           cfg.Paths.StateFile,
+		"pairing_phase":        snapshot.Pairing.Phase,
+		"pairing_last_change":  snapshot.Pairing.LastChange,
+		"cloud_base_url":       cfg.Cloud.BaseURL,
+		"cloud_probe":          cloudProbe,
+		"meshtastic_transport": cfg.Meshtastic.Transport,
+		"meshtastic_probe":     deviceProbe,
+		"failure_code":         finding.Code,
+		"failure_summary":      finding.Summary,
+		"failure_hint":         finding.Hint,
+	}
+
+	if *jsonOutput {
+		encoder := json.NewEncoder(os.Stdout)
+		encoder.SetIndent("", "  ")
+		if err := encoder.Encode(report); err != nil {
+			fmt.Printf("[FAIL] doctor json encode: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
+
+	fmt.Printf("[OK] config load: %s\n", *configPath)
 	fmt.Printf("[OK] state open: %s\n", cfg.Paths.StateFile)
-	fmt.Printf("[INFO] pairing phase: %s\n", snapshot.Pairing.Phase)
-	fmt.Printf("[INFO] cloud endpoint: %s\n", cfg.Cloud.BaseURL)
-	fmt.Printf("[INFO] meshtastic transport: %s\n", cfg.Meshtastic.Transport)
+	fmt.Printf("[INFO] pairing phase: %s (%s)\n", snapshot.Pairing.Phase, snapshot.Pairing.LastChange)
+	fmt.Printf("[INFO] cloud probe: %s", cloudProbe.Status)
+	if cloudProbe.Detail != "" {
+		fmt.Printf(" (%s)", cloudProbe.Detail)
+	}
+	fmt.Println()
+	fmt.Printf("[INFO] meshtastic probe: %s", meshState)
+	if detected := deviceProbe["detected_device"]; detected != "" {
+		fmt.Printf(" (%s)", detected)
+	}
+	fmt.Println()
+	if finding.Code != diagnostics.FailureNone {
+		fmt.Printf("[WARN] failure state: %s - %s\n", finding.Code, finding.Summary)
+		if finding.Hint != "" {
+			fmt.Printf("[HINT] %s\n", finding.Hint)
+		}
+	} else {
+		fmt.Println("[OK] no active failure states detected")
+	}
 	fmt.Println("Doctor checks completed.")
 }
 
@@ -194,6 +253,16 @@ func statusCommand(args []string) {
 		os.Exit(1)
 	}
 	snapshot := store.Snapshot()
+	cloudProbe := diagnostics.ProbeCloudReachability(cfg.Cloud.BaseURL, 3*time.Second)
+	_, meshState := detectMeshtastic(cfg.Meshtastic)
+	finding := diagnostics.Evaluate(diagnostics.Input{
+		PairingPhase:      string(snapshot.Pairing.Phase),
+		PairingLastChange: snapshot.Pairing.LastChange,
+		PairingLastError:  snapshot.Pairing.LastError,
+		CloudReachable:    cloudProbe.Status == "reachable",
+		MeshtasticState:   meshState,
+		Now:               time.Now().UTC(),
+	})
 
 	output := map[string]any{
 		"config_path":      *configPath,
@@ -204,7 +273,12 @@ func statusCommand(args []string) {
 		"runtime_mode":     snapshot.Runtime.Mode,
 		"runtime_profile":  snapshot.Runtime.Profile,
 		"meshtastic_mode":  cfg.Meshtastic.Transport,
+		"meshtastic_state": meshState,
 		"last_pairing_err": snapshot.Pairing.LastError,
+		"failure_code":     finding.Code,
+		"failure_summary":  finding.Summary,
+		"failure_hint":     finding.Hint,
+		"cloud_probe":      cloudProbe.Status,
 		"updated_at":       snapshot.Metadata.UpdatedAt,
 	}
 
@@ -214,6 +288,69 @@ func statusCommand(args []string) {
 		slog.Error("status failed: encode", "err", err)
 		os.Exit(1)
 	}
+}
+
+func supportSnapshotCommand(args []string) {
+	flags := flag.NewFlagSet("support-snapshot", flag.ExitOnError)
+	configPath := flags.String("config", config.DefaultPath, "path to receiver config file")
+	outputPath := flags.String("out", "", "optional output file path (defaults to stdout)")
+	_ = flags.Parse(args)
+
+	cfg, err := config.Load(*configPath)
+	if err != nil {
+		slog.Error("support snapshot failed: load config", "err", err)
+		os.Exit(1)
+	}
+	store, err := state.Open(cfg.Paths.StateFile)
+	if err != nil {
+		slog.Error("support snapshot failed: open state", "err", err)
+		os.Exit(1)
+	}
+	snapshot := store.Snapshot()
+	deviceProbe, meshState := detectMeshtastic(cfg.Meshtastic)
+	cloudProbe := diagnostics.ProbeCloudReachability(cfg.Cloud.BaseURL, 3*time.Second)
+	finding := diagnostics.Evaluate(diagnostics.Input{
+		PairingPhase:      string(snapshot.Pairing.Phase),
+		PairingLastChange: snapshot.Pairing.LastChange,
+		PairingLastError:  snapshot.Pairing.LastError,
+		CloudReachable:    cloudProbe.Status == "reachable",
+		MeshtasticState:   meshState,
+		Now:               time.Now().UTC(),
+	})
+	report := diagnostics.CollectSupportSnapshot(cfg, snapshot, finding, diagnostics.CollectOptions{
+		Now: func() time.Time { return time.Now().UTC() },
+		ProbeCloud: func(_ string, _ time.Duration) diagnostics.CloudProbe {
+			return cloudProbe
+		},
+		DetectDevice: func(_ config.MeshtasticConfig) (meshtastic.DetectionResult, error) {
+			probe := meshtastic.DetectionResult{
+				Candidates: asStringSlice(deviceProbe["candidates"]),
+				Device:     strings.TrimSpace(deviceProbe["detected_device"]),
+			}
+			if deviceProbe["state"] == "error" {
+				return probe, errors.New(deviceProbe["detail"])
+			}
+			return probe, nil
+		},
+		ConfigPath: *configPath,
+	})
+
+	payload, err := json.MarshalIndent(report, "", "  ")
+	if err != nil {
+		slog.Error("support snapshot failed: encode", "err", err)
+		os.Exit(1)
+	}
+	payload = append(payload, '\n')
+
+	if strings.TrimSpace(*outputPath) == "" {
+		_, _ = os.Stdout.Write(payload)
+		return
+	}
+	if err := os.WriteFile(*outputPath, payload, 0o600); err != nil {
+		slog.Error("support snapshot failed: write file", "err", err, "path", *outputPath)
+		os.Exit(1)
+	}
+	fmt.Printf("Support snapshot written: %s\n", *outputPath)
 }
 
 func signalNotifyContext() (context.Context, context.CancelFunc) {
@@ -228,6 +365,44 @@ func printUsage() {
 	fmt.Println("  loramapr-receiverd uninstall [flags]")
 	fmt.Println("  loramapr-receiverd doctor [flags]")
 	fmt.Println("  loramapr-receiverd status [flags]")
+	fmt.Println("  loramapr-receiverd support-snapshot [flags]")
 	fmt.Println("")
 	fmt.Println("If no subcommand is provided, run mode is used.")
+}
+
+func detectMeshtastic(cfg config.MeshtasticConfig) (map[string]string, string) {
+	result, err := meshtastic.DetectDevice(cfg)
+	probe := map[string]string{
+		"state": "not_present",
+	}
+	if err != nil {
+		probe["state"] = "error"
+		probe["detail"] = err.Error()
+		return probe, "degraded"
+	}
+	if strings.TrimSpace(result.Device) != "" {
+		probe["state"] = "detected"
+		probe["detected_device"] = result.Device
+		return probe, "detected"
+	}
+	if len(result.Candidates) > 0 {
+		probe["candidates"] = strings.Join(result.Candidates, ",")
+	}
+	return probe, "not_present"
+}
+
+func asStringSlice(value string) []string {
+	if strings.TrimSpace(value) == "" {
+		return nil
+	}
+	parts := strings.Split(value, ",")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		text := strings.TrimSpace(part)
+		if text == "" {
+			continue
+		}
+		out = append(out, text)
+	}
+	return out
 }

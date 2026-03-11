@@ -89,6 +89,7 @@ This repository currently contains:
 - [Embedded Local Setup Portal](./docs/local-portal.md)
 - [Meshtastic Adapter Behavior](./docs/meshtastic-adapter.md)
 - [Steady-State Cloud Loop](./docs/steady-state.md)
+- [Diagnostics and Failure Taxonomy](./docs/diagnostics.md)
 - [Service and Install Model](./docs/service-install.md)
 - [Release Artifact Mapping](./docs/release-artifacts.md)
 - [Linux/Pi Distribution Path](./docs/linux-pi-distribution.md)

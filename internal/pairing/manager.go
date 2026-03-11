@@ -267,6 +267,7 @@ func (m *Manager) handleAttemptError(snapshot state.Data, err error, retryPhase 
 	now := m.now().UTC()
 	retryable := cloudclient.IsRetryable(err)
 	message := sanitizeError(err)
+	lastChange := pairingFailureChange(retryPhase, err, retryable)
 
 	if retryable {
 		retryCount := snapshot.Pairing.RetryCount + 1
@@ -279,7 +280,7 @@ func (m *Manager) handleAttemptError(snapshot state.Data, err error, retryPhase 
 			data.Pairing.LastAttemptAt = &now
 			data.Pairing.LastError = message
 			data.Pairing.UpdatedAt = now
-			data.Pairing.LastChange = "retry_scheduled"
+			data.Pairing.LastChange = lastChange
 		}); updateErr != nil {
 			return updateErr
 		}
@@ -300,7 +301,7 @@ func (m *Manager) handleAttemptError(snapshot state.Data, err error, retryPhase 
 		data.Pairing.LastAttemptAt = &now
 		data.Pairing.LastError = message
 		data.Pairing.UpdatedAt = now
-		data.Pairing.LastChange = "failed_permanent"
+		data.Pairing.LastChange = lastChange
 	}); updateErr != nil {
 		return updateErr
 	}
@@ -383,4 +384,42 @@ func minInt(a, b int) int {
 		return a
 	}
 	return b
+}
+
+func pairingFailureChange(phase state.PairingPhase, err error, retryable bool) string {
+	switch phase {
+	case state.PairingCodeEntered:
+		if retryable {
+			return "pairing_retry_scheduled"
+		}
+		if isPairingCodeExpired(err) {
+			return "pairing_code_expired"
+		}
+		return "pairing_code_invalid"
+	case state.PairingBootstrapExchanged:
+		if retryable {
+			return "activation_retry_scheduled"
+		}
+		return "activation_failed"
+	default:
+		if retryable {
+			return "retry_scheduled"
+		}
+		return "failed_permanent"
+	}
+}
+
+func isPairingCodeExpired(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	if strings.Contains(message, "expired") {
+		return true
+	}
+	var apiErr *cloudclient.APIError
+	if errors.As(err, &apiErr) {
+		return apiErr.StatusCode == 410
+	}
+	return false
 }

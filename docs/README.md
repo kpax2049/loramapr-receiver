@@ -8,6 +8,7 @@ Architecture decisions and product runtime specifications for LoRaMapr Receiver.
 - [Embedded Local Setup Portal](./local-portal.md)
 - [Meshtastic Adapter Behavior](./meshtastic-adapter.md)
 - [Steady-State Cloud Loop](./steady-state.md)
+- [Diagnostics and Failure Taxonomy](./diagnostics.md)
 - [Service and Install Model](./service-install.md)
 - [Release Artifact Mapping](./release-artifacts.md)
 - [Linux/Pi Distribution Path](./linux-pi-distribution.md)

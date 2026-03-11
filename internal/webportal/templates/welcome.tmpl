@@ -7,6 +7,7 @@
     <div class="status-chip"><div class="label">Cloud</div><div class="value">{{.Snapshot.CloudStatus}}</div></div>
     <div class="status-chip"><div class="label">Service</div><div class="value">{{.Snapshot.Lifecycle}}</div></div>
     <div class="status-chip"><div class="label">Ready</div><div class="value">{{if .Snapshot.Ready}}yes{{else}}no{{end}}</div></div>
+    <div class="status-chip"><div class="label">Failure</div><div class="value mono">{{if .Snapshot.FailureCode}}{{.Snapshot.FailureCode}}{{else}}none{{end}}</div></div>
   </div>
   {{if .SummaryHint}}
   <div class="hint {{.SummaryHintClass}}">{{.SummaryHint}}</div>

@@ -179,6 +179,34 @@ func TestPermanentExchangeFailureResetsToUnpaired(t *testing.T) {
 	if snap.Pairing.PairingCode != "" {
 		t.Fatal("expected pairing code to be cleared")
 	}
+	if snap.Pairing.LastChange != "pairing_code_invalid" {
+		t.Fatalf("expected last_change pairing_code_invalid, got %q", snap.Pairing.LastChange)
+	}
+}
+
+func TestExpiredPairingCodeMapsFailureChange(t *testing.T) {
+	t.Parallel()
+
+	store, err := state.Open(filepath.Join(t.TempDir(), "receiver-state.json"))
+	if err != nil {
+		t.Fatalf("open state: %v", err)
+	}
+	cloud := &mockCloudClient{
+		exchangeErr: &cloudclient.APIError{StatusCode: 410, Message: "pairing code expired", Retryable: false},
+	}
+	manager := NewManager(store, status.New(), cloud, nil, ActivationIdentity{})
+
+	if err := manager.SubmitPairingCode(context.Background(), "LMR-EXPIRED1"); err != nil {
+		t.Fatalf("submit pairing code: %v", err)
+	}
+	if err := manager.Process(context.Background()); err != nil {
+		t.Fatalf("process should not fail hard: %v", err)
+	}
+
+	snap := store.Snapshot()
+	if snap.Pairing.LastChange != "pairing_code_expired" {
+		t.Fatalf("expected last_change pairing_code_expired, got %q", snap.Pairing.LastChange)
+	}
 }
 
 func TestRestartSafeBootstrapExchange(t *testing.T) {

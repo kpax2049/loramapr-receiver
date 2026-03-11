@@ -54,3 +54,33 @@ func TestHeartbeatAndPacketTelemetry(t *testing.T) {
 		t.Fatalf("expected queue depth 3, got %d", snap.IngestQueueDepth)
 	}
 }
+
+func TestFailureLifecycle(t *testing.T) {
+	t.Parallel()
+
+	model := New()
+	model.SetFailure("cloud_unreachable", "Cloud endpoint is unreachable", "Check network and DNS")
+	snap := model.Snapshot()
+
+	if snap.FailureCode != "cloud_unreachable" {
+		t.Fatalf("unexpected failure code: %q", snap.FailureCode)
+	}
+	if snap.FailureSince == nil {
+		t.Fatal("expected failure_since to be set")
+	}
+	if len(snap.RecentFailures) != 1 {
+		t.Fatalf("expected one recent failure entry, got %d", len(snap.RecentFailures))
+	}
+
+	model.SetFailure("", "", "")
+	snap = model.Snapshot()
+	if snap.FailureCode != "" {
+		t.Fatalf("expected failure code cleared, got %q", snap.FailureCode)
+	}
+	if snap.FailureSince != nil {
+		t.Fatal("expected failure_since cleared")
+	}
+	if len(snap.RecentFailures) != 1 {
+		t.Fatalf("expected history to be retained, got %d", len(snap.RecentFailures))
+	}
+}

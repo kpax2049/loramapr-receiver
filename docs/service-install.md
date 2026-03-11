@@ -11,6 +11,7 @@ This document defines the receiver install/service model for `loramapr-receiverd
 - `uninstall`: remove Linux service/config assets
 - `doctor`: local diagnostics for config/state runtime prerequisites
 - `status`: print persisted state summary JSON
+- `support-snapshot`: export redacted diagnostics/support JSON bundle
 
 ## Linux-first Path (systemd)
 
