@@ -1,6 +1,6 @@
 # v2.1.0 GA Plan: Linux/Pi Existing-OS (Debian-family)
 
-Status: Draft for implementation
+Status: Implemented (v2.1.0)
 Date: 2026-03-11
 Milestone: `v2.1.0`
 

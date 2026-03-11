@@ -18,5 +18,6 @@ Architecture decisions and product runtime specifications for LoRaMapr Receiver.
 - [Raspberry Pi Appliance Path](./raspberry-pi-appliance.md)
 - [Publish Guide (Bridge Batch)](./publish-guide.md)
 - [Release Notes](./release-notes.md)
+- [Release Notes v2.1.0](./release-notes-v2.1.0.md)
 - [Release Notes v1.1.0](./release-notes-v1.1.0.md)
 - [Reviewer Smoke Test Guide](./reviewer-smoke-test.md)

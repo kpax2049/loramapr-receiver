@@ -1,4 +1,4 @@
-# Receiver Publish Guide (Bridge Batch)
+# Receiver Publish Guide (v2.1.0 Linux/Pi Existing-OS GA)
 
 This guide ties together artifact generation, signed Linux/Pi publication,
 APT repository publication, diagnostics support workflow, and version/channel

@@ -1,5 +1,8 @@
 # LoRaMapr Receiver Release Notes
 
+For Linux/Pi Existing-OS GA notes targeting `v2.1.0`, see
+`docs/release-notes-v2.1.0.md`.
+
 For bridge-batch release notes targeting `v1.1.0`, see
 `docs/release-notes-v1.1.0.md`.
 

@@ -1,85 +1,90 @@
-# Reviewer Smoke Test Guide
+# Reviewer Smoke Test Guide (v2.1.0)
 
-This guide validates the bridge-batch receiver flow from artifact build to
-runtime diagnostics.
+This guide validates Linux/Pi Existing-OS GA behavior from artifact build to
+pairing-ready runtime.
 
 ## Prerequisites
 
-- Go installed
-- Docker/systemd host optional for service-path checks
+- Build host with Go and Debian packaging tools (`dpkg-deb`, `dpkg-scanpackages`)
+- Debian-family test host (Debian/Ubuntu/Raspberry Pi OS) with systemd
 - Optional reachable `loramapr-cloud` environment for real pairing/forwarding
 
-## 1. Build Artifact Creation
+## 1. Build and Validate Artifacts
 
 ```bash
-GOCACHE=/tmp/go-build-cache GOTMPDIR=/tmp GO_BIN=/usr/local/go/bin/go make test
-GOCACHE=/tmp/go-build-cache GOTMPDIR=/tmp VERSION=v1.1.0-smoke CHANNEL=stable \
-  packaging/release/build-artifacts.sh
+GOCACHE=/tmp/go-build-cache GOTMPDIR=/tmp GO_BIN=/usr/local/go/bin/go \
+  packaging/release/build-artifacts.sh v2.1.0-smoke stable
+packaging/debian/validate-deb.sh dist/v2.1.0-smoke/artifacts/loramapr-receiver_v2.1.0-smoke_linux_amd64.deb
+packaging/debian/validate-lifecycle.sh dist/v2.1.0-smoke/artifacts/loramapr-receiver_v2.1.0-smoke_linux_amd64.deb
 ```
 
-Expected under `dist/v1.1.0-smoke/artifacts/`:
+Expected under `dist/v2.1.0-smoke/artifacts/`:
 
-- linux amd64/arm64/armv7 archives
-- linux systemd layout archives
+- linux `.deb` packages (`amd64`, `arm64`, `armv7`)
+- linux systemd layout tarballs (fallback path)
 - `SHA256SUMS`
 - `cloud-manifest.fragment.json`
 - `release-metadata.json`
 
-## 2. Publish-Path Verification
+## 2. Publish and Verify Repository Output
 
 ```bash
-SIGNING_MODE=none packaging/distribution/publish.sh v1.1.0-smoke stable
-packaging/distribution/verify.sh v1.1.0-smoke stable
+SIGNING_MODE=none packaging/distribution/publish.sh v2.1.0-smoke stable
+SIGNING_REQUIRED=0 packaging/distribution/verify.sh v2.1.0-smoke stable
 ```
 
-Expected output tree:
+Expected output trees:
 
-- `dist/published/receiver/stable/v1.1.0-smoke/`
-- `dist/published/receiver/stable/channel-index.json`
+- `dist/published/receiver/stable/v2.1.0-smoke/`
+- `dist/published/apt/stable/pool/main/l/loramapr-receiver/`
+- `dist/published/apt/stable/dists/stable/main/binary-*/`
 
-## 3. Install/Service Startup (Linux path)
+## 3. Install from APT Repository (Primary Path)
 
-On Linux host or VM:
+For local unsigned smoke repo:
 
 ```bash
-sudo tar -xzf dist/v1.1.0-smoke/artifacts/loramapr-receiver_v1.1.0-smoke_linux_amd64_systemd.tar.gz -C /
-sudo systemctl daemon-reload
-sudo systemctl enable --now loramapr-receiverd
+REPO_PATH="$(pwd)/dist/published/apt/stable"
+echo "deb [trusted=yes] file://${REPO_PATH} stable main" \
+  | sudo tee /etc/apt/sources.list.d/loramapr-receiver-smoke.list
+sudo apt-get update
+sudo apt-get install -y loramapr-receiver
+```
+
+For real signed hosted repo, use keyring flow from
+`packaging/distribution/apt/README.md`.
+
+## 4. Verify Service and Pairing-Ready State
+
+```bash
 sudo systemctl status loramapr-receiverd --no-pager
-```
-
-Expected: service active and portal bound per config.
-
-## 4. Local Portal Pairing Path
-
-```bash
 curl -sS http://127.0.0.1:8080/healthz
 curl -sS http://127.0.0.1:8080/readyz
 curl -sS http://127.0.0.1:8080/api/status | jq
+```
+
+Expected:
+
+- service active
+- portal reachable
+- receiver reports pairing-ready state when unpaired
+
+## 5. Local Portal Pairing Submission
+
+```bash
 curl -sS -X POST http://127.0.0.1:8080/api/pairing/code \
   -H 'Content-Type: application/json' \
   -d '{"pairingCode":"LMR-TEST-CODE"}'
+curl -sS http://127.0.0.1:8080/api/status | jq
 ```
 
-Expected: status shows pairing progression and diagnostics fields.
+Expected: pairing phase and diagnostics fields update consistently.
 
-## 5. Cloud Connection and Node Detection
+## 6. Cloud and Node Checks (If Environment Available)
 
-With real cloud + Meshtastic bridge stream configured:
-
-1. Confirm `/api/status` transitions to paired steady state.
-2. Confirm `components.meshtastic.state` moves to `connected`.
-3. Confirm `cloud_reachable=true` and heartbeat fields update.
-
-## 6. Packet Forwarding Check
-
-Inject or observe Meshtastic packet events via configured transport.
-
-Expected `/api/status` behavior:
-
-- `ingest_queue_depth` rises briefly then returns toward zero
-- `last_packet_queued` and `last_packet_ack` advance
-- no persistent `events_not_forwarding` failure state
+1. Confirm `/api/status` reaches paired steady state after valid cloud flow.
+2. Confirm Meshtastic component transitions toward `connected` when device is attached.
+3. Confirm packet forwarding fields update (`last_packet_queued`, `last_packet_ack`).
 
 ## 7. Diagnostics Capture
 
@@ -92,16 +97,31 @@ cat /tmp/receiver-support.json | jq
 
 Expected:
 
-- diagnostics include failure code/summary/hint when setup is blocked
-- support snapshot includes runtime/cloud/node summaries
-- support snapshot omits secrets (API key, pairing code, activation token values)
+- failure code/summary/hint are human-readable
+- support snapshot is redacted (no secret values)
 
-## 8. Version/Channel Reporting
+## 8. Lifecycle Operations
 
-Check either `/api/status`, `status` command, or support snapshot for:
+```bash
+sudo apt-get remove -y loramapr-receiver
+sudo test -f /etc/loramapr/receiver.json
+sudo apt-get install -y loramapr-receiver
+sudo systemctl status loramapr-receiverd --no-pager
+sudo apt-get purge -y loramapr-receiver
+```
 
-- `receiver_version`
-- `release_channel`
-- `build_commit`
+Expected:
 
-These should match release artifact version/channel intent.
+- `remove` keeps config/state
+- reinstall starts service again
+- `purge` clears config/state per lifecycle policy
+
+## 9. Fallback Path Sanity (Advanced)
+
+Validate that fallback/manual artifacts are still present:
+
+```bash
+ls dist/v2.1.0-smoke/artifacts/loramapr-receiver_v2.1.0-smoke_linux_amd64_systemd.tar.gz
+```
+
+Fallback tarball path remains advanced/manual, not primary.
