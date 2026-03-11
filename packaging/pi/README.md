@@ -20,3 +20,7 @@ Expected release artifact input for image build:
 - `loramapr-receiver_<version>_linux_arm64_systemd.tar.gz`
 
 This artifact is produced by the Prompt 8 release pipeline.
+
+GA planning reference:
+
+- `docs/ga-v2.2.0-raspberry-pi-appliance.md`

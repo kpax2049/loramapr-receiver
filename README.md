@@ -85,6 +85,7 @@ This repository currently contains:
 
 - [Architecture ADR](./docs/adr/0001-standalone-receiver-runtime.md)
 - [v2.1.0 GA Plan: Linux/Pi Existing-OS](./docs/ga-v2.1.0-linux-pi-existing-os.md)
+- [v2.2.0 GA Plan: Raspberry Pi Appliance](./docs/ga-v2.2.0-raspberry-pi-appliance.md)
 - [Config and State Layout](./docs/runtime-config-state.md)
 - [Pairing and Bootstrap Lifecycle](./docs/pairing-lifecycle.md)
 - [Embedded Local Setup Portal](./docs/local-portal.md)
