@@ -3,6 +3,7 @@
 Architecture decisions and product runtime specifications for LoRaMapr Receiver.
 
 - [ADR 0001: Standalone LoRaMapr Receiver Runtime](./adr/0001-standalone-receiver-runtime.md)
+- [v2.1.0 GA Plan: Linux/Pi Existing-OS](./ga-v2.1.0-linux-pi-existing-os.md)
 - [Runtime Config and State Layout](./runtime-config-state.md)
 - [Pairing and Bootstrap Lifecycle](./pairing-lifecycle.md)
 - [Embedded Local Setup Portal](./local-portal.md)
