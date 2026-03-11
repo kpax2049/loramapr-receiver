@@ -12,10 +12,12 @@ func TestBuildManifestIncludesLinuxAndPiEntries(t *testing.T) {
 	dir := t.TempDir()
 	mustWrite(t, filepath.Join(dir, "loramapr-receiver_v1.1.0_linux_arm64_systemd.tar.gz"), []byte("a"))
 	mustWrite(t, filepath.Join(dir, "loramapr-receiver_v1.1.0_linux_amd64.tar.gz"), []byte("b"))
+	mustWrite(t, filepath.Join(dir, "loramapr-receiver_v1.1.0_linux_arm64.deb"), []byte("d"))
 	mustWrite(t, filepath.Join(dir, "loramapr-receiver_v1.1.0_windows_amd64.zip"), []byte("c"))
 	mustWrite(t, filepath.Join(dir, "SHA256SUMS"), []byte(
 		"aaaabbbb loramapr-receiver_v1.1.0_linux_arm64_systemd.tar.gz\n"+
 			"ccccdddd loramapr-receiver_v1.1.0_linux_amd64.tar.gz\n"+
+			"11112222 loramapr-receiver_v1.1.0_linux_arm64.deb\n"+
 			"eeeeffff loramapr-receiver_v1.1.0_windows_amd64.zip\n",
 	))
 
@@ -37,6 +39,8 @@ func TestBuildManifestIncludesLinuxAndPiEntries(t *testing.T) {
 
 	var hasLinux bool
 	var hasPi bool
+	var hasLinuxDeb bool
+	var hasPiDeb bool
 	for _, artifact := range manifest.Artifacts {
 		if artifact.Platform == "linux" && artifact.Arch == "arm64" && artifact.Kind == "systemd_layout" {
 			hasLinux = true
@@ -47,6 +51,18 @@ func TestBuildManifestIncludesLinuxAndPiEntries(t *testing.T) {
 				t.Fatal("expected raspberry_pi arm64 systemd artifact to be recommended")
 			}
 		}
+		if artifact.Platform == "linux" && artifact.Arch == "arm64" && artifact.Kind == "deb_package" {
+			hasLinuxDeb = true
+			if !artifact.Recommended {
+				t.Fatal("expected linux arm64 deb artifact to be recommended")
+			}
+		}
+		if artifact.Platform == "raspberry_pi" && artifact.Arch == "arm64" && artifact.Kind == "deb_package" {
+			hasPiDeb = true
+			if !artifact.Recommended {
+				t.Fatal("expected raspberry_pi arm64 deb artifact to be recommended")
+			}
+		}
 	}
 
 	if !hasLinux {
@@ -54,6 +70,12 @@ func TestBuildManifestIncludesLinuxAndPiEntries(t *testing.T) {
 	}
 	if !hasPi {
 		t.Fatal("expected raspberry_pi arm64 systemd artifact entry")
+	}
+	if !hasLinuxDeb {
+		t.Fatal("expected linux arm64 deb artifact entry")
+	}
+	if !hasPiDeb {
+		t.Fatal("expected raspberry_pi arm64 deb artifact entry")
 	}
 }
 
@@ -71,6 +93,27 @@ func TestBuildManifestRequiresChecksums(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("expected checksum validation error")
+	}
+}
+
+func TestParseArtifactNameDebArmhf(t *testing.T) {
+	t.Parallel()
+
+	kind, format, goos, arch, err := parseArtifactName("v2.1.0", "loramapr-receiver_v2.1.0_linux_armhf.deb")
+	if err != nil {
+		t.Fatalf("parseArtifactName returned error: %v", err)
+	}
+	if kind != "deb_package" {
+		t.Fatalf("unexpected kind: %s", kind)
+	}
+	if format != "deb" {
+		t.Fatalf("unexpected format: %s", format)
+	}
+	if goos != "linux" {
+		t.Fatalf("unexpected goos: %s", goos)
+	}
+	if arch != "armv7" {
+		t.Fatalf("expected armv7 arch mapping, got: %s", arch)
 	}
 }
 

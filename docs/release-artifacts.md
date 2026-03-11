@@ -25,10 +25,20 @@ Linux systemd layout archives:
 
 - `loramapr-receiver_<version>_linux_<arch>_systemd.tar.gz`
 
+Linux Debian packages:
+
+- `loramapr-receiver_<version>_linux_amd64.deb`
+- `loramapr-receiver_<version>_linux_arm64.deb`
+- `loramapr-receiver_<version>_linux_armv7.deb` (`armhf` package architecture)
+
 Manifest and metadata outputs:
 
 - `cloud-manifest.fragment.json`
 - `release-metadata.json`
+
+Validation helper:
+
+- `packaging/debian/validate-deb.sh <deb-file>`
 
 ## Cloud Manifest Fields
 
@@ -45,7 +55,7 @@ When publishing to `loramapr-cloud` receiver artifact catalog, map each artifact
 
 Cloud-ready mapping is produced directly by `cloud-manifest.fragment.json`. This
 fragment already includes platform/arch/checksum/relative URL for each artifact,
-including Raspberry Pi aliases for Linux systemd arm64/armv7 outputs.
+including Raspberry Pi aliases for Linux arm64/armv7 systemd and `.deb` outputs.
 
 ## Suggested URL Pattern
 

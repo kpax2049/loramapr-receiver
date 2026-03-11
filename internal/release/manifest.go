@@ -111,12 +111,17 @@ func BuildManifest(opts BuildOptions) (Manifest, error) {
 			SHA256:      checksum,
 			SizeBytes:   fileInfo.Size(),
 		}
+		if goos == "linux" && kind == "deb_package" {
+			artifact.Recommended = true
+		}
 		if goos == "linux" && arch == "arm64" && kind == "systemd_layout" {
 			artifact.Recommended = true
 		}
 		artifacts = append(artifacts, artifact)
 
-		if goos == "linux" && kind == "systemd_layout" && (arch == "arm64" || arch == "armv7") {
+		if goos == "linux" &&
+			(kind == "systemd_layout" || kind == "deb_package") &&
+			(arch == "arm64" || arch == "armv7") {
 			piArtifact := artifact
 			piArtifact.Platform = "raspberry_pi"
 			piArtifact.Recommended = arch == "arm64"
@@ -196,11 +201,17 @@ func parseArtifactName(version string, name string) (kind string, format string,
 	case strings.HasSuffix(rest, ".zip"):
 		format = "zip"
 		rest = strings.TrimSuffix(rest, ".zip")
+	case strings.HasSuffix(rest, ".deb"):
+		format = "deb"
+		rest = strings.TrimSuffix(rest, ".deb")
 	default:
 		return "", "", "", "", fmt.Errorf("unsupported extension: %s", name)
 	}
 
 	kind = "binary"
+	if format == "deb" {
+		kind = "deb_package"
+	}
 	if strings.HasSuffix(rest, "_systemd") {
 		kind = "systemd_layout"
 		rest = strings.TrimSuffix(rest, "_systemd")
@@ -212,7 +223,7 @@ func parseArtifactName(version string, name string) (kind string, format string,
 	}
 	goos = parts[0]
 	arch = parts[1]
-	if goos == "linux" && arch == "arm" {
+	if goos == "linux" && (arch == "arm" || arch == "armhf") {
 		arch = "armv7"
 	}
 

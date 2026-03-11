@@ -1,15 +1,44 @@
-# Debian Packaging (v2.1.0 GA Landing Zone)
+# Debian Packaging
 
-This directory is reserved for native `.deb` packaging implementation for the
-Linux/Pi Existing-OS GA milestone.
+This directory provides the native Debian-family package build path for
+`loramapr-receiver`.
 
-Target scope for v2.1.0:
+## Build Command
 
-- Debian/Ubuntu/Raspberry Pi OS compatible package outputs
-- architecture targets: `amd64`, `arm64`, `armhf`
-- integration with existing release flow
-- package lifecycle behavior aligned with current runtime/service model
+The release pipeline calls:
 
-Reference plan:
+```bash
+packaging/debian/build-deb.sh <version> <arch-label> <binary-path> <output-dir>
+```
+
+Architecture labels map as:
+
+- `amd64` -> `amd64`
+- `arm64` -> `arm64`
+- `armv7` -> `armhf`
+
+## Package Contents
+
+- `/usr/bin/loramapr-receiverd`
+- `/lib/systemd/system/loramapr-receiverd.service`
+- `/etc/loramapr/receiver.json` (dpkg conffile)
+- `/var/lib/loramapr`
+- `/var/log/loramapr`
+
+Maintainer scripts in `scripts/` handle service lifecycle and runtime directory
+setup for install/upgrade/remove/purge flows.
+
+## Validation
+
+Use:
+
+```bash
+packaging/debian/validate-deb.sh <deb-file>
+```
+
+This checks package metadata and expected content paths.
+
+## Reference
 
 - `docs/ga-v2.1.0-linux-pi-existing-os.md`
+- `docs/linux-pi-distribution.md`

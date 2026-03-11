@@ -1,0 +1,50 @@
+#!/bin/sh
+set -eu
+
+create_service_user() {
+  if ! getent group loramapr >/dev/null 2>&1; then
+    addgroup --system loramapr >/dev/null 2>&1 || true
+  fi
+
+  if ! getent passwd loramapr >/dev/null 2>&1; then
+    adduser \
+      --system \
+      --home /var/lib/loramapr \
+      --no-create-home \
+      --ingroup loramapr \
+      --disabled-login \
+      --disabled-password \
+      --shell /usr/sbin/nologin \
+      loramapr >/dev/null 2>&1 || true
+  fi
+}
+
+reload_and_start_service() {
+  if ! command -v systemctl >/dev/null 2>&1; then
+    return
+  fi
+
+  systemctl daemon-reload || true
+  systemctl enable loramapr-receiverd.service >/dev/null 2>&1 || true
+
+  if systemctl is-active --quiet loramapr-receiverd.service; then
+    systemctl restart loramapr-receiverd.service || true
+  else
+    systemctl start loramapr-receiverd.service || true
+  fi
+}
+
+case "${1:-}" in
+  configure|reconfigure)
+    create_service_user
+    mkdir -p /etc/loramapr /var/lib/loramapr /var/log/loramapr
+    chown -R loramapr:loramapr /var/lib/loramapr /var/log/loramapr || true
+    if [ -f /etc/loramapr/receiver.json ]; then
+      chown root:loramapr /etc/loramapr/receiver.json || true
+      chmod 0640 /etc/loramapr/receiver.json || true
+    fi
+    reload_and_start_service
+    ;;
+esac
+
+exit 0

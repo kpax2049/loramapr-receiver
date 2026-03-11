@@ -7,6 +7,7 @@ with Linux/systemd as the first-class path.
 
 - `linux/systemd/`: systemd unit assets
 - `linux/scripts/`: install/uninstall helper scripts
+- `debian/`: native `.deb` package build and validation scripts
 - `docker/`: container build scaffolding
 - `release/`: multi-platform artifact generation and checksums
 - `distribution/`: signed Linux/Pi publication scaffolding

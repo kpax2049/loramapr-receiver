@@ -20,6 +20,12 @@ jobs:
       - name: Build Artifacts
         run: packaging/release/build-artifacts.sh v0.0.0-ci stable
 
+      - name: Validate .deb Artifacts
+        run: |
+          packaging/debian/validate-deb.sh dist/v0.0.0-ci/artifacts/loramapr-receiver_v0.0.0-ci_linux_amd64.deb
+          packaging/debian/validate-deb.sh dist/v0.0.0-ci/artifacts/loramapr-receiver_v0.0.0-ci_linux_arm64.deb
+          packaging/debian/validate-deb.sh dist/v0.0.0-ci/artifacts/loramapr-receiver_v0.0.0-ci_linux_armv7.deb
+
       - name: Publish Skeleton (Unsigned)
         run: SIGNING_MODE=none packaging/distribution/publish.sh v0.0.0-ci stable
 

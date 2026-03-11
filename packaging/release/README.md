@@ -27,6 +27,13 @@ Optional channel override:
 packaging/release/build-artifacts.sh v1.0.0 beta
 ```
 
+Linux-only builds can skip `.deb` generation in non-Debian development
+environments:
+
+```bash
+ENABLE_DEB=0 packaging/release/build-artifacts.sh v1.0.0 beta
+```
+
 Outputs are written to:
 
 - `dist/<version>/build/`
@@ -50,6 +57,12 @@ Linux install-layout archives:
 
 - `loramapr-receiver_<version>_linux_<arch>_systemd.tar.gz`
 
+Linux Debian packages:
+
+- `loramapr-receiver_<version>_linux_amd64.deb`
+- `loramapr-receiver_<version>_linux_arm64.deb`
+- `loramapr-receiver_<version>_linux_armv7.deb`
+
 Checksum file:
 
 - `SHA256SUMS` (sha256 over all files in `artifacts/`)
@@ -70,6 +83,14 @@ Cloud-manifest metadata:
 - `usr/share/loramapr/scripts/uninstall.sh`
 
 This aligns with the Linux-first service/install model.
+
+`.deb` package contents align to Debian-family install norms:
+
+- `usr/bin/loramapr-receiverd`
+- `lib/systemd/system/loramapr-receiverd.service`
+- `etc/loramapr/receiver.json` (conffile)
+- `var/lib/loramapr`
+- `var/log/loramapr`
 
 ## Cloud Manifest Fragment
 

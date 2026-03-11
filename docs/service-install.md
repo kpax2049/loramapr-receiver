@@ -15,20 +15,19 @@ This document defines the receiver install/service model for `loramapr-receiverd
 
 ## Linux-first Path (systemd)
 
-Primary supported install path:
-
-1. package places binary at `/usr/bin/loramapr-receiverd`
-2. run `loramapr-receiverd install --force`
-3. run `systemctl daemon-reload`
-4. run `systemctl enable --now loramapr-receiverd`
+Primary supported install path for Debian-family systems is native `.deb`
+package install via APT.
 
 Generated files:
 
 - `/etc/loramapr/receiver.json`
-- `/etc/systemd/system/loramapr-receiverd.service`
+- `/lib/systemd/system/loramapr-receiverd.service`
 - directories:
   - `/var/lib/loramapr`
   - `/var/log/loramapr`
+
+Manual/systemd tarball fallback still uses the existing `install` command path
+when package-based install is not available.
 
 ## Advanced / Packaging Path
 

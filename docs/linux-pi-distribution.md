@@ -1,7 +1,18 @@
 # Linux and Raspberry Pi Distribution Path
 
-This document describes the Linux/Pi-first publish and install story for
-LoRaMapr Receiver `v1.1.x`.
+This document defines the Linux/Pi Existing-OS distribution path for
+LoRaMapr Receiver `v2.1.x`.
+
+## Supported Targets
+
+- Debian-family operating systems only:
+  - Debian
+  - Ubuntu-family
+  - Raspberry Pi OS
+- Architectures:
+  - `amd64`
+  - `arm64`
+  - `armv7` (`armhf` package architecture)
 
 ## Published Structure
 
@@ -9,12 +20,20 @@ Published artifacts are expected at:
 
 - `https://downloads.loramapr.com/receiver/<channel>/<version>/...`
 
-Examples:
+Per-version outputs include:
 
-- `.../loramapr-receiver_v1.1.0_linux_amd64_systemd.tar.gz`
-- `.../loramapr-receiver_v1.1.0_linux_arm64_systemd.tar.gz`
-- `.../SHA256SUMS`
-- `.../cloud-manifest.fragment.json`
+- `.deb` packages:
+  - `loramapr-receiver_<version>_linux_amd64.deb`
+  - `loramapr-receiver_<version>_linux_arm64.deb`
+  - `loramapr-receiver_<version>_linux_armv7.deb`
+- fallback layout archives:
+  - `loramapr-receiver_<version>_linux_amd64_systemd.tar.gz`
+  - `loramapr-receiver_<version>_linux_arm64_systemd.tar.gz`
+  - `loramapr-receiver_<version>_linux_armv7_systemd.tar.gz`
+- checksums and metadata:
+  - `SHA256SUMS`
+  - `cloud-manifest.fragment.json`
+  - `release-metadata.json`
 
 Channel metadata:
 
@@ -35,55 +54,49 @@ Channel index may also include detached signature:
 
 - `channel-index.json.asc`
 
-## Linux Install Path (systemd layout archive)
+## Existing-OS Install Path (Primary)
 
-1. Download Linux systemd archive plus checksums:
+APT repository installation is the primary GA path. See
+`packaging/distribution/apt/README.md` for repository layout and publication.
+
+Direct package install path (manual fallback):
 
 ```bash
-VERSION=v1.1.0
+VERSION=v2.1.0
 CHANNEL=stable
 BASE=https://downloads.loramapr.com/receiver/${CHANNEL}/${VERSION}
 
-curl -fsSLO "${BASE}/loramapr-receiver_${VERSION}_linux_amd64_systemd.tar.gz"
+curl -fsSLO "${BASE}/loramapr-receiver_${VERSION}_linux_amd64.deb"
 curl -fsSLO "${BASE}/SHA256SUMS"
+sha256sum -c SHA256SUMS --ignore-missing
+sudo apt-get update
+sudo apt-get install -y ./loramapr-receiver_${VERSION}_linux_amd64.deb
 ```
 
-2. Verify checksum:
+On Raspberry Pi OS (64-bit):
 
 ```bash
+VERSION=v2.1.0
+CHANNEL=stable
+BASE=https://downloads.loramapr.com/receiver/${CHANNEL}/${VERSION}
+
+curl -fsSLO "${BASE}/loramapr-receiver_${VERSION}_linux_arm64.deb"
+curl -fsSLO "${BASE}/SHA256SUMS"
 sha256sum -c SHA256SUMS --ignore-missing
+sudo apt-get update
+sudo apt-get install -y ./loramapr-receiver_${VERSION}_linux_arm64.deb
 ```
 
-3. Extract to root filesystem and start service:
+## Fallback / Advanced Path
+
+Systemd layout tarballs remain available for advanced/manual workflows where APT
+repository usage is not possible.
 
 ```bash
 sudo tar -xzf "loramapr-receiver_${VERSION}_linux_amd64_systemd.tar.gz" -C /
 sudo systemctl daemon-reload
 sudo systemctl enable --now loramapr-receiverd
 ```
-
-## Raspberry Pi Install Path
-
-Preferred artifact:
-
-- `loramapr-receiver_<version>_linux_arm64_systemd.tar.gz`
-
-On Raspberry Pi OS:
-
-```bash
-VERSION=v1.1.0
-CHANNEL=stable
-BASE=https://downloads.loramapr.com/receiver/${CHANNEL}/${VERSION}
-
-curl -fsSLO "${BASE}/loramapr-receiver_${VERSION}_linux_arm64_systemd.tar.gz"
-curl -fsSLO "${BASE}/SHA256SUMS"
-sha256sum -c SHA256SUMS --ignore-missing
-sudo tar -xzf "loramapr-receiver_${VERSION}_linux_arm64_systemd.tar.gz" -C /
-sudo systemctl daemon-reload
-sudo systemctl enable --now loramapr-receiverd
-```
-
-For image-based novice flow, use `docs/raspberry-pi-appliance.md`.
 
 ## Maintainer Publish Flow
 
@@ -93,20 +106,26 @@ For image-based novice flow, use `docs/raspberry-pi-appliance.md`.
 packaging/release/build-artifacts.sh <version> <channel>
 ```
 
-2. Stage signed publication tree:
+2. Validate `.deb` structure:
+
+```bash
+packaging/debian/validate-deb.sh dist/<version>/artifacts/loramapr-receiver_<version>_linux_amd64.deb
+```
+
+3. Stage signed publication tree:
 
 ```bash
 GPG_KEY_ID=<maintainer-key-id> SIGNING_MODE=required \
   packaging/distribution/publish.sh <version> <channel>
 ```
 
-3. Validate staged publication:
+4. Validate staged publication:
 
 ```bash
 packaging/distribution/verify.sh <version> <channel>
 ```
 
-4. Upload `dist/published/` to release hosting.
+5. Publish/sync `dist/published/` to hosting.
 
 ## Cloud Onboarding Alignment
 
@@ -114,4 +133,4 @@ Cloud should reference `cloud-manifest.fragment.json` and published URLs under
 `receiver/<channel>/<version>/`.
 
 Use Raspberry Pi host-choice entries against `platform=raspberry_pi` entries
-from the manifest fragment.
+from the manifest fragment. For existing-OS users, prefer `kind=deb_package`.

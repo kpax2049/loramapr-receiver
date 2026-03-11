@@ -1,0 +1,15 @@
+#!/bin/sh
+set -eu
+
+if command -v systemctl >/dev/null 2>&1; then
+  systemctl daemon-reload || true
+fi
+
+case "${1:-}" in
+  purge)
+    rm -f /var/lib/loramapr/receiver-state.json || true
+    rm -rf /var/lib/loramapr /var/log/loramapr || true
+    ;;
+esac
+
+exit 0

@@ -1,0 +1,17 @@
+#!/bin/sh
+set -eu
+
+if ! command -v systemctl >/dev/null 2>&1; then
+  exit 0
+fi
+
+case "${1:-}" in
+  remove|deconfigure)
+    systemctl disable --now loramapr-receiverd.service >/dev/null 2>&1 || true
+    ;;
+  upgrade|failed-upgrade)
+    systemctl stop loramapr-receiverd.service >/dev/null 2>&1 || true
+    ;;
+esac
+
+exit 0

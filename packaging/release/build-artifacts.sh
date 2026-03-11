@@ -4,6 +4,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 VERSION="${1:-${VERSION:-}}"
 CHANNEL="${2:-${CHANNEL:-stable}}"
+ENABLE_DEB="${ENABLE_DEB:-1}"
 GO_BIN="${GO_BIN:-$(command -v go || true)}"
 GIT_COMMIT="$(git -C "${ROOT_DIR}" rev-parse --short HEAD 2>/dev/null || true)"
 BUILD_DATE="${BUILD_DATE:-}"
@@ -19,6 +20,11 @@ fi
 
 if [[ -z "${VERSION}" ]]; then
   echo "Usage: $0 <version> [channel]  (or set VERSION/CHANNEL env vars)" >&2
+  exit 1
+fi
+
+if [[ "${ENABLE_DEB}" != "0" ]] && ! command -v dpkg-deb >/dev/null 2>&1; then
+  echo "dpkg-deb is required for release builds (set ENABLE_DEB=0 to skip .deb outputs in non-Linux dev environments)." >&2
   exit 1
 fi
 
@@ -119,6 +125,14 @@ for target in "${targets[@]}"; do
       cd "${STAGE_DIR}"
       tar -czf "${ARTIFACTS_DIR}/${LAYOUT_BASE}.tar.gz" .
     )
+
+    if [[ "${ENABLE_DEB}" != "0" ]]; then
+      "${ROOT_DIR}/packaging/debian/build-deb.sh" \
+        "${VERSION}" \
+        "${ARCH_LABEL}" \
+        "${BIN_PATH}" \
+        "${ARTIFACTS_DIR}"
+    fi
   fi
 done
 
@@ -130,6 +144,14 @@ required_linux=(
   "loramapr-receiver_${VERSION}_linux_arm64_systemd.tar.gz"
   "loramapr-receiver_${VERSION}_linux_armv7_systemd.tar.gz"
 )
+
+if [[ "${ENABLE_DEB}" != "0" ]]; then
+  required_linux+=(
+    "loramapr-receiver_${VERSION}_linux_amd64.deb"
+    "loramapr-receiver_${VERSION}_linux_arm64.deb"
+    "loramapr-receiver_${VERSION}_linux_armv7.deb"
+  )
+fi
 
 for required_file in "${required_linux[@]}"; do
   if [[ ! -f "${ARTIFACTS_DIR}/${required_file}" ]]; then

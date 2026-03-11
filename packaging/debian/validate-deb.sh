@@ -1,0 +1,62 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+DEB_FILE="${1:-}"
+if [[ -z "${DEB_FILE}" ]]; then
+  echo "Usage: $0 <path-to-deb>" >&2
+  exit 1
+fi
+
+if [[ ! -f "${DEB_FILE}" ]]; then
+  echo "deb file not found: ${DEB_FILE}" >&2
+  exit 1
+fi
+
+if ! command -v dpkg-deb >/dev/null 2>&1; then
+  echo "dpkg-deb is required for validation" >&2
+  exit 1
+fi
+
+WORK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/loramapr-validate-deb-XXXXXX")"
+trap 'rm -rf "${WORK_DIR}"' EXIT
+
+ROOT_DIR="${WORK_DIR}/root"
+CONTROL_DIR="${WORK_DIR}/control"
+mkdir -p "${ROOT_DIR}" "${CONTROL_DIR}"
+
+dpkg-deb -x "${DEB_FILE}" "${ROOT_DIR}"
+dpkg-deb -e "${DEB_FILE}" "${CONTROL_DIR}"
+
+PACKAGE_NAME="$(dpkg-deb -f "${DEB_FILE}" Package)"
+if [[ "${PACKAGE_NAME}" != "loramapr-receiver" ]]; then
+  echo "unexpected package name: ${PACKAGE_NAME}" >&2
+  exit 1
+fi
+
+for required_path in \
+  "usr/bin/loramapr-receiverd" \
+  "lib/systemd/system/loramapr-receiverd.service" \
+  "etc/loramapr/receiver.json"; do
+  if [[ ! -f "${ROOT_DIR}/${required_path}" ]]; then
+    echo "missing required package file: ${required_path}" >&2
+    exit 1
+  fi
+done
+
+for required_dir in \
+  "var/lib/loramapr" \
+  "var/log/loramapr"; do
+  if [[ ! -d "${ROOT_DIR}/${required_dir}" ]]; then
+    echo "missing required package directory: ${required_dir}" >&2
+    exit 1
+  fi
+done
+
+for required_control in postinst prerm postrm conffiles; do
+  if [[ ! -f "${CONTROL_DIR}/${required_control}" ]]; then
+    echo "missing required control file: ${required_control}" >&2
+    exit 1
+  fi
+done
+
+echo "Validated ${DEB_FILE}"
