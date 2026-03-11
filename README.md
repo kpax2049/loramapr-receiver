@@ -95,5 +95,7 @@ This repository currently contains:
 - [Release Artifact Mapping](./docs/release-artifacts.md)
 - [Linux/Pi Distribution Path](./docs/linux-pi-distribution.md)
 - [Raspberry Pi Appliance Path](./docs/raspberry-pi-appliance.md)
+- [Publish Guide (Bridge Batch)](./docs/publish-guide.md)
 - [Release Notes](./docs/release-notes.md)
+- [Release Notes v1.1.0](./docs/release-notes-v1.1.0.md)
 - [Reviewer Smoke Test Guide](./docs/reviewer-smoke-test.md)

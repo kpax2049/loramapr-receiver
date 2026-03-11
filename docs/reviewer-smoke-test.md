@@ -1,81 +1,107 @@
 # Reviewer Smoke Test Guide
 
-This guide is a short local validation path for receiver runtime integration.
+This guide validates the bridge-batch receiver flow from artifact build to
+runtime diagnostics.
 
 ## Prerequisites
 
-- Go installed (tested with `/usr/local/go/bin/go`)
-- Repository checked out
-- Optional: sibling `../loramapr-cloud` if testing full pairing/ingest integration
+- Go installed
+- Docker/systemd host optional for service-path checks
+- Optional reachable `loramapr-cloud` environment for real pairing/forwarding
 
-## 1. Build and Test
+## 1. Build Artifact Creation
 
 ```bash
 GOCACHE=/tmp/go-build-cache GOTMPDIR=/tmp GO_BIN=/usr/local/go/bin/go make test
-GOCACHE=/tmp/go-build-cache GOTMPDIR=/tmp GO_BIN=/usr/local/go/bin/go make build
+GOCACHE=/tmp/go-build-cache GOTMPDIR=/tmp VERSION=v1.1.0-smoke CHANNEL=stable \
+  packaging/release/build-artifacts.sh
 ```
 
-Expected: all tests pass and `bin/loramapr-receiverd` is produced.
+Expected under `dist/v1.1.0-smoke/artifacts/`:
 
-## 2. Start Receiver Locally
+- linux amd64/arm64/armv7 archives
+- linux systemd layout archives
+- `SHA256SUMS`
+- `cloud-manifest.fragment.json`
+- `release-metadata.json`
+
+## 2. Publish-Path Verification
 
 ```bash
-cp receiver.example.json receiver.local.json
-./bin/loramapr-receiverd run -config ./receiver.local.json
+SIGNING_MODE=none packaging/distribution/publish.sh v1.1.0-smoke stable
+packaging/distribution/verify.sh v1.1.0-smoke stable
 ```
 
-Expected logs: runtime starts, portal bind shown, lifecycle enters running state.
+Expected output tree:
 
-## 3. Validate Local Endpoints
+- `dist/published/receiver/stable/v1.1.0-smoke/`
+- `dist/published/receiver/stable/channel-index.json`
 
-In another shell:
+## 3. Install/Service Startup (Linux path)
+
+On Linux host or VM:
+
+```bash
+sudo tar -xzf dist/v1.1.0-smoke/artifacts/loramapr-receiver_v1.1.0-smoke_linux_amd64_systemd.tar.gz -C /
+sudo systemctl daemon-reload
+sudo systemctl enable --now loramapr-receiverd
+sudo systemctl status loramapr-receiverd --no-pager
+```
+
+Expected: service active and portal bound per config.
+
+## 4. Local Portal Pairing Path
 
 ```bash
 curl -sS http://127.0.0.1:8080/healthz
 curl -sS http://127.0.0.1:8080/readyz
 curl -sS http://127.0.0.1:8080/api/status | jq
-```
-
-Expected:
-
-- `/healthz` returns HTTP 200
-- `/readyz` reflects setup/service mode readiness
-- `/api/status` shows pairing phase and component states
-
-## 4. Pairing Submission Path (Local UX/API)
-
-```bash
 curl -sS -X POST http://127.0.0.1:8080/api/pairing/code \
   -H 'Content-Type: application/json' \
   -d '{"pairingCode":"LMR-TEST-CODE"}'
 ```
 
-Expected: HTTP 202/200 style acceptance; runtime status moves into pairing flow state.
+Expected: status shows pairing progression and diagnostics fields.
 
-## 5. Release Artifact Pipeline Check
+## 5. Cloud Connection and Node Detection
+
+With real cloud + Meshtastic bridge stream configured:
+
+1. Confirm `/api/status` transitions to paired steady state.
+2. Confirm `components.meshtastic.state` moves to `connected`.
+3. Confirm `cloud_reachable=true` and heartbeat fields update.
+
+## 6. Packet Forwarding Check
+
+Inject or observe Meshtastic packet events via configured transport.
+
+Expected `/api/status` behavior:
+
+- `ingest_queue_depth` rises briefly then returns toward zero
+- `last_packet_queued` and `last_packet_ack` advance
+- no persistent `events_not_forwarding` failure state
+
+## 7. Diagnostics Capture
 
 ```bash
-GOCACHE=/tmp/go-build-cache GOTMPDIR=/tmp VERSION=v0.0.0-smoke \
-  packaging/release/build-artifacts.sh
+loramapr-receiverd doctor -config /etc/loramapr/receiver.json
+loramapr-receiverd doctor -config /etc/loramapr/receiver.json -json | jq
+loramapr-receiverd support-snapshot -config /etc/loramapr/receiver.json -out /tmp/receiver-support.json
+cat /tmp/receiver-support.json | jq
 ```
 
-Expected outputs under `dist/v0.0.0-smoke/artifacts/`:
+Expected:
 
-- platform archives for release matrix
-- Linux `*_systemd.tar.gz` layout archives
-- `SHA256SUMS`
+- diagnostics include failure code/summary/hint when setup is blocked
+- support snapshot includes runtime/cloud/node summaries
+- support snapshot omits secrets (API key, pairing code, activation token values)
 
-## 6. Pi Appliance Scaffolding Check
+## 8. Version/Channel Reporting
 
-```bash
-cat packaging/pi/receiver.appliance.json
-packaging/pi/image/build-image.sh --help || true
-```
+Check either `/api/status`, `status` command, or support snapshot for:
 
-Expected: appliance profile config exists (`runtime.profile=appliance-pi`) and image
-builder script is present for pi-gen staging.
+- `receiver_version`
+- `release_channel`
+- `build_commit`
 
-## Notes
-
-- Full pairing activation and ingest delivery require reachable cloud endpoints and valid pairing codes.
-- For sandboxed environments, set `GOCACHE`/`GOTMPDIR` to writable paths (for example `/tmp`).
+These should match release artifact version/channel intent.

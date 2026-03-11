@@ -1,5 +1,8 @@
 # LoRaMapr Receiver Release Notes
 
+For bridge-batch release notes targeting `v1.1.0`, see
+`docs/release-notes-v1.1.0.md`.
+
 ## M2.1.0 Runtime Alpha
 
 Date: 2026-03-10

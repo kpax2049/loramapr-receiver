@@ -1,0 +1,79 @@
+# Receiver Publish Guide (Bridge Batch)
+
+This guide ties together artifact generation, signed Linux/Pi publication,
+diagnostics support workflow, and version/channel reporting.
+
+## 1. Build Release Artifacts
+
+```bash
+packaging/release/build-artifacts.sh <version> <channel>
+```
+
+Outputs in `dist/<version>/artifacts/` include:
+
+- platform archives
+- Linux/Pi systemd layout archives
+- `SHA256SUMS`
+- `cloud-manifest.fragment.json`
+- `release-metadata.json`
+
+## 2. Publish Signed Linux/Pi Distribution Skeleton
+
+```bash
+GPG_KEY_ID=<maintainer-key-id> SIGNING_MODE=required \
+  packaging/distribution/publish.sh <version> <channel>
+```
+
+Staged publication tree:
+
+- `dist/published/receiver/<channel>/<version>/...`
+- `dist/published/receiver/<channel>/channel-index.json`
+
+When signing is enabled, detached `*.asc` signatures are generated.
+
+## 3. Verify Publication
+
+```bash
+packaging/distribution/verify.sh <version> <channel>
+```
+
+This checks file presence and validates `SHA256SUMS` integrity.
+
+## 4. Cloud Onboarding Mapping
+
+Cloud should consume:
+
+- `cloud-manifest.fragment.json`
+- published URL pattern `receiver/<channel>/<version>/<artifact-file>`
+
+Pi onboarding should use `platform=raspberry_pi` entries from the manifest.
+
+## 5. Runtime Diagnostics and Support
+
+First-run failures are surfaced by taxonomy codes in local portal and CLI.
+
+Support capture:
+
+```bash
+loramapr-receiverd doctor -config /etc/loramapr/receiver.json
+loramapr-receiverd support-snapshot -config /etc/loramapr/receiver.json -out /tmp/receiver-support.json
+```
+
+Support snapshot is redacted and omits secrets.
+
+## 6. Version/Channel Reporting
+
+Release builds stamp binaries with build metadata (`version`, `channel`,
+`commit`) using release `ldflags`. These values surface in:
+
+- `/api/status`
+- heartbeat metadata
+- portal advanced details
+- `doctor` and `status` outputs
+
+## Related Docs
+
+- `docs/release-artifacts.md`
+- `docs/linux-pi-distribution.md`
+- `docs/diagnostics.md`
+- `docs/version-channel-upgrades.md`
