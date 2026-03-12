@@ -83,14 +83,14 @@ These states are surfaced in portal, diagnostics outputs, and runtime status.
 ### Local Config
 
 - `config.schema_version` is explicit.
-- Current supported config schema: `2`.
+- Current supported config schema: `3`.
 - Older config is migrated in-process.
 - Config schema newer than runtime support is rejected at startup.
 
 ### Local State
 
 - `state.schema_version` is explicit.
-- Current supported state schema: `3`.
+- Current supported state schema: `6`.
 - Older state is migrated in-process.
 - Newer state schema than runtime support fails fast (downgrade protection).
 

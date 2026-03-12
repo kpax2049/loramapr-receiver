@@ -33,9 +33,12 @@ type HomeAutoSessionSnapshot struct {
 	Enabled               bool       `json:"enabled"`
 	Mode                  string     `json:"mode,omitempty"`
 	State                 string     `json:"state,omitempty"`
+	ControlState          string     `json:"control_state,omitempty"`
+	ActiveStateSource     string     `json:"active_state_source,omitempty"`
 	Summary               string     `json:"summary,omitempty"`
 	HomeSummary           string     `json:"home_summary,omitempty"`
 	TrackedNodeIDs        []string   `json:"tracked_node_ids,omitempty"`
+	TrackedNodeState      string     `json:"tracked_node_state,omitempty"`
 	ReconciliationState   string     `json:"reconciliation_state,omitempty"`
 	PendingAction         string     `json:"pending_action,omitempty"`
 	PendingSince          *time.Time `json:"pending_since,omitempty"`
@@ -43,6 +46,9 @@ type HomeAutoSessionSnapshot struct {
 	ActiveTriggerNode     string     `json:"active_trigger_node_id,omitempty"`
 	LastDecisionReason    string     `json:"last_decision_reason,omitempty"`
 	LastError             string     `json:"last_error,omitempty"`
+	LastAction            string     `json:"last_action,omitempty"`
+	LastActionResult      string     `json:"last_action_result,omitempty"`
+	LastActionAt          *time.Time `json:"last_action_at,omitempty"`
 	LastSuccessfulAction  string     `json:"last_successful_action,omitempty"`
 	LastSuccessfulAt      *time.Time `json:"last_successful_at,omitempty"`
 	BlockedReason         string     `json:"blocked_reason,omitempty"`
@@ -152,6 +158,7 @@ func (m *Model) Snapshot() Snapshot {
 	out.UpdateCheckedAt = cloneTimePtr(m.snap.UpdateCheckedAt)
 	out.HomeAutoSession.TrackedNodeIDs = append([]string(nil), m.snap.HomeAutoSession.TrackedNodeIDs...)
 	out.HomeAutoSession.PendingSince = cloneTimePtr(m.snap.HomeAutoSession.PendingSince)
+	out.HomeAutoSession.LastActionAt = cloneTimePtr(m.snap.HomeAutoSession.LastActionAt)
 	out.HomeAutoSession.LastSuccessfulAt = cloneTimePtr(m.snap.HomeAutoSession.LastSuccessfulAt)
 	out.HomeAutoSession.CooldownUntil = cloneTimePtr(m.snap.HomeAutoSession.CooldownUntil)
 	out.HomeAutoSession.DecisionCooldownUntil = cloneTimePtr(m.snap.HomeAutoSession.DecisionCooldownUntil)
@@ -347,9 +354,12 @@ func (m *Model) SetHomeAutoSession(module HomeAutoSessionSnapshot) {
 			Enabled:               module.Enabled,
 			Mode:                  normalize(module.Mode),
 			State:                 normalize(module.State),
+			ControlState:          normalize(module.ControlState),
+			ActiveStateSource:     normalize(module.ActiveStateSource),
 			Summary:               normalize(module.Summary),
 			HomeSummary:           normalize(module.HomeSummary),
 			TrackedNodeIDs:        append([]string(nil), module.TrackedNodeIDs...),
+			TrackedNodeState:      normalize(module.TrackedNodeState),
 			ReconciliationState:   normalize(module.ReconciliationState),
 			PendingAction:         normalize(module.PendingAction),
 			PendingSince:          cloneTimePtr(module.PendingSince),
@@ -357,6 +367,9 @@ func (m *Model) SetHomeAutoSession(module HomeAutoSessionSnapshot) {
 			ActiveTriggerNode:     normalize(module.ActiveTriggerNode),
 			LastDecisionReason:    normalize(module.LastDecisionReason),
 			LastError:             normalize(module.LastError),
+			LastAction:            normalize(module.LastAction),
+			LastActionResult:      normalize(module.LastActionResult),
+			LastActionAt:          cloneTimePtr(module.LastActionAt),
 			LastSuccessfulAction:  normalize(module.LastSuccessfulAction),
 			LastSuccessfulAt:      cloneTimePtr(module.LastSuccessfulAt),
 			BlockedReason:         normalize(module.BlockedReason),

@@ -36,6 +36,12 @@ Expected boot behavior:
 - unpaired installs stay in setup mode with portal available
 - paired installs continue forwarding on restart without re-pair
 
+Home Auto Session inclusion:
+
+- Embedded in the appliance runtime image.
+- Default is off (`enabled=false`, `mode=off`).
+- Enable/configure from local portal at `/home-auto-session`.
+
 ## Appliance Defaults
 
 Appliance image uses the same `loramapr-receiverd` runtime with headless defaults:

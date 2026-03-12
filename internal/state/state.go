@@ -16,7 +16,7 @@ import (
 type PairingPhase string
 
 const (
-	CurrentSchemaVersion = 5
+	CurrentSchemaVersion = 6
 
 	PairingUnpaired           PairingPhase = "unpaired"
 	PairingCodeEntered        PairingPhase = "pairing_code_entered"
@@ -96,6 +96,8 @@ type UpdateState struct {
 
 type HomeAutoSessionState struct {
 	ModuleState            string     `json:"module_state,omitempty"`
+	ControlState           string     `json:"control_state,omitempty"`
+	ActiveStateSource      string     `json:"active_state_source,omitempty"`
 	ReconciliationState    string     `json:"reconciliation_state,omitempty"`
 	ActiveSessionID        string     `json:"active_session_id,omitempty"`
 	ActiveTriggerNode      string     `json:"active_trigger_node_id,omitempty"`
@@ -107,6 +109,9 @@ type HomeAutoSessionState struct {
 	LastDecisionReason     string     `json:"last_decision_reason,omitempty"`
 	LastStartDedupeKey     string     `json:"last_start_dedupe_key,omitempty"`
 	LastStopDedupeKey      string     `json:"last_stop_dedupe_key,omitempty"`
+	LastAction             string     `json:"last_action,omitempty"`
+	LastActionResult       string     `json:"last_action_result,omitempty"`
+	LastActionAt           *time.Time `json:"last_action_at,omitempty"`
 	LastSuccessfulAction   string     `json:"last_successful_action,omitempty"`
 	LastSuccessfulActionAt *time.Time `json:"last_successful_action_at,omitempty"`
 	LastError              string     `json:"last_error,omitempty"`
@@ -217,7 +222,6 @@ func (s *Store) Update(fn func(*Data)) error {
 func (s *Store) ensureDefaults() (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-
 	changed := false
 	if s.data.SchemaVersion == 0 {
 		s.data.SchemaVersion = CurrentSchemaVersion
@@ -256,6 +260,14 @@ func (s *Store) ensureDefaults() (bool, error) {
 	}
 	if strings.TrimSpace(s.data.HomeAutoSession.ModuleState) == "" {
 		s.data.HomeAutoSession.ModuleState = "disabled"
+		changed = true
+	}
+	if strings.TrimSpace(s.data.HomeAutoSession.ControlState) == "" {
+		s.data.HomeAutoSession.ControlState = "disabled"
+		changed = true
+	}
+	if strings.TrimSpace(s.data.HomeAutoSession.ActiveStateSource) == "" {
+		s.data.HomeAutoSession.ActiveStateSource = "none"
 		changed = true
 	}
 	if strings.TrimSpace(s.data.HomeAutoSession.ReconciliationState) == "" {
@@ -321,6 +333,18 @@ func (s *Store) migrate() (bool, error) {
 			changed = true
 		}
 		version = 5
+		changed = true
+	}
+	if version <= 5 {
+		if strings.TrimSpace(s.data.HomeAutoSession.ControlState) == "" {
+			s.data.HomeAutoSession.ControlState = "disabled"
+			changed = true
+		}
+		if strings.TrimSpace(s.data.HomeAutoSession.ActiveStateSource) == "" {
+			s.data.HomeAutoSession.ActiveStateSource = "none"
+			changed = true
+		}
+		version = 6
 		changed = true
 	}
 

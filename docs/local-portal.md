@@ -89,10 +89,16 @@ Home Auto Session module states you may see:
 - `cooldown`
 - `degraded`
 
-Home Auto Session recovery/status details now include:
+Home Auto Session production control details now include:
 
+- control state (`ready`, `pending_start`, `pending_stop`, `conflict_blocked`,
+  `lifecycle_blocked`, etc.)
+- active state source (`cloud_acknowledged`, `local_recovered_unverified`,
+  `conflict_unresolved`)
 - reconciliation state (startup recovery outcome)
 - pending action (`start|stop`) during retry/recovery
+- tracked node state summary
+- last action and last action result
 - GPS validity state (`missing|invalid|stale|boundary_uncertain|valid`)
 - blocked reason for degraded mode
 
@@ -105,6 +111,8 @@ Typical plain-language hints:
 - cloud/session API unavailable
 - recovering pending start/stop action after restart
 - waiting for stable position near geofence boundary
+- control is blocked due to cloud/local conflict
+- control is blocked because receiver was revoked/disabled/replaced
 
 In multi-receiver environments, portal guidance also helps distinguish:
 

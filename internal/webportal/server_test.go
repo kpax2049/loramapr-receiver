@@ -509,6 +509,12 @@ func TestHomeAutoSessionPage(t *testing.T) {
 	if !strings.Contains(body, "Home Auto Session") {
 		t.Fatalf("expected home auto session page content")
 	}
+	if !strings.Contains(body, "Control State") {
+		t.Fatalf("expected control state field in home auto session page")
+	}
+	if !strings.Contains(body, "Last Action Result") {
+		t.Fatalf("expected last action result field in home auto session page")
+	}
 }
 
 func TestHomeAutoSessionSaveForm(t *testing.T) {
@@ -551,6 +557,38 @@ func TestHomeAutoSessionSaveForm(t *testing.T) {
 	}
 	if len(submitter.lastSavedTrackedNodes) != 2 {
 		t.Fatalf("unexpected saved tracked nodes: %#v", submitter.lastSavedTrackedNodes)
+	}
+}
+
+func TestHomeAutoStateHintLifecycleBlocked(t *testing.T) {
+	t.Parallel()
+
+	snap := sampleSnapshot()
+	snap.HomeAutoSession.Enabled = true
+	snap.HomeAutoSession.Mode = "control"
+	snap.HomeAutoSession.State = "degraded"
+	snap.HomeAutoSession.ControlState = "lifecycle_blocked"
+	snap.HomeAutoSession.BlockedReason = "receiver credential revoked by cloud"
+
+	hint := homeAutoStateHint(snap)
+	if !strings.Contains(strings.ToLower(hint), "lifecycle-blocked") {
+		t.Fatalf("expected lifecycle-blocked hint, got %q", hint)
+	}
+}
+
+func TestHomeAutoStateHintConflictBlocked(t *testing.T) {
+	t.Parallel()
+
+	snap := sampleSnapshot()
+	snap.HomeAutoSession.Enabled = true
+	snap.HomeAutoSession.Mode = "control"
+	snap.HomeAutoSession.State = "degraded"
+	snap.HomeAutoSession.ControlState = "conflict_blocked"
+	snap.HomeAutoSession.BlockedReason = "cloud reports an active session already exists"
+
+	hint := homeAutoStateHint(snap)
+	if !strings.Contains(strings.ToLower(hint), "conflict") {
+		t.Fatalf("expected conflict hint, got %q", hint)
 	}
 }
 

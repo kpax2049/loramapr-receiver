@@ -387,6 +387,15 @@ func TestSendHeartbeatPayloadShaping(t *testing.T) {
 	if _, ok := mockCloud.lastHeartbeat.Status["operationalStatus"]; !ok {
 		t.Fatalf("expected operationalStatus in heartbeat status payload")
 	}
+	if _, ok := mockCloud.lastHeartbeat.Status["homeAutoControlState"]; !ok {
+		t.Fatalf("expected homeAutoControlState in heartbeat status payload")
+	}
+	if _, ok := mockCloud.lastHeartbeat.Status["homeAutoActiveSource"]; !ok {
+		t.Fatalf("expected homeAutoActiveSource in heartbeat status payload")
+	}
+	if _, ok := mockCloud.lastHeartbeat.Status["homeAutoLastResult"]; !ok {
+		t.Fatalf("expected homeAutoLastResult in heartbeat status payload")
+	}
 	if got := mockCloud.lastHeartbeat.Status["localName"]; got != "garage-pi-abc123" {
 		t.Fatalf("expected localName in heartbeat payload, got %#v", got)
 	}

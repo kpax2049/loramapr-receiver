@@ -1,8 +1,8 @@
-# Reviewer Smoke Test Guide (v2.10.0 Home Auto Session M2)
+# Reviewer Smoke Test Guide (v2.11.0 Home Auto Session M3)
 
 This guide verifies both supported install paths, portal/diagnostics behavior,
-multi-receiver identity/coexistence guidance, and Home Auto Session Milestone 2
-correctness/recovery behavior.
+multi-receiver identity/coexistence guidance, and Home Auto Session Milestone 3
+production-control behavior.
 
 ## 1. Build and Baseline Tests
 
@@ -110,24 +110,25 @@ validate on at least one paired receiver:
 4. Verify paired-but-node-missing guidance includes multi-receiver attachment
    checks (node may be attached to another receiver).
 
-## 9. Home Auto Session Milestone 2
+## 9. Home Auto Session Milestone 3
 
-Use [Embedded Home Auto Session](./home-auto-session.md):
+Use [Embedded Home Auto Session](./home-auto-session.md) and validate:
 
 1. Open `/home-auto-session` and confirm module status section renders.
 2. Save config in `observe` mode with:
    - home geofence lat/lon/radius
    - tracked node list
    - debounce/timeout values
-3. Verify status changes to `observe_ready` and shows plain-language state hint.
+3. Verify status changes to `observe_ready` and clearly indicates observe mode is
+   non-controlling.
 4. Switch to `control` mode on a paired receiver with cloud credentials.
 5. Inject/observe tracked node outside transition and confirm:
    - `start_pending` then `active`
-   - decision reason populated
+   - decision reason and last action/result populated
 6. Inject return/inside transition (or wait idle timeout) and confirm:
    - `stop_pending` then `control_ready`
 7. Restart `loramapr-receiverd` while Home Auto Session is active and verify:
-   - startup reconciliation state is visible
+   - reconciliation and active-state source are visible
    - duplicate start/stop is not issued
 8. Inject stale/invalid/boundary GPS and verify:
    - no auto start is issued from unusable GPS
@@ -136,7 +137,13 @@ Use [Embedded Home Auto Session](./home-auto-session.md):
    - state transitions to `cooldown`
    - pending action is shown
    - repeated API spam does not occur
-10. Verify diagnostics surfaces include Home Auto Session context:
+10. Force conflict/lifecycle responses and verify stable blocked states:
+   - start rejected as already active -> `conflict_blocked`
+   - stop rejected with state mismatch -> `conflict_blocked`
+   - revoked/disabled/replaced response -> `lifecycle_blocked`
+11. Verify diagnostics surfaces include Home Auto Session context:
    - `doctor -json`
    - `status`
    - `support-snapshot`
+   including: `control_state`, `active_state_source`, `last_action`,
+   `last_action_result`.

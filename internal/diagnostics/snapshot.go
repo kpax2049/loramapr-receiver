@@ -101,15 +101,21 @@ type SupportSnapshot struct {
 		Enabled              bool       `json:"enabled"`
 		Mode                 string     `json:"mode,omitempty"`
 		State                string     `json:"state,omitempty"`
+		ControlState         string     `json:"control_state,omitempty"`
+		ActiveStateSource    string     `json:"active_state_source,omitempty"`
 		Summary              string     `json:"summary,omitempty"`
 		HomeSummary          string     `json:"home_summary,omitempty"`
 		TrackedNodeIDs       []string   `json:"tracked_node_ids,omitempty"`
+		TrackedNodeState     string     `json:"tracked_node_state,omitempty"`
 		ReconciliationState  string     `json:"reconciliation_state,omitempty"`
 		PendingAction        string     `json:"pending_action,omitempty"`
 		ActiveSessionID      string     `json:"active_session_id,omitempty"`
 		ActiveTriggerNode    string     `json:"active_trigger_node_id,omitempty"`
 		LastDecisionReason   string     `json:"last_decision_reason,omitempty"`
 		LastError            string     `json:"last_error,omitempty"`
+		LastAction           string     `json:"last_action,omitempty"`
+		LastActionResult     string     `json:"last_action_result,omitempty"`
+		LastActionAt         *time.Time `json:"last_action_at,omitempty"`
 		LastSuccessfulAction string     `json:"last_successful_action,omitempty"`
 		LastSuccessfulAt     *time.Time `json:"last_successful_at,omitempty"`
 		BlockedReason        string     `json:"blocked_reason,omitempty"`
@@ -274,12 +280,17 @@ func CollectSupportSnapshot(cfg config.Config, data state.Data, finding Finding,
 	out.HomeAutoSession.HomeSummary = formatHomeSummary(cfg.HomeAutoSession.Home)
 	out.HomeAutoSession.TrackedNodeIDs = append([]string(nil), cfg.HomeAutoSession.TrackedNodeIDs...)
 	out.HomeAutoSession.State = strings.TrimSpace(data.HomeAutoSession.ModuleState)
+	out.HomeAutoSession.ControlState = strings.TrimSpace(data.HomeAutoSession.ControlState)
+	out.HomeAutoSession.ActiveStateSource = strings.TrimSpace(data.HomeAutoSession.ActiveStateSource)
 	out.HomeAutoSession.ReconciliationState = strings.TrimSpace(data.HomeAutoSession.ReconciliationState)
 	out.HomeAutoSession.PendingAction = strings.TrimSpace(data.HomeAutoSession.PendingAction)
 	out.HomeAutoSession.ActiveSessionID = strings.TrimSpace(data.HomeAutoSession.ActiveSessionID)
 	out.HomeAutoSession.ActiveTriggerNode = strings.TrimSpace(data.HomeAutoSession.ActiveTriggerNode)
 	out.HomeAutoSession.LastDecisionReason = strings.TrimSpace(data.HomeAutoSession.LastDecisionReason)
 	out.HomeAutoSession.LastError = strings.TrimSpace(data.HomeAutoSession.LastError)
+	out.HomeAutoSession.LastAction = strings.TrimSpace(data.HomeAutoSession.LastAction)
+	out.HomeAutoSession.LastActionResult = strings.TrimSpace(data.HomeAutoSession.LastActionResult)
+	out.HomeAutoSession.LastActionAt = cloneTimePtr(data.HomeAutoSession.LastActionAt)
 	out.HomeAutoSession.LastSuccessfulAction = strings.TrimSpace(data.HomeAutoSession.LastSuccessfulAction)
 	out.HomeAutoSession.LastSuccessfulAt = cloneTimePtr(data.HomeAutoSession.LastSuccessfulActionAt)
 	out.HomeAutoSession.BlockedReason = strings.TrimSpace(data.HomeAutoSession.BlockedReason)
@@ -340,6 +351,12 @@ func CollectSupportSnapshot(cfg config.Config, data state.Data, finding Finding,
 		if value := strings.TrimSpace(localProbe.Snapshot.HomeAutoSession.State); value != "" {
 			out.HomeAutoSession.State = value
 		}
+		if value := strings.TrimSpace(localProbe.Snapshot.HomeAutoSession.ControlState); value != "" {
+			out.HomeAutoSession.ControlState = value
+		}
+		if value := strings.TrimSpace(localProbe.Snapshot.HomeAutoSession.ActiveStateSource); value != "" {
+			out.HomeAutoSession.ActiveStateSource = value
+		}
 		if value := strings.TrimSpace(localProbe.Snapshot.HomeAutoSession.ReconciliationState); value != "" {
 			out.HomeAutoSession.ReconciliationState = value
 		}
@@ -351,6 +368,9 @@ func CollectSupportSnapshot(cfg config.Config, data state.Data, finding Finding,
 		}
 		if value := strings.TrimSpace(localProbe.Snapshot.HomeAutoSession.HomeSummary); value != "" {
 			out.HomeAutoSession.HomeSummary = value
+		}
+		if value := strings.TrimSpace(localProbe.Snapshot.HomeAutoSession.TrackedNodeState); value != "" {
+			out.HomeAutoSession.TrackedNodeState = value
 		}
 		if len(localProbe.Snapshot.HomeAutoSession.TrackedNodeIDs) > 0 {
 			out.HomeAutoSession.TrackedNodeIDs = append([]string(nil), localProbe.Snapshot.HomeAutoSession.TrackedNodeIDs...)
@@ -366,6 +386,15 @@ func CollectSupportSnapshot(cfg config.Config, data state.Data, finding Finding,
 		}
 		if value := strings.TrimSpace(localProbe.Snapshot.HomeAutoSession.LastError); value != "" {
 			out.HomeAutoSession.LastError = value
+		}
+		if value := strings.TrimSpace(localProbe.Snapshot.HomeAutoSession.LastAction); value != "" {
+			out.HomeAutoSession.LastAction = value
+		}
+		if value := strings.TrimSpace(localProbe.Snapshot.HomeAutoSession.LastActionResult); value != "" {
+			out.HomeAutoSession.LastActionResult = value
+		}
+		if localProbe.Snapshot.HomeAutoSession.LastActionAt != nil {
+			out.HomeAutoSession.LastActionAt = cloneTimePtr(localProbe.Snapshot.HomeAutoSession.LastActionAt)
 		}
 		if value := strings.TrimSpace(localProbe.Snapshot.HomeAutoSession.LastSuccessfulAction); value != "" {
 			out.HomeAutoSession.LastSuccessfulAction = value

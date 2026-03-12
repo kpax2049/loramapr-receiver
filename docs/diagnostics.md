@@ -108,10 +108,12 @@ Overall state:
   - cloud receiver/site/group labels (when present)
 - Home Auto Session context:
   - enabled/mode
-  - module + reconciliation state
+  - module + control + reconciliation state
+  - active state source
   - pending action state (if recovering/retrying)
   - tracked nodes summary
   - active session/trigger node
+  - last action + last action result
   - last decision reason
   - last successful action
   - GPS validity status/reason

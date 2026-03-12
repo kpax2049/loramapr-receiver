@@ -1,5 +1,8 @@
 # LoRaMapr Receiver Release Notes
 
+For Embedded Home Auto Session Milestone 3 production-control notes targeting
+`v2.11.0`, see `docs/release-notes-v2.11.0.md`.
+
 For Embedded Home Auto Session Milestone 2 correctness/recovery notes targeting
 `v2.10.0`, see `docs/release-notes-v2.10.0.md`.
 

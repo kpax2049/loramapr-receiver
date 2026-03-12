@@ -810,10 +810,21 @@ func troubleshootingHints(snap status.Snapshot) []string {
 		hints = append(hints, "Last runtime error: "+snap.LastError)
 	}
 	homeState := strings.TrimSpace(snap.HomeAutoSession.State)
+	homeControl := strings.TrimSpace(snap.HomeAutoSession.ControlState)
 	if homeState != "" && homeState != "disabled" {
 		hints = append(hints, "Home Auto Session state: "+homeState)
+		if homeControl != "" {
+			hints = append(hints, "Home Auto control state: "+homeControl)
+		}
 		if reason := strings.TrimSpace(snap.HomeAutoSession.LastDecisionReason); reason != "" {
 			hints = append(hints, "Home Auto last decision: "+reason)
+		}
+		if action := strings.TrimSpace(snap.HomeAutoSession.LastAction); action != "" {
+			result := strings.TrimSpace(snap.HomeAutoSession.LastActionResult)
+			if result == "" {
+				result = "result unavailable"
+			}
+			hints = append(hints, fmt.Sprintf("Home Auto last action: %s (%s)", action, result))
 		}
 		if err := strings.TrimSpace(snap.HomeAutoSession.LastError); err != "" {
 			hints = append(hints, "Home Auto last error: "+err)
@@ -828,6 +839,18 @@ func troubleshootingHints(snap status.Snapshot) []string {
 		case "observe_ready":
 			hints = append(hints, "Home Auto Session is in observe mode and will not start/stop cloud sessions.")
 		}
+		switch strings.TrimSpace(snap.HomeAutoSession.ActiveStateSource) {
+		case "local_recovered_unverified":
+			hints = append(hints, "Home Auto Session recovered active state from local persisted data; waiting for next confirmed cloud action.")
+		case "conflict_unresolved":
+			hints = append(hints, "Home Auto Session detected cloud/local control conflict; operator action is required before further control attempts.")
+		}
+	}
+	switch homeControl {
+	case "lifecycle_blocked":
+		hints = append(hints, "Home Auto Session control is lifecycle-blocked (receiver revoked/disabled/replaced). Reset and re-pair this receiver.")
+	case "conflict_blocked":
+		hints = append(hints, "Home Auto Session control is conflict-blocked due to cloud/local disagreement. Reevaluate or reset after confirming cloud session state.")
 	}
 	for _, recent := range snap.RecentFailures {
 		if recent.Code == "" || recent.Summary == "" {
@@ -1004,9 +1027,26 @@ func parseBooleanFormValue(raw string) bool {
 
 func homeAutoStateHint(snap status.Snapshot) string {
 	module := snap.HomeAutoSession
-	switch strings.TrimSpace(module.State) {
+	state := strings.TrimSpace(module.State)
+	mode := strings.TrimSpace(module.Mode)
+	control := strings.TrimSpace(module.ControlState)
+
+	if control == "lifecycle_blocked" {
+		if reason := strings.TrimSpace(module.BlockedReason); reason != "" {
+			return "Home Auto Session control is lifecycle-blocked: " + reason
+		}
+		return "Home Auto Session control is lifecycle-blocked. Reset pairing and link this receiver again."
+	}
+	if control == "conflict_blocked" {
+		if reason := strings.TrimSpace(module.BlockedReason); reason != "" {
+			return "Home Auto Session is blocked by a cloud/local conflict: " + reason
+		}
+		return "Home Auto Session is blocked by a cloud/local conflict. Reevaluate or reset after confirming cloud session state."
+	}
+
+	switch state {
 	case "disabled":
-		return "Home Auto Session is disabled."
+		return "Home Auto Session is disabled. Enable it to use optional geofence-driven session control."
 	case "misconfigured":
 		return "Home Auto Session config is incomplete or invalid."
 	case "observe_ready":
@@ -1019,6 +1059,12 @@ func homeAutoStateHint(snap status.Snapshot) string {
 		}
 		return "Start candidate detected; waiting for debounce before action."
 	case "active":
+		if mode == "observe" {
+			return "Home Auto Session is tracking an active session in observe mode. Start/stop calls remain disabled in observe mode."
+		}
+		if action := strings.TrimSpace(module.LastAction); action == "start" && strings.TrimSpace(module.LastActionResult) != "" {
+			return "Session active: last start result was " + strings.TrimSpace(module.LastActionResult) + "."
+		}
 		return "Session active."
 	case "stop_pending":
 		if module.PendingAction == "stop" {
@@ -1029,13 +1075,22 @@ func homeAutoStateHint(snap status.Snapshot) string {
 		if module.PendingAction != "" {
 			return "Cloud/session API unavailable; waiting for cooldown before retrying pending action."
 		}
-		return "Cloud/session API unavailable; waiting for cooldown before retry."
+		if mode == "observe" {
+			return "Observe mode cooldown: waiting before next decision evaluation."
+		}
+		return "Control mode cooldown: waiting for retry window before another cloud/session action."
 	case "degraded":
 		if reason := strings.TrimSpace(module.BlockedReason); reason != "" {
 			return "Home Auto Session is degraded: " + reason
 		}
 		return "Home Auto Session is degraded; review last error and reset/reevaluate."
 	default:
+		if action := strings.TrimSpace(module.LastAction); action != "" {
+			result := strings.TrimSpace(module.LastActionResult)
+			if result != "" {
+				return fmt.Sprintf("Home Auto Session initializing. Last action %s result: %s.", action, result)
+			}
+		}
 		return "Home Auto Session status is initializing."
 	}
 }

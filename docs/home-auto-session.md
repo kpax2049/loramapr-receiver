@@ -1,34 +1,69 @@
-# Embedded Home Auto Session (Milestone 2: Correctness and Recovery)
+# Embedded Home Auto Session (Milestone 3: Production Control Model)
 
-Home Auto Session is an optional embedded receiver module. It is not a separate
-service and never blocks packet forwarding.
+Home Auto Session is an optional embedded module inside `loramapr-receiverd`.
+It is never a separate service and never blocks packet forwarding.
 
-## Purpose
+## Default-Off and Enablement
 
-When enabled, the module observes normalized Meshtastic packet events and
-applies a simple local geofence policy for tracked node IDs.
+- Module is included in all supported Linux/Pi receiver builds.
+- Default is always off:
+  - `home_auto_session.enabled = false`
+  - `home_auto_session.mode = off`
+- User must explicitly enable it in local config or local portal.
 
 Modes:
 
 - `off`: module disabled
-- `observe`: evaluate start/stop decisions but do not call cloud session APIs
-- `control`: evaluate decisions and call cloud session start/stop APIs
+- `observe`: evaluate decisions but never call session start/stop APIs
+- `control`: evaluate decisions and call session start/stop APIs
 
-## Scope (Still Intentionally Narrow)
+## Policy Scope (Intentionally Narrow)
 
 - one home geofence
 - explicit tracked node IDs
 - one active auto session per receiver
-- start on `inside -> outside` transition after start debounce
+- start on `inside -> outside` transition after debounce
 - stop on `outside -> inside` transition or idle timeout
 
-## Milestone 2 Hardening
+Milestone 3 does not add advanced policy features.
 
-Milestone 2 adds correctness/recovery behavior without expanding policy scope.
+## Production Control States
 
-### Startup Reconciliation
+Module state:
 
-On runtime start, module reconciles persisted state into explicit outcomes:
+- `disabled`
+- `misconfigured`
+- `observe_ready`
+- `control_ready`
+- `start_pending`
+- `active`
+- `stop_pending`
+- `cooldown`
+- `degraded`
+
+Control state (operator-facing control semantics):
+
+- `disabled`
+- `misconfigured`
+- `ready`
+- `pending_start`
+- `pending_stop`
+- `active`
+- `cooldown`
+- `conflict_blocked`
+- `lifecycle_blocked`
+- `degraded`
+
+Active state source:
+
+- `none`
+- `cloud_acknowledged`
+- `local_recovered_unverified`
+- `conflict_unresolved`
+
+## Reconciliation and Conflict Handling
+
+Startup reconciliation outcomes:
 
 - `clean_idle`
 - `startup_reconcile_disabled`
@@ -39,49 +74,46 @@ On runtime start, module reconciles persisted state into explicit outcomes:
 - `pending_stop_resolved`
 - `inconsistent_degraded`
 
-### Idempotency and Pending Action Recovery
+Production conflict/lifecycle outcomes:
 
-Persisted control metadata now includes pending action context so retries across
-restart use the same dedupe key:
+- `conflict_already_active`
+- `conflict_state_mismatch`
+- `lifecycle_revoked`
+- `lifecycle_disabled`
+- `lifecycle_replaced`
 
-- `pending_action`
-- `pending_trigger_node_id`
-- `pending_reason`
-- `pending_dedupe_key`
-- `pending_since`
+Behavior:
 
-Successful control metadata:
+- already-active start conflicts block churn and move to conflict-blocked state
+- already-closed stop conflicts resolve as safe stop completion
+- revoked/disabled/replaced lifecycle responses block control actions
+- unresolved cloud/local mismatch remains explicit until operator intervention
 
-- `last_start_dedupe_key`
-- `last_stop_dedupe_key`
+## Action and Diagnostics Fields
+
+Support-safe action metadata:
+
+- `last_action`
+- `last_action_result`
+- `last_action_at`
 - `last_successful_action`
 - `last_successful_action_at`
 
-### GPS Validity and Geofence Flap Protection
+Other support fields:
 
-Module now classifies tracked-node position quality:
+- `tracked_node_state`
+- `reconciliation_state`
+- `active_state_source`
+- `blocked_reason`
+- `last_error`
+- `gps_status` and `gps_reason`
 
-- `missing`
-- `invalid`
-- `stale`
-- `boundary_uncertain`
-- `valid`
-
-Safety rules:
-
-- no auto-start from missing/invalid/stale/boundary-uncertain position
-- boundary uncertainty band suppresses start/stop flap near geofence radius
-- post-action decision cooldown suppresses immediate flip-flop actions
-
-### Failure and Degraded Handling
-
-- retryable cloud/session failures -> `cooldown` with bounded retry backoff
-- non-retryable failures -> `degraded` with explicit `blocked_reason`
-- persistent failure counters and last error are persisted for support
+These are surfaced consistently in portal, `doctor`, `status`, and
+`support-snapshot`.
 
 ## Configuration
 
-Use `home_auto_session` in receiver config:
+`home_auto_session` config keys:
 
 - `enabled`
 - `mode`
@@ -100,29 +132,20 @@ Portal path:
 
 - `GET /home-auto-session`
 
-## Operator Visibility
+## Supported Install Paths
 
-Portal, `doctor`, `status`, and `support-snapshot` expose support-safe fields:
+Same embedded module behavior on both supported paths:
 
-- module state + reconciliation state
-- pending action + active session context
-- last decision + last error + blocked reason
-- GPS status and reason
-- last successful control action
+- [Linux/Pi Existing-OS Install Path](./linux-pi-distribution.md)
+- [Raspberry Pi Appliance Path](./raspberry-pi-appliance.md)
 
-## Cloud Contract Assumptions
-
-Receiver uses receiver-authenticated endpoints (with idempotency keys):
-
-- start endpoint (default): `/api/receiver/home-auto-session/start`
-- stop endpoint (default): `/api/receiver/home-auto-session/stop`
-
-No full cloud-side verification endpoint is required for M2.
+Feature remains optional/off-by-default in both paths.
 
 ## Troubleshooting Basics
 
-- `misconfigured`: fix geofence and tracked node IDs
-- `cooldown`: transient cloud/API retry window in progress
-- `degraded`: non-retryable failure or inconsistent local state; use reset/reevaluate
-- `boundary_uncertain`: wait for a stable point outside uncertainty band
-- `stale`/`missing`: wait for fresh tracked-node GPS position updates
+- `misconfigured`: fix geofence/tracked-node config
+- `cooldown`: retry window after retryable cloud/session API failure
+- `conflict_blocked`: cloud/local state disagreement requires intervention
+- `lifecycle_blocked`: receiver revoked/disabled/replaced; reset/re-pair required
+- `degraded`: non-retryable control path issue; inspect `blocked_reason`
+- GPS `missing|invalid|stale|boundary_uncertain`: no control action until usable position data

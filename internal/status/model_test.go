@@ -226,9 +226,12 @@ func TestHomeAutoSessionStatus(t *testing.T) {
 		Enabled:               true,
 		Mode:                  "observe",
 		State:                 "start_pending",
+		ControlState:          "pending_start",
+		ActiveStateSource:     "local_recovered_unverified",
 		Summary:               "waiting for start debounce",
 		HomeSummary:           "37.3349,-122.0090 radius 150m",
 		TrackedNodeIDs:        []string{"!nodeA", "!nodeB"},
+		TrackedNodeState:      "node !nodeA is outside home geofence",
 		ReconciliationState:   "pending_start_recovering",
 		PendingAction:         "start",
 		PendingSince:          &pendingSince,
@@ -236,6 +239,9 @@ func TestHomeAutoSessionStatus(t *testing.T) {
 		ActiveTriggerNode:     "!nodeA",
 		LastDecisionReason:    "inside->outside transition",
 		LastError:             "",
+		LastAction:            "start",
+		LastActionResult:      "retry_scheduled",
+		LastActionAt:          &pendingSince,
 		LastSuccessfulAction:  "start",
 		LastSuccessfulAt:      &lastSuccess,
 		BlockedReason:         "",
@@ -263,6 +269,18 @@ func TestHomeAutoSessionStatus(t *testing.T) {
 	}
 	if snap.HomeAutoSession.PendingAction != "start" {
 		t.Fatalf("unexpected home_auto_session pending action: %q", snap.HomeAutoSession.PendingAction)
+	}
+	if snap.HomeAutoSession.LastAction != "start" {
+		t.Fatalf("unexpected home_auto_session last action: %q", snap.HomeAutoSession.LastAction)
+	}
+	if snap.HomeAutoSession.ControlState != "pending_start" {
+		t.Fatalf("unexpected home_auto_session control state: %q", snap.HomeAutoSession.ControlState)
+	}
+	if snap.HomeAutoSession.ActiveStateSource != "local_recovered_unverified" {
+		t.Fatalf("unexpected home_auto_session active state source: %q", snap.HomeAutoSession.ActiveStateSource)
+	}
+	if snap.HomeAutoSession.LastActionResult != "retry_scheduled" {
+		t.Fatalf("unexpected home_auto_session last action result: %q", snap.HomeAutoSession.LastActionResult)
 	}
 	if snap.HomeAutoSession.GPSDistanceM == nil {
 		t.Fatal("expected gps distance pointer")

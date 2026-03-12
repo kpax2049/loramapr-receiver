@@ -41,6 +41,12 @@ After install:
    - or `http://<host-lan-ip>:8080`
 3. Enter pairing code from LoRaMapr Cloud.
 
+Home Auto Session inclusion:
+
+- Feature is built into the installed receiver package.
+- Default is off (`enabled=false`, `mode=off`).
+- Enable/configure from local portal: `/home-auto-session`.
+
 ## Manual `.deb` Install (Fallback)
 
 Use this only when APT repository access is not possible.

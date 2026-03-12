@@ -366,6 +366,169 @@ func TestStopAlreadyResolvedErrorClearsActiveSession(t *testing.T) {
 	})
 }
 
+func TestStartConflictAlreadyActiveEntersConflictBlocked(t *testing.T) {
+	store, err := state.Open(filepath.Join(t.TempDir(), "receiver-state.json"))
+	if err != nil {
+		t.Fatalf("open state: %v", err)
+	}
+	if err := store.Update(func(data *state.Data) {
+		data.Pairing.Phase = state.PairingSteadyState
+		data.Cloud.IngestAPIKey = "secret"
+	}); err != nil {
+		t.Fatalf("seed state: %v", err)
+	}
+
+	statusModel := status.New()
+	cloud := &mockSessionClient{
+		startErr: &cloudclient.APIError{
+			StatusCode: 409,
+			Message:    "session already active for receiver",
+			Retryable:  false,
+		},
+	}
+	module := New(homeAutoTestConfig(config.HomeAutoSessionModeControl), store, statusModel, nil, cloud)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer func() {
+		cancel()
+		time.Sleep(80 * time.Millisecond)
+	}()
+	module.Start(ctx)
+
+	now := time.Now().UTC()
+	module.ObserveEvent(testPacket("!nodeA", 37.3349, -122.0090, now))
+	module.ObserveEvent(testPacket("!nodeA", latOffsetMeters(37.3349, 250), -122.0090, now.Add(time.Second)))
+	module.Reevaluate()
+
+	waitForCondition(t, 6*time.Second, func() bool {
+		snap := statusModel.Snapshot().HomeAutoSession
+		return snap.State == string(StateDegraded) && snap.ReconciliationState == reconciliationConflictAlreadyActive
+	})
+
+	snap := statusModel.Snapshot().HomeAutoSession
+	if snap.ControlState != controlStateConflictBlocked {
+		t.Fatalf("expected control state %q, got %q", controlStateConflictBlocked, snap.ControlState)
+	}
+	if snap.ActiveStateSource != activeStateSourceConflict {
+		t.Fatalf("expected active source %q, got %q", activeStateSourceConflict, snap.ActiveStateSource)
+	}
+	if snap.LastActionResult != "already_active_conflict" {
+		t.Fatalf("expected last action result already_active_conflict, got %q", snap.LastActionResult)
+	}
+	time.Sleep(250 * time.Millisecond)
+	startCalls, _ := cloud.calls()
+	if startCalls != 1 {
+		t.Fatalf("expected one start call under conflict block, got %d", startCalls)
+	}
+}
+
+func TestStartLifecycleRevokedEntersLifecycleBlocked(t *testing.T) {
+	store, err := state.Open(filepath.Join(t.TempDir(), "receiver-state.json"))
+	if err != nil {
+		t.Fatalf("open state: %v", err)
+	}
+	if err := store.Update(func(data *state.Data) {
+		data.Pairing.Phase = state.PairingSteadyState
+		data.Cloud.IngestAPIKey = "secret"
+	}); err != nil {
+		t.Fatalf("seed state: %v", err)
+	}
+
+	statusModel := status.New()
+	cloud := &mockSessionClient{
+		startErr: &cloudclient.APIError{
+			StatusCode: 401,
+			Message:    "receiver credential revoked",
+			Retryable:  false,
+		},
+	}
+	module := New(homeAutoTestConfig(config.HomeAutoSessionModeControl), store, statusModel, nil, cloud)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer func() {
+		cancel()
+		time.Sleep(80 * time.Millisecond)
+	}()
+	module.Start(ctx)
+
+	now := time.Now().UTC()
+	module.ObserveEvent(testPacket("!nodeA", 37.3349, -122.0090, now))
+	module.ObserveEvent(testPacket("!nodeA", latOffsetMeters(37.3349, 250), -122.0090, now.Add(time.Second)))
+	module.Reevaluate()
+
+	waitForCondition(t, 6*time.Second, func() bool {
+		snap := statusModel.Snapshot().HomeAutoSession
+		return snap.State == string(StateDegraded) && snap.ReconciliationState == reconciliationLifecycleRevoked
+	})
+
+	snap := statusModel.Snapshot().HomeAutoSession
+	if snap.ControlState != controlStateLifecycleBlocked {
+		t.Fatalf("expected control state %q, got %q", controlStateLifecycleBlocked, snap.ControlState)
+	}
+	if snap.LastActionResult != "rejected_revoked" {
+		t.Fatalf("expected last action result rejected_revoked, got %q", snap.LastActionResult)
+	}
+	if snap.BlockedReason == "" {
+		t.Fatalf("expected blocked reason under lifecycle block")
+	}
+}
+
+func TestStopStateMismatchConflictBlocked(t *testing.T) {
+	store, err := state.Open(filepath.Join(t.TempDir(), "receiver-state.json"))
+	if err != nil {
+		t.Fatalf("open state: %v", err)
+	}
+	if err := store.Update(func(data *state.Data) {
+		data.Pairing.Phase = state.PairingSteadyState
+		data.Cloud.IngestAPIKey = "secret"
+	}); err != nil {
+		t.Fatalf("seed state: %v", err)
+	}
+
+	statusModel := status.New()
+	cloud := &mockSessionClient{}
+	module := New(homeAutoTestConfig(config.HomeAutoSessionModeControl), store, statusModel, nil, cloud)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer func() {
+		cancel()
+		time.Sleep(80 * time.Millisecond)
+	}()
+	module.Start(ctx)
+
+	now := time.Now().UTC()
+	module.ObserveEvent(testPacket("!nodeA", 37.3349, -122.0090, now))
+	module.ObserveEvent(testPacket("!nodeA", latOffsetMeters(37.3349, 250), -122.0090, now.Add(time.Second)))
+	module.Reevaluate()
+	waitForCondition(t, 5*time.Second, func() bool {
+		return statusModel.Snapshot().HomeAutoSession.State == string(StateActive)
+	})
+
+	cloud.mu.Lock()
+	cloud.stopErr = &cloudclient.APIError{
+		StatusCode: 409,
+		Message:    "state mismatch: cannot stop from current state",
+		Retryable:  false,
+	}
+	cloud.mu.Unlock()
+
+	module.ObserveEvent(testPacket("!nodeA", 37.3349, -122.0090, now.Add(3*time.Second)))
+	module.Reevaluate()
+
+	waitForCondition(t, 6*time.Second, func() bool {
+		snap := statusModel.Snapshot().HomeAutoSession
+		return snap.State == string(StateDegraded) && snap.ReconciliationState == reconciliationConflictStateMismatch
+	})
+
+	snap := statusModel.Snapshot().HomeAutoSession
+	if snap.ControlState != controlStateConflictBlocked {
+		t.Fatalf("expected control state %q, got %q", controlStateConflictBlocked, snap.ControlState)
+	}
+	if snap.LastActionResult != "state_mismatch_conflict" {
+		t.Fatalf("expected last action result state_mismatch_conflict, got %q", snap.LastActionResult)
+	}
+}
+
 func homeAutoTestConfig(mode config.HomeAutoSessionMode) config.HomeAutoSessionConfig {
 	return config.HomeAutoSessionConfig{
 		Enabled: true,

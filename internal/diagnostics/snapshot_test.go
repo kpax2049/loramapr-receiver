@@ -35,8 +35,12 @@ func TestSupportSnapshotRedactsSecrets(t *testing.T) {
 	data.Cloud.SiteLabel = "Home"
 	data.Cloud.GroupLabel = "Outdoor"
 	data.HomeAutoSession.ModuleState = "observe_ready"
+	data.HomeAutoSession.ControlState = "ready"
+	data.HomeAutoSession.ActiveStateSource = "local_recovered_unverified"
 	data.HomeAutoSession.ReconciliationState = "clean_idle"
 	data.HomeAutoSession.PendingAction = "start"
+	data.HomeAutoSession.LastAction = "start"
+	data.HomeAutoSession.LastActionResult = "observe_suppressed"
 	data.HomeAutoSession.LastDecisionReason = "observe mode ready"
 	data.HomeAutoSession.GPSStatus = "stale"
 	data.HomeAutoSession.GPSReason = "position sample older than threshold"
@@ -115,6 +119,15 @@ func TestSupportSnapshotRedactsSecrets(t *testing.T) {
 	}
 	if snapshot.HomeAutoSession.ReconciliationState == "" {
 		t.Fatal("expected home auto reconciliation state in support snapshot")
+	}
+	if snapshot.HomeAutoSession.ControlState == "" {
+		t.Fatal("expected home auto control state in support snapshot")
+	}
+	if snapshot.HomeAutoSession.ActiveStateSource == "" {
+		t.Fatal("expected home auto active state source in support snapshot")
+	}
+	if snapshot.HomeAutoSession.LastAction == "" || snapshot.HomeAutoSession.LastActionResult == "" {
+		t.Fatal("expected home auto last action/result in support snapshot")
 	}
 	if snapshot.HomeAutoSession.GPSStatus == "" {
 		t.Fatal("expected home auto gps status in support snapshot")

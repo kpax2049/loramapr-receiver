@@ -34,6 +34,12 @@ func TestOpenInitializesDefaults(t *testing.T) {
 	if snapshot.HomeAutoSession.ReconciliationState != "clean_idle" {
 		t.Fatalf("expected default home_auto_session reconciliation clean_idle, got %q", snapshot.HomeAutoSession.ReconciliationState)
 	}
+	if snapshot.HomeAutoSession.ControlState != "disabled" {
+		t.Fatalf("expected default home_auto_session control_state disabled, got %q", snapshot.HomeAutoSession.ControlState)
+	}
+	if snapshot.HomeAutoSession.ActiveStateSource != "none" {
+		t.Fatalf("expected default home_auto_session active_state_source none, got %q", snapshot.HomeAutoSession.ActiveStateSource)
+	}
 }
 
 func TestUpdatePersistsAcrossRestart(t *testing.T) {
@@ -155,6 +161,12 @@ func TestOpenMigratesSchemaV2ToCurrent(t *testing.T) {
 	if snapshot.HomeAutoSession.ReconciliationState != "clean_idle" {
 		t.Fatalf("expected home_auto_session reconciliation_state clean_idle, got %q", snapshot.HomeAutoSession.ReconciliationState)
 	}
+	if snapshot.HomeAutoSession.ControlState != "disabled" {
+		t.Fatalf("expected home_auto_session control_state disabled, got %q", snapshot.HomeAutoSession.ControlState)
+	}
+	if snapshot.HomeAutoSession.ActiveStateSource != "none" {
+		t.Fatalf("expected home_auto_session active_state_source none, got %q", snapshot.HomeAutoSession.ActiveStateSource)
+	}
 }
 
 func TestOpenMigratesSchemaV3ToCurrent(t *testing.T) {
@@ -187,5 +199,11 @@ func TestOpenMigratesSchemaV3ToCurrent(t *testing.T) {
 	}
 	if snapshot.HomeAutoSession.ReconciliationState != "clean_idle" {
 		t.Fatalf("expected home_auto_session reconciliation_state clean_idle, got %q", snapshot.HomeAutoSession.ReconciliationState)
+	}
+	if snapshot.HomeAutoSession.ControlState != "disabled" {
+		t.Fatalf("expected home_auto_session control_state disabled, got %q", snapshot.HomeAutoSession.ControlState)
+	}
+	if snapshot.HomeAutoSession.ActiveStateSource != "none" {
+		t.Fatalf("expected home_auto_session active_state_source none, got %q", snapshot.HomeAutoSession.ActiveStateSource)
 	}
 }

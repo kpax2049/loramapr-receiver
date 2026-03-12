@@ -95,7 +95,10 @@ Indicators:
 
 - Home Auto Session state: `misconfigured`, `cooldown`, `degraded`,
   `start_pending`, or `stop_pending`
+- Home Auto Session control state: `conflict_blocked` or `lifecycle_blocked`
 - Home Auto Session reconciliation state indicates startup recovery path
+- Home Auto Session active-state source indicates whether state is cloud-acknowledged
+  or recovered/conflicted
 - Home Auto Session last error/decision indicates cloud/session control issue
 - Home Auto Session GPS status indicates whether geofence decisions are usable
 
@@ -107,6 +110,7 @@ Actions:
 4. Use **Reevaluate Now** after config fixes.
 5. If stuck degraded/cooldown, use **Reset Degraded/Cooldown State** and re-test.
 6. If state is `boundary_uncertain` or `stale`, wait for stable fresh GPS before expecting auto start/stop.
+7. If control state is `lifecycle_blocked`, reset/re-pair before further control testing.
 
 ### Revoked, Disabled, or Replaced
 
