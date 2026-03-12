@@ -20,8 +20,9 @@ Bind address is configured by `portal.bind_address`.
 1. **Welcome**: confirm current setup/attention state and next action
 2. **Pairing**: enter pairing code from LoRaMapr Cloud
 3. **Progress**: confirm cloud reachability, node connection, and forwarding
-4. **Troubleshooting**: resolve common issues and run reset/re-pair when needed
-5. **Advanced**: build/install/identity metadata for support and diagnostics
+4. **Home Auto Session**: optional local geofence-based session automation config
+5. **Troubleshooting**: resolve common issues and run reset/re-pair when needed
+6. **Advanced**: build/install/identity metadata for support and diagnostics
 
 Identity shown in portal includes:
 
@@ -38,6 +39,10 @@ UI routes:
 - `GET /pairing`
 - `POST /pairing`
 - `GET /progress`
+- `GET /home-auto-session`
+- `POST /home-auto-session`
+- `POST /home-auto-session/reevaluate`
+- `POST /home-auto-session/reset`
 - `GET /troubleshooting`
 - `POST /reset`
 - `GET /advanced`
@@ -71,6 +76,26 @@ Common causes you may see:
 - `events_not_forwarding`
 - `receiver_credential_revoked`
 - `receiver_version_unsupported`
+
+Home Auto Session module states you may see:
+
+- `disabled`
+- `misconfigured`
+- `observe_ready`
+- `control_ready`
+- `start_pending`
+- `active`
+- `stop_pending`
+- `cooldown`
+- `degraded`
+
+Typical plain-language hints:
+
+- waiting for tracked node near home geofence transition
+- would start session now, but observe mode is enabled
+- session active
+- waiting for node to return home
+- cloud/session API unavailable
 
 In multi-receiver environments, portal guidance also helps distinguish:
 

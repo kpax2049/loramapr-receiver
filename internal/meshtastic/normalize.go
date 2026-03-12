@@ -60,6 +60,7 @@ func normalizePacket(raw map[string]any, now time.Time) (Packet, time.Time, erro
 	if hop, ok := anyToString(raw["hop_limit"]); ok {
 		meta["hop_limit"] = hop
 	}
+	position := normalizePacketPosition(raw)
 
 	return Packet{
 		SourceNodeID:      strings.TrimSpace(source),
@@ -67,6 +68,7 @@ func normalizePacket(raw map[string]any, now time.Time) (Packet, time.Time, erro
 		PortNum:           portNum,
 		Payload:           payload,
 		ReceivedAt:        receivedAt,
+		Position:          position,
 		Meta:              meta,
 	}, receivedAt, nil
 }
@@ -232,4 +234,60 @@ func anyToInt(value any) (int, bool) {
 	default:
 		return 0, false
 	}
+}
+
+func anyToFloat(value any) (float64, bool) {
+	switch typed := value.(type) {
+	case float64:
+		return typed, true
+	case int:
+		return float64(typed), true
+	case int64:
+		return float64(typed), true
+	case string:
+		parsed, err := strconv.ParseFloat(strings.TrimSpace(typed), 64)
+		if err != nil {
+			return 0, false
+		}
+		return parsed, true
+	default:
+		return 0, false
+	}
+}
+
+func normalizePacketPosition(raw map[string]any) *Position {
+	if lat, lon, ok := directPosition(raw); ok {
+		return &Position{Lat: lat, Lon: lon}
+	}
+	if nested, ok := raw["position"].(map[string]any); ok {
+		if lat, lon, ok := directPosition(nested); ok {
+			return &Position{Lat: lat, Lon: lon}
+		}
+	}
+	return nil
+}
+
+func directPosition(raw map[string]any) (float64, float64, bool) {
+	lat, latOK := firstFloat(raw, "lat", "latitude", "lat_deg", "latitude_deg")
+	lon, lonOK := firstFloat(raw, "lon", "lng", "longitude", "lon_deg", "longitude_deg")
+	if !latOK || !lonOK {
+		return 0, 0, false
+	}
+	if lat < -90 || lat > 90 || lon < -180 || lon > 180 {
+		return 0, 0, false
+	}
+	return lat, lon, true
+}
+
+func firstFloat(raw map[string]any, keys ...string) (float64, bool) {
+	for _, key := range keys {
+		value, ok := raw[key]
+		if !ok {
+			continue
+		}
+		if out, ok := anyToFloat(value); ok {
+			return out, true
+		}
+	}
+	return 0, false
 }

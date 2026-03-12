@@ -1,5 +1,8 @@
 # LoRaMapr Receiver Release Notes
 
+For Embedded Home Auto Session Milestone 1 notes targeting `v2.9.0`, see
+`docs/release-notes-v2.9.0.md`.
+
 For Multi-Receiver / Household / Team Operations notes targeting `v2.8.0`, see
 `docs/release-notes-v2.8.0.md`.
 

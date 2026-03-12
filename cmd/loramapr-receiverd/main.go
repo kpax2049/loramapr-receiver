@@ -266,6 +266,15 @@ func doctorCommand(args []string) {
 			"channel":     snapshot.Update.ManifestChannel,
 			"recommended": snapshot.Update.RecommendedVersion,
 		},
+		"home_auto_session": map[string]any{
+			"enabled":             cfg.HomeAutoSession.Enabled,
+			"mode":                cfg.HomeAutoSession.Mode,
+			"state":               snapshot.HomeAutoSession.ModuleState,
+			"active_session_id":   snapshot.HomeAutoSession.ActiveSessionID,
+			"active_trigger_node": snapshot.HomeAutoSession.ActiveTriggerNode,
+			"last_decision":       snapshot.HomeAutoSession.LastDecisionReason,
+			"last_error":          snapshot.HomeAutoSession.LastError,
+		},
 		"meshtastic_transport": cfg.Meshtastic.Transport,
 		"meshtastic_probe":     deviceProbe,
 		"failure_code":         finding.Code,
@@ -318,6 +327,19 @@ func doctorCommand(args []string) {
 			emptyFallback(snapshot.Cloud.SiteLabel, "n/a"),
 			emptyFallback(snapshot.Cloud.GroupLabel, "n/a"),
 		)
+	}
+	fmt.Printf(
+		"[INFO] home auto session: enabled=%t mode=%s state=%s active_session=%s\n",
+		cfg.HomeAutoSession.Enabled,
+		cfg.HomeAutoSession.Mode,
+		emptyFallback(snapshot.HomeAutoSession.ModuleState, "unknown"),
+		emptyFallback(snapshot.HomeAutoSession.ActiveSessionID, "none"),
+	)
+	if strings.TrimSpace(snapshot.HomeAutoSession.LastDecisionReason) != "" {
+		fmt.Printf("[INFO] home auto decision: %s\n", snapshot.HomeAutoSession.LastDecisionReason)
+	}
+	if strings.TrimSpace(snapshot.HomeAutoSession.LastError) != "" {
+		fmt.Printf("[WARN] home auto last error: %s\n", snapshot.HomeAutoSession.LastError)
 	}
 	fmt.Printf("[INFO] cloud probe: %s", cloudProbe.Status)
 	if cloudProbe.Detail != "" {
@@ -462,6 +484,15 @@ func statusCommand(args []string) {
 			"version":     snapshot.Update.ManifestVersion,
 			"channel":     snapshot.Update.ManifestChannel,
 			"recommended": snapshot.Update.RecommendedVersion,
+		},
+		"home_auto_session": map[string]any{
+			"enabled":             cfg.HomeAutoSession.Enabled,
+			"mode":                cfg.HomeAutoSession.Mode,
+			"state":               snapshot.HomeAutoSession.ModuleState,
+			"active_session_id":   snapshot.HomeAutoSession.ActiveSessionID,
+			"active_trigger_node": snapshot.HomeAutoSession.ActiveTriggerNode,
+			"last_decision":       snapshot.HomeAutoSession.LastDecisionReason,
+			"last_error":          snapshot.HomeAutoSession.LastError,
 		},
 		"last_pairing_err":    snapshot.Pairing.LastError,
 		"failure_code":        finding.Code,
@@ -694,16 +725,25 @@ func printDoctorLoadFailure(jsonOutput bool, configPath string, statePath string
 		"cloud_receiver_label":  "",
 		"cloud_site_label":      "",
 		"cloud_group_label":     "",
-		"failure_code":          diagnostics.FailureLocalSchemaIncompat,
-		"failure_summary":       "Local config or state schema is incompatible with this runtime",
-		"failure_hint":          upgradeCompatibilityHint(err),
-		"attention_state":       diagnostics.AttentionUrgent,
-		"attention_category":    diagnostics.AttentionCategoryCompatibility,
-		"attention_code":        diagnostics.FailureLocalSchemaIncompat,
-		"attention_summary":     "Local compatibility issue requires operator action",
-		"attention_hint":        upgradeCompatibilityHint(err),
-		"attention_required":    true,
-		"error":                 strings.TrimSpace(err.Error()),
+		"home_auto_session": map[string]any{
+			"enabled":             false,
+			"mode":                "off",
+			"state":               "disabled",
+			"active_session_id":   "",
+			"active_trigger_node": "",
+			"last_decision":       "",
+			"last_error":          "",
+		},
+		"failure_code":       diagnostics.FailureLocalSchemaIncompat,
+		"failure_summary":    "Local config or state schema is incompatible with this runtime",
+		"failure_hint":       upgradeCompatibilityHint(err),
+		"attention_state":    diagnostics.AttentionUrgent,
+		"attention_category": diagnostics.AttentionCategoryCompatibility,
+		"attention_code":     diagnostics.FailureLocalSchemaIncompat,
+		"attention_summary":  "Local compatibility issue requires operator action",
+		"attention_hint":     upgradeCompatibilityHint(err),
+		"attention_required": true,
+		"error":              strings.TrimSpace(err.Error()),
 	}
 	encoder := json.NewEncoder(os.Stdout)
 	encoder.SetIndent("", "  ")
@@ -732,6 +772,15 @@ func summarizeLocalProbeForOutput(probe diagnostics.LocalStatusProbe) map[string
 	out["cloud_site_label"] = probe.Snapshot.CloudSiteLabel
 	out["cloud_group_label"] = probe.Snapshot.CloudGroupLabel
 	out["update_status"] = probe.Snapshot.UpdateStatus
+	out["home_auto_session"] = map[string]any{
+		"enabled":             probe.Snapshot.HomeAutoSession.Enabled,
+		"mode":                probe.Snapshot.HomeAutoSession.Mode,
+		"state":               probe.Snapshot.HomeAutoSession.State,
+		"active_session_id":   probe.Snapshot.HomeAutoSession.ActiveSessionID,
+		"active_trigger_node": probe.Snapshot.HomeAutoSession.ActiveTriggerNode,
+		"last_decision":       probe.Snapshot.HomeAutoSession.LastDecisionReason,
+		"last_error":          probe.Snapshot.HomeAutoSession.LastError,
+	}
 	out["ingest_queue_depth"] = probe.Snapshot.IngestQueueDepth
 	out["last_packet_ack"] = probe.Snapshot.LastPacketAck
 	return out

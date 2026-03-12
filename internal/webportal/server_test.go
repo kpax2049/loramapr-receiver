@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/loramapr/loramapr-receiver/internal/config"
 	"github.com/loramapr/loramapr-receiver/internal/status"
 )
 
@@ -25,6 +26,13 @@ type recordingPairingSubmitter struct {
 	resetCalls      int
 	lastDeauthorize bool
 	err             error
+
+	homeCfg               config.HomeAutoSessionConfig
+	homeSaveCalls         int
+	homeReevaluateCalls   int
+	homeResetStateCalls   int
+	lastSavedHomeMode     config.HomeAutoSessionMode
+	lastSavedTrackedNodes []string
 }
 
 func (r *recordingPairingSubmitter) SubmitPairingCode(_ context.Context, code string) error {
@@ -41,6 +49,45 @@ func (r *recordingPairingSubmitter) ResetPairing(_ context.Context, deauthorize 
 	}
 	r.resetCalls++
 	r.lastDeauthorize = deauthorize
+	return nil
+}
+
+func (r *recordingPairingSubmitter) CurrentHomeAutoSessionConfig() config.HomeAutoSessionConfig {
+	if r.homeCfg.Mode == "" {
+		r.homeCfg.Mode = config.HomeAutoSessionModeOff
+		r.homeCfg.StartDebounce = config.Duration(30 * time.Second)
+		r.homeCfg.StopDebounce = config.Duration(30 * time.Second)
+		r.homeCfg.IdleStopTimeout = config.Duration(15 * time.Minute)
+		r.homeCfg.Cloud.StartEndpoint = "/api/receiver/home-auto-session/start"
+		r.homeCfg.Cloud.StopEndpoint = "/api/receiver/home-auto-session/stop"
+	}
+	return r.homeCfg
+}
+
+func (r *recordingPairingSubmitter) UpdateHomeAutoSessionConfig(_ context.Context, cfg config.HomeAutoSessionConfig) error {
+	if r.err != nil {
+		return r.err
+	}
+	r.homeSaveCalls++
+	r.homeCfg = cfg
+	r.lastSavedHomeMode = cfg.Mode
+	r.lastSavedTrackedNodes = append([]string(nil), cfg.TrackedNodeIDs...)
+	return nil
+}
+
+func (r *recordingPairingSubmitter) ReevaluateHomeAutoSession(_ context.Context) error {
+	if r.err != nil {
+		return r.err
+	}
+	r.homeReevaluateCalls++
+	return nil
+}
+
+func (r *recordingPairingSubmitter) ResetHomeAutoSession(_ context.Context) error {
+	if r.err != nil {
+		return r.err
+	}
+	r.homeResetStateCalls++
 	return nil
 }
 
@@ -434,6 +481,76 @@ func TestTroubleshootingApplianceDiscoveryHints(t *testing.T) {
 	}
 	if !strings.Contains(body, "Network is unavailable") {
 		t.Fatalf("expected appliance network hint")
+	}
+}
+
+func TestHomeAutoSessionPage(t *testing.T) {
+	t.Parallel()
+
+	submitter := &recordingPairingSubmitter{}
+	submitter.homeCfg = config.HomeAutoSessionConfig{
+		Enabled:          true,
+		Mode:             config.HomeAutoSessionModeObserve,
+		StartDebounce:    config.Duration(30 * time.Second),
+		StopDebounce:     config.Duration(30 * time.Second),
+		IdleStopTimeout:  config.Duration(15 * time.Minute),
+		StartupReconcile: true,
+	}
+	srv := New("127.0.0.1:0", staticStatusProvider{snapshot: sampleSnapshot()}, submitter, nil)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/home-auto-session", nil)
+	srv.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "Home Auto Session") {
+		t.Fatalf("expected home auto session page content")
+	}
+}
+
+func TestHomeAutoSessionSaveForm(t *testing.T) {
+	t.Parallel()
+
+	submitter := &recordingPairingSubmitter{}
+	srv := New("127.0.0.1:0", staticStatusProvider{snapshot: sampleSnapshot()}, submitter, nil)
+
+	form := strings.NewReader(strings.Join([]string{
+		"enabled=1",
+		"mode=observe",
+		"home_lat=37.3349",
+		"home_lon=-122.0090",
+		"home_radius_m=150",
+		"tracked_node_ids=!nodeA,!nodeB",
+		"start_debounce=30s",
+		"stop_debounce=30s",
+		"idle_stop_timeout=15m",
+		"startup_reconcile=1",
+		"session_name_template=Home+Auto+%7B%7B.NodeID%7D%7D",
+		"session_notes_template=Generated+by+receiver",
+	}, "&"))
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/home-auto-session", form)
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	srv.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	if submitter.homeSaveCalls != 1 {
+		t.Fatalf("expected one home auto save call")
+	}
+	if submitter.homeReevaluateCalls != 1 {
+		t.Fatalf("expected one home auto reevaluate call")
+	}
+	if submitter.lastSavedHomeMode != config.HomeAutoSessionModeObserve {
+		t.Fatalf("unexpected saved home auto mode: %s", submitter.lastSavedHomeMode)
+	}
+	if len(submitter.lastSavedTrackedNodes) != 2 {
+		t.Fatalf("unexpected saved tracked nodes: %#v", submitter.lastSavedTrackedNodes)
 	}
 }
 

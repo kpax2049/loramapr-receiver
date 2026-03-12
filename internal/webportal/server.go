@@ -10,10 +10,12 @@ import (
 	"log/slog"
 	"net/http"
 	goruntime "runtime"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/loramapr/loramapr-receiver/internal/buildinfo"
+	"github.com/loramapr/loramapr-receiver/internal/config"
 	"github.com/loramapr/loramapr-receiver/internal/diagnostics"
 	"github.com/loramapr/loramapr-receiver/internal/status"
 )
@@ -30,10 +32,18 @@ type PairingCodeSubmitter interface {
 	ResetPairing(ctx context.Context, deauthorize bool) error
 }
 
+type HomeAutoSessionManager interface {
+	CurrentHomeAutoSessionConfig() config.HomeAutoSessionConfig
+	UpdateHomeAutoSessionConfig(ctx context.Context, cfg config.HomeAutoSessionConfig) error
+	ReevaluateHomeAutoSession(ctx context.Context) error
+	ResetHomeAutoSession(ctx context.Context) error
+}
+
 type Server struct {
 	addr      string
 	status    StatusProvider
 	pairing   PairingCodeSubmitter
+	homeAuto  HomeAutoSessionManager
 	logger    *slog.Logger
 	templates map[string]*template.Template
 	httpSrv   *http.Server
@@ -63,6 +73,12 @@ type pageData struct {
 	Platform             string
 	Arch                 string
 	InstallType          string
+	HomeAutoConfig       config.HomeAutoSessionConfig
+	HomeAutoTrackedText  string
+	HomeAutoStartDeb     string
+	HomeAutoStopDeb      string
+	HomeAutoIdleTimeout  string
+	HomeAutoStateHint    string
 }
 
 func New(addr string, statusProvider StatusProvider, pairing PairingCodeSubmitter, logger *slog.Logger) *Server {
@@ -75,10 +91,16 @@ func New(addr string, statusProvider StatusProvider, pairing PairingCodeSubmitte
 		panic(err)
 	}
 
+	var homeAuto HomeAutoSessionManager
+	if manager, ok := pairing.(HomeAutoSessionManager); ok {
+		homeAuto = manager
+	}
+
 	s := &Server{
 		addr:      addr,
 		status:    statusProvider,
 		pairing:   pairing,
+		homeAuto:  homeAuto,
 		logger:    logger.With("component", "webportal"),
 		templates: templates,
 	}
@@ -93,6 +115,9 @@ func New(addr string, statusProvider StatusProvider, pairing PairingCodeSubmitte
 	mux.HandleFunc("/pairing", s.routePairing)
 	mux.HandleFunc("/reset", s.routeReset)
 	mux.HandleFunc("/progress", s.handleProgress)
+	mux.HandleFunc("/home-auto-session", s.routeHomeAutoSession)
+	mux.HandleFunc("/home-auto-session/reevaluate", s.handleHomeAutoReevaluate)
+	mux.HandleFunc("/home-auto-session/reset", s.handleHomeAutoReset)
 	mux.HandleFunc("/troubleshooting", s.handleTroubleshooting)
 	mux.HandleFunc("/advanced", s.handleAdvanced)
 	mux.HandleFunc("/", s.handleWelcome)
@@ -311,6 +336,105 @@ func (s *Server) routeReset(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/pairing?reset=1", http.StatusSeeOther)
 }
 
+func (s *Server) routeHomeAutoSession(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		flash := ""
+		flashClass := ""
+		if r.URL.Query().Get("reeval") == "1" {
+			flash = "Home Auto Session reevaluate requested."
+			flashClass = "ok"
+		}
+		if r.URL.Query().Get("reset") == "1" {
+			flash = "Home Auto Session degraded/cooldown state reset."
+			flashClass = "ok"
+		}
+		s.renderHomeAutoSession(w, flash, flashClass)
+	case http.MethodPost:
+		if s.homeAuto == nil {
+			http.Error(w, "home auto session module is not available", http.StatusServiceUnavailable)
+			return
+		}
+		if err := r.ParseForm(); err != nil {
+			s.renderHomeAutoSession(w, "invalid form payload", "err")
+			return
+		}
+		cfg, err := parseHomeAutoSessionConfigForm(r)
+		if err != nil {
+			s.renderHomeAutoSession(w, err.Error(), "err")
+			return
+		}
+		if err := s.homeAuto.UpdateHomeAutoSessionConfig(r.Context(), cfg); err != nil {
+			s.renderHomeAutoSession(w, "save failed: "+err.Error(), "err")
+			return
+		}
+		if err := s.homeAuto.ReevaluateHomeAutoSession(r.Context()); err != nil {
+			s.renderHomeAutoSession(w, "saved, but reevaluate failed: "+err.Error(), "warn")
+			return
+		}
+		s.renderHomeAutoSession(w, "Home Auto Session configuration saved.", "ok")
+	default:
+		w.Header().Set("Allow", "GET, POST")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *Server) handleHomeAutoReevaluate(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", http.MethodPost)
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.homeAuto == nil {
+		http.Error(w, "home auto session module is not available", http.StatusServiceUnavailable)
+		return
+	}
+	if err := s.homeAuto.ReevaluateHomeAutoSession(r.Context()); err != nil {
+		http.Error(w, "reevaluate failed: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	http.Redirect(w, r, "/home-auto-session?reeval=1", http.StatusSeeOther)
+}
+
+func (s *Server) handleHomeAutoReset(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", http.MethodPost)
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.homeAuto == nil {
+		http.Error(w, "home auto session module is not available", http.StatusServiceUnavailable)
+		return
+	}
+	if err := s.homeAuto.ResetHomeAutoSession(r.Context()); err != nil {
+		http.Error(w, "reset failed: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	http.Redirect(w, r, "/home-auto-session?reset=1", http.StatusSeeOther)
+}
+
+func (s *Server) renderHomeAutoSession(w http.ResponseWriter, flash, flashClass string) {
+	snap := s.currentSnapshot()
+	data := s.basePageData("Home Auto Session", snap)
+	data.Flash = flash
+	data.FlashClass = flashClass
+	if s.homeAuto != nil {
+		cfg := s.homeAuto.CurrentHomeAutoSessionConfig()
+		data.HomeAutoConfig = cfg
+		data.HomeAutoTrackedText = strings.Join(cfg.TrackedNodeIDs, ", ")
+		data.HomeAutoStartDeb = cfg.StartDebounce.Std().String()
+		data.HomeAutoStopDeb = cfg.StopDebounce.Std().String()
+		data.HomeAutoIdleTimeout = cfg.IdleStopTimeout.Std().String()
+	} else {
+		data.HomeAutoTrackedText = ""
+		data.HomeAutoStartDeb = ""
+		data.HomeAutoStopDeb = ""
+		data.HomeAutoIdleTimeout = ""
+	}
+	data.HomeAutoStateHint = homeAutoStateHint(snap)
+	s.renderHTML(w, http.StatusOK, "home_auto_session", data)
+}
+
 func (s *Server) handleWelcome(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path != "/" {
 		http.NotFound(w, r)
@@ -440,7 +564,7 @@ func (s *Server) renderHTML(w http.ResponseWriter, statusCode int, name string, 
 }
 
 func loadTemplates() (map[string]*template.Template, error) {
-	pages := []string{"welcome", "pairing", "progress", "troubleshooting", "advanced"}
+	pages := []string{"welcome", "pairing", "progress", "home_auto_session", "troubleshooting", "advanced"}
 	out := make(map[string]*template.Template, len(pages))
 	for _, page := range pages {
 		parsed, err := template.ParseFS(
@@ -685,6 +809,26 @@ func troubleshootingHints(snap status.Snapshot) []string {
 	if snap.LastError != "" {
 		hints = append(hints, "Last runtime error: "+snap.LastError)
 	}
+	homeState := strings.TrimSpace(snap.HomeAutoSession.State)
+	if homeState != "" && homeState != "disabled" {
+		hints = append(hints, "Home Auto Session state: "+homeState)
+		if reason := strings.TrimSpace(snap.HomeAutoSession.LastDecisionReason); reason != "" {
+			hints = append(hints, "Home Auto last decision: "+reason)
+		}
+		if err := strings.TrimSpace(snap.HomeAutoSession.LastError); err != "" {
+			hints = append(hints, "Home Auto last error: "+err)
+		}
+		switch homeState {
+		case "misconfigured":
+			hints = append(hints, "Home Auto Session is misconfigured. Open Home Auto Session page and verify geofence + tracked node IDs.")
+		case "cooldown":
+			hints = append(hints, "Home Auto Session is in cooldown after a cloud/session API error. Reevaluate after cooldown window.")
+		case "degraded":
+			hints = append(hints, "Home Auto Session is degraded. Use Home Auto Session reset action, then reevaluate.")
+		case "observe_ready":
+			hints = append(hints, "Home Auto Session is in observe mode and will not start/stop cloud sessions.")
+		}
+	}
 	for _, recent := range snap.RecentFailures {
 		if recent.Code == "" || recent.Summary == "" {
 			continue
@@ -740,6 +884,148 @@ func deriveAttentionFromSnapshot(snap status.Snapshot) diagnostics.Attention {
 		Hint:    strings.TrimSpace(snap.FailureHint),
 	}
 	return diagnostics.DeriveAttention(finding, evaluateOperationalFromSnapshot(snap))
+}
+
+func parseHomeAutoSessionConfigForm(r *http.Request) (config.HomeAutoSessionConfig, error) {
+	enabled := parseBooleanFormValue(r.Form.Get("enabled"))
+	mode := config.HomeAutoSessionMode(strings.ToLower(strings.TrimSpace(r.Form.Get("mode"))))
+	if mode == "" {
+		mode = config.HomeAutoSessionModeOff
+	}
+	lat, err := parseFloatField(r.Form.Get("home_lat"), "home latitude")
+	if err != nil {
+		return config.HomeAutoSessionConfig{}, err
+	}
+	lon, err := parseFloatField(r.Form.Get("home_lon"), "home longitude")
+	if err != nil {
+		return config.HomeAutoSessionConfig{}, err
+	}
+	radius, err := parseFloatField(r.Form.Get("home_radius_m"), "home radius")
+	if err != nil {
+		return config.HomeAutoSessionConfig{}, err
+	}
+	startDebounce, err := parseDurationField(r.Form.Get("start_debounce"), "start debounce")
+	if err != nil {
+		return config.HomeAutoSessionConfig{}, err
+	}
+	stopDebounce, err := parseDurationField(r.Form.Get("stop_debounce"), "stop debounce")
+	if err != nil {
+		return config.HomeAutoSessionConfig{}, err
+	}
+	idleStopTimeout, err := parseDurationField(r.Form.Get("idle_stop_timeout"), "idle stop timeout")
+	if err != nil {
+		return config.HomeAutoSessionConfig{}, err
+	}
+
+	tracked := parseNodeIDsField(r.Form.Get("tracked_node_ids"))
+	cloudStart := strings.TrimSpace(r.Form.Get("cloud_start_endpoint"))
+	cloudStop := strings.TrimSpace(r.Form.Get("cloud_stop_endpoint"))
+	if cloudStart == "" {
+		cloudStart = "/api/receiver/home-auto-session/start"
+	}
+	if cloudStop == "" {
+		cloudStop = "/api/receiver/home-auto-session/stop"
+	}
+
+	return config.HomeAutoSessionConfig{
+		Enabled: enabled,
+		Mode:    mode,
+		Home: config.HomeGeofenceConfig{
+			Lat:     lat,
+			Lon:     lon,
+			RadiusM: radius,
+		},
+		TrackedNodeIDs:       tracked,
+		StartDebounce:        config.Duration(startDebounce),
+		StopDebounce:         config.Duration(stopDebounce),
+		IdleStopTimeout:      config.Duration(idleStopTimeout),
+		StartupReconcile:     parseBooleanFormValue(r.Form.Get("startup_reconcile")),
+		SessionNameTemplate:  strings.TrimSpace(r.Form.Get("session_name_template")),
+		SessionNotesTemplate: strings.TrimSpace(r.Form.Get("session_notes_template")),
+		Cloud: config.HomeAutoSessionCloudCfg{
+			StartEndpoint: cloudStart,
+			StopEndpoint:  cloudStop,
+		},
+	}, nil
+}
+
+func parseDurationField(raw string, fieldName string) (time.Duration, error) {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return 0, fmt.Errorf("%s is required", fieldName)
+	}
+	parsed, err := time.ParseDuration(value)
+	if err != nil {
+		return 0, fmt.Errorf("invalid %s", fieldName)
+	}
+	return parsed, nil
+}
+
+func parseFloatField(raw string, fieldName string) (float64, error) {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return 0, fmt.Errorf("%s is required", fieldName)
+	}
+	parsed, err := strconv.ParseFloat(value, 64)
+	if err != nil {
+		return 0, fmt.Errorf("invalid %s", fieldName)
+	}
+	return parsed, nil
+}
+
+func parseNodeIDsField(raw string) []string {
+	cleaned := strings.NewReplacer("\r", ",", "\n", ",", ";", ",", "\t", ",").Replace(raw)
+	parts := strings.Split(cleaned, ",")
+	seen := map[string]struct{}{}
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		value := strings.TrimSpace(part)
+		if value == "" {
+			continue
+		}
+		key := strings.ToLower(value)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, value)
+	}
+	return out
+}
+
+func parseBooleanFormValue(raw string) bool {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
+}
+
+func homeAutoStateHint(snap status.Snapshot) string {
+	module := snap.HomeAutoSession
+	switch strings.TrimSpace(module.State) {
+	case "disabled":
+		return "Home Auto Session is disabled."
+	case "misconfigured":
+		return "Home Auto Session config is incomplete or invalid."
+	case "observe_ready":
+		return "Waiting for tracked node near home geofence transition (observe mode)."
+	case "control_ready":
+		return "Waiting for tracked node near home geofence transition (control mode)."
+	case "start_pending":
+		return "Start candidate detected; waiting for debounce before action."
+	case "active":
+		return "Session active."
+	case "stop_pending":
+		return "Stop candidate detected; waiting for debounce before action."
+	case "cooldown":
+		return "Cloud/session API unavailable; waiting for cooldown before retry."
+	case "degraded":
+		return "Home Auto Session is degraded; review last error and reset/reevaluate."
+	default:
+		return "Home Auto Session status is initializing."
+	}
 }
 
 func parseDeauthorizeValue(raw string, defaultValue bool) bool {

@@ -140,6 +140,9 @@ type mockCloudClient struct {
 	heartbeatCalls int
 	lastHeartbeat  cloudclient.ReceiverHeartbeat
 	ackConfigVer   string
+
+	startHomeAutoCalls int
+	stopHomeAutoCalls  int
 }
 
 func (m *mockCloudClient) ExchangePairingCode(_ context.Context, _ string) (cloudclient.BootstrapExchange, error) {
@@ -184,6 +187,33 @@ func (m *mockCloudClient) SendReceiverHeartbeat(
 		ConfigVersion:   m.ackConfigVer,
 		LastHeartbeatAt: time.Now().UTC(),
 		NodeCount:       len(heartbeat.ObservedNodeIDs),
+	}, nil
+}
+
+func (m *mockCloudClient) StartHomeAutoSession(
+	_ context.Context,
+	_ string,
+	_ string,
+	_ cloudclient.HomeAutoSessionStartRequest,
+) (cloudclient.HomeAutoSessionStartResult, error) {
+	m.startHomeAutoCalls++
+	return cloudclient.HomeAutoSessionStartResult{
+		SessionID: "session-1",
+		StartedAt: time.Now().UTC(),
+	}, nil
+}
+
+func (m *mockCloudClient) StopHomeAutoSession(
+	_ context.Context,
+	_ string,
+	_ string,
+	_ cloudclient.HomeAutoSessionStopRequest,
+) (cloudclient.HomeAutoSessionStopResult, error) {
+	m.stopHomeAutoCalls++
+	return cloudclient.HomeAutoSessionStopResult{
+		SessionID: "session-1",
+		StoppedAt: time.Now().UTC(),
+		Status:    "stopped",
 	}, nil
 }
 

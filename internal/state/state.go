@@ -16,7 +16,7 @@ import (
 type PairingPhase string
 
 const (
-	CurrentSchemaVersion = 3
+	CurrentSchemaVersion = 4
 
 	PairingUnpaired           PairingPhase = "unpaired"
 	PairingCodeEntered        PairingPhase = "pairing_code_entered"
@@ -26,13 +26,14 @@ const (
 )
 
 type Data struct {
-	SchemaVersion int               `json:"schema_version"`
-	Installation  InstallationState `json:"installation"`
-	Pairing       PairingState      `json:"pairing"`
-	Cloud         CloudState        `json:"cloud"`
-	Runtime       RuntimeState      `json:"runtime"`
-	Update        UpdateState       `json:"update"`
-	Metadata      MetadataState     `json:"metadata"`
+	SchemaVersion   int                  `json:"schema_version"`
+	Installation    InstallationState    `json:"installation"`
+	Pairing         PairingState         `json:"pairing"`
+	Cloud           CloudState           `json:"cloud"`
+	Runtime         RuntimeState         `json:"runtime"`
+	Update          UpdateState          `json:"update"`
+	HomeAutoSession HomeAutoSessionState `json:"home_auto_session,omitempty"`
+	Metadata        MetadataState        `json:"metadata"`
 }
 
 type InstallationState struct {
@@ -90,6 +91,21 @@ type UpdateState struct {
 	RecommendedVersion string     `json:"recommended_version,omitempty"`
 	LastCheckedAt      *time.Time `json:"last_checked_at,omitempty"`
 	LastError          string     `json:"last_error,omitempty"`
+	UpdatedAt          time.Time  `json:"updated_at,omitempty"`
+}
+
+type HomeAutoSessionState struct {
+	ModuleState        string     `json:"module_state,omitempty"`
+	ActiveSessionID    string     `json:"active_session_id,omitempty"`
+	ActiveTriggerNode  string     `json:"active_trigger_node_id,omitempty"`
+	LastDecisionReason string     `json:"last_decision_reason,omitempty"`
+	LastStartDedupeKey string     `json:"last_start_dedupe_key,omitempty"`
+	LastStopDedupeKey  string     `json:"last_stop_dedupe_key,omitempty"`
+	LastError          string     `json:"last_error,omitempty"`
+	LastDecisionAt     *time.Time `json:"last_decision_at,omitempty"`
+	LastEventAt        *time.Time `json:"last_event_at,omitempty"`
+	CooldownUntil      *time.Time `json:"cooldown_until,omitempty"`
+	ObservedDropped    int        `json:"observed_dropped,omitempty"`
 	UpdatedAt          time.Time  `json:"updated_at,omitempty"`
 }
 
@@ -222,6 +238,10 @@ func (s *Store) ensureDefaults() (bool, error) {
 		s.data.Update.Status = "unknown"
 		changed = true
 	}
+	if strings.TrimSpace(s.data.HomeAutoSession.ModuleState) == "" {
+		s.data.HomeAutoSession.ModuleState = "disabled"
+		changed = true
+	}
 	return changed, nil
 }
 
@@ -265,6 +285,14 @@ func (s *Store) migrate() (bool, error) {
 			changed = true
 		}
 		version = 3
+		changed = true
+	}
+	if version <= 3 {
+		if strings.TrimSpace(s.data.HomeAutoSession.ModuleState) == "" {
+			s.data.HomeAutoSession.ModuleState = "disabled"
+			changed = true
+		}
+		version = 4
 		changed = true
 	}
 

@@ -1,0 +1,90 @@
+{{define "content"}}
+<section class="panel">
+  <h2>Home Auto Session</h2>
+  <p>Configure optional geofence-driven session automation for tracked nodes.</p>
+  {{if .Flash}}
+  <div class="hint {{.FlashClass}}">{{.Flash}}</div>
+  {{end}}
+  <div class="status-grid">
+    <div class="status-chip"><div class="label">Enabled</div><div class="value">{{if .Snapshot.HomeAutoSession.Enabled}}yes{{else}}no{{end}}</div></div>
+    <div class="status-chip"><div class="label">Mode</div><div class="value mono">{{if .Snapshot.HomeAutoSession.Mode}}{{.Snapshot.HomeAutoSession.Mode}}{{else}}off{{end}}</div></div>
+    <div class="status-chip"><div class="label">Module State</div><div class="value mono">{{if .Snapshot.HomeAutoSession.State}}{{.Snapshot.HomeAutoSession.State}}{{else}}disabled{{end}}</div></div>
+    <div class="status-chip"><div class="label">Active Session</div><div class="value mono">{{if .Snapshot.HomeAutoSession.ActiveSessionID}}{{.Snapshot.HomeAutoSession.ActiveSessionID}}{{else}}none{{end}}</div></div>
+    <div class="status-chip"><div class="label">Trigger Node</div><div class="value mono">{{if .Snapshot.HomeAutoSession.ActiveTriggerNode}}{{.Snapshot.HomeAutoSession.ActiveTriggerNode}}{{else}}none{{end}}</div></div>
+    <div class="status-chip"><div class="label">Observed Drops</div><div class="value">{{.Snapshot.HomeAutoSession.ObservedDropped}}</div></div>
+  </div>
+  <div class="hint {{if eq .Snapshot.HomeAutoSession.State "degraded"}}err{{else if eq .Snapshot.HomeAutoSession.State "misconfigured"}}warn{{else}}none{{end}}">
+    {{.HomeAutoStateHint}}
+    {{if .Snapshot.HomeAutoSession.LastDecisionReason}}<br><strong>Last decision:</strong> {{.Snapshot.HomeAutoSession.LastDecisionReason}}{{end}}
+    {{if .Snapshot.HomeAutoSession.LastError}}<br><strong>Last error:</strong> {{.Snapshot.HomeAutoSession.LastError}}{{end}}
+  </div>
+</section>
+
+<section class="panel">
+  <h2>Milestone 1 Configuration</h2>
+  <form method="post" action="/home-auto-session">
+    <label>
+      <input type="checkbox" name="enabled" value="1" {{if .HomeAutoConfig.Enabled}}checked{{end}}>
+      Enable Home Auto Session
+    </label>
+
+    <label for="mode">Mode</label>
+    <select id="mode" name="mode">
+      <option value="off" {{if eq .HomeAutoConfig.Mode "off"}}selected{{end}}>off</option>
+      <option value="observe" {{if eq .HomeAutoConfig.Mode "observe"}}selected{{end}}>observe</option>
+      <option value="control" {{if eq .HomeAutoConfig.Mode "control"}}selected{{end}}>control</option>
+    </select>
+
+    <label for="home_lat">Home Latitude</label>
+    <input id="home_lat" type="text" name="home_lat" value="{{printf "%.6f" .HomeAutoConfig.Home.Lat}}">
+
+    <label for="home_lon">Home Longitude</label>
+    <input id="home_lon" type="text" name="home_lon" value="{{printf "%.6f" .HomeAutoConfig.Home.Lon}}">
+
+    <label for="home_radius_m">Home Radius (meters)</label>
+    <input id="home_radius_m" type="text" name="home_radius_m" value="{{printf "%.0f" .HomeAutoConfig.Home.RadiusM}}">
+
+    <label for="tracked_node_ids">Tracked Node IDs (comma or newline separated)</label>
+    <input id="tracked_node_ids" type="text" name="tracked_node_ids" value="{{.HomeAutoTrackedText}}">
+
+    <label for="start_debounce">Start Debounce (duration)</label>
+    <input id="start_debounce" type="text" name="start_debounce" value="{{.HomeAutoStartDeb}}">
+
+    <label for="stop_debounce">Stop Debounce (duration)</label>
+    <input id="stop_debounce" type="text" name="stop_debounce" value="{{.HomeAutoStopDeb}}">
+
+    <label for="idle_stop_timeout">Idle Stop Timeout (duration)</label>
+    <input id="idle_stop_timeout" type="text" name="idle_stop_timeout" value="{{.HomeAutoIdleTimeout}}">
+
+    <label>
+      <input type="checkbox" name="startup_reconcile" value="1" {{if .HomeAutoConfig.StartupReconcile}}checked{{end}}>
+      Startup reconcile existing local session state
+    </label>
+
+    <label for="session_name_template">Session Name Template</label>
+    <input id="session_name_template" type="text" name="session_name_template" value="{{.HomeAutoConfig.SessionNameTemplate}}">
+
+    <label for="session_notes_template">Session Notes Template</label>
+    <input id="session_notes_template" type="text" name="session_notes_template" value="{{.HomeAutoConfig.SessionNotesTemplate}}">
+
+    <label for="cloud_start_endpoint">Cloud Start Endpoint</label>
+    <input id="cloud_start_endpoint" type="text" name="cloud_start_endpoint" value="{{.HomeAutoConfig.Cloud.StartEndpoint}}">
+
+    <label for="cloud_stop_endpoint">Cloud Stop Endpoint</label>
+    <input id="cloud_stop_endpoint" type="text" name="cloud_stop_endpoint" value="{{.HomeAutoConfig.Cloud.StopEndpoint}}">
+
+    <button type="submit">Save Home Auto Session Config</button>
+  </form>
+</section>
+
+<section class="panel">
+  <h2>Safe Local Actions</h2>
+  <p class="muted">These actions do not alter pairing credentials or packet forwarding.</p>
+  <form method="post" action="/home-auto-session/reevaluate">
+    <button type="submit">Reevaluate Now</button>
+  </form>
+  <form method="post" action="/home-auto-session/reset">
+    <button type="submit">Reset Degraded/Cooldown State</button>
+  </form>
+</section>
+{{end}}

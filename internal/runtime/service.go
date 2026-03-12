@@ -18,6 +18,7 @@ import (
 	"github.com/loramapr/loramapr-receiver/internal/cloudclient"
 	"github.com/loramapr/loramapr-receiver/internal/config"
 	"github.com/loramapr/loramapr-receiver/internal/diagnostics"
+	"github.com/loramapr/loramapr-receiver/internal/homeautosession"
 	"github.com/loramapr/loramapr-receiver/internal/meshtastic"
 	"github.com/loramapr/loramapr-receiver/internal/pairing"
 	"github.com/loramapr/loramapr-receiver/internal/state"
@@ -42,6 +43,18 @@ type CloudClient interface {
 		apiKey string,
 		heartbeat cloudclient.ReceiverHeartbeat,
 	) (cloudclient.ReceiverHeartbeatAck, error)
+	StartHomeAutoSession(
+		ctx context.Context,
+		startEndpoint string,
+		apiKey string,
+		request cloudclient.HomeAutoSessionStartRequest,
+	) (cloudclient.HomeAutoSessionStartResult, error)
+	StopHomeAutoSession(
+		ctx context.Context,
+		stopEndpoint string,
+		apiKey string,
+		request cloudclient.HomeAutoSessionStopRequest,
+	) (cloudclient.HomeAutoSessionStopResult, error)
 }
 
 type Service struct {
@@ -53,15 +66,16 @@ type Service struct {
 }
 
 type Container struct {
-	Config     config.Config
-	Logger     *slog.Logger
-	State      *state.Store
-	Status     *status.Model
-	Cloud      CloudClient
-	Pairing    *pairing.Manager
-	Meshtastic meshtastic.Adapter
-	MeshEvents <-chan meshtastic.Event
-	Portal     *webportal.Server
+	Config          config.Config
+	Logger          *slog.Logger
+	State           *state.Store
+	Status          *status.Model
+	Cloud           CloudClient
+	Pairing         *pairing.Manager
+	Meshtastic      meshtastic.Adapter
+	HomeAutoSession *homeautosession.Module
+	MeshEvents      <-chan meshtastic.Event
+	Portal          *webportal.Server
 }
 
 type steadyState struct {
@@ -211,6 +225,13 @@ func New(cfg config.Config, logger *slog.Logger) (*Service, error) {
 			},
 		),
 	}
+	svc.container.HomeAutoSession = homeautosession.New(
+		cfg.HomeAutoSession,
+		store,
+		statusModel,
+		logger,
+		cloud,
+	)
 	svc.container.Portal = webportal.New(cfg.Portal.BindAddress, svc, svc, logger.With("component", "webportal"))
 	svc.configureInitialReadiness(current.Pairing.Phase)
 	return svc, nil
@@ -238,6 +259,9 @@ func (s *Service) Run(ctx context.Context) error {
 		return err
 	}
 	c.MeshEvents = meshEvents
+	if c.HomeAutoSession != nil {
+		c.HomeAutoSession.Start(ctx)
+	}
 
 	portalErr := make(chan error, 1)
 	go func() {
@@ -294,6 +318,47 @@ func (s *Service) SubmitPairingCode(ctx context.Context, code string) error {
 
 func (s *Service) ResetPairing(_ context.Context, deauthorize bool) error {
 	return s.container.Pairing.ResetPairing(deauthorize)
+}
+
+func (s *Service) CurrentHomeAutoSessionConfig() config.HomeAutoSessionConfig {
+	return s.container.Config.HomeAutoSession
+}
+
+func (s *Service) UpdateHomeAutoSessionConfig(_ context.Context, hasCfg config.HomeAutoSessionConfig) error {
+	next := s.container.Config
+	next.HomeAutoSession = hasCfg
+	if err := next.Validate(); err != nil {
+		return err
+	}
+	if path := strings.TrimSpace(next.LoadedFromConfig); path != "" {
+		if err := config.Save(path, next); err != nil {
+			return err
+		}
+		next.LoadedFromConfig = path
+	}
+	s.container.Config = next
+	if s.container.HomeAutoSession != nil {
+		if err := s.container.HomeAutoSession.ApplyConfig(next.HomeAutoSession); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Service) ReevaluateHomeAutoSession(_ context.Context) error {
+	if s.container.HomeAutoSession != nil {
+		s.container.HomeAutoSession.Reevaluate()
+		return nil
+	}
+	return errors.New("home auto session module unavailable")
+}
+
+func (s *Service) ResetHomeAutoSession(_ context.Context) error {
+	if s.container.HomeAutoSession != nil {
+		s.container.HomeAutoSession.ResetDegraded()
+		return nil
+	}
+	return errors.New("home auto session module unavailable")
 }
 
 func (s *Service) StatusModel() *status.Model {
@@ -399,6 +464,9 @@ func (s *Service) onMeshtasticEvent(event meshtastic.Event) {
 				fmt.Sprintf("local node %s observed=%d", event.Node.LocalNodeID, len(event.Node.ObservedNodeIDs)),
 			)
 		}
+	}
+	if c.HomeAutoSession != nil {
+		c.HomeAutoSession.ObserveEvent(event)
 	}
 }
 
@@ -545,36 +613,42 @@ func (s *Service) sendHeartbeat(ctx context.Context, snapshot state.Data, meshSn
 		LocalNodeID:     meshSnap.LocalNodeID,
 		ObservedNodeIDs: append([]string(nil), meshSnap.ObservedNodeIDs...),
 		Status: map[string]any{
-			"installationId":      snapshot.Installation.ID,
-			"localName":           snapshot.Installation.LocalName,
-			"hostname":            snapshot.Installation.Hostname,
-			"receiverId":          snapshot.Cloud.ReceiverID,
-			"receiverLabel":       snapshot.Cloud.ReceiverLabel,
-			"siteLabel":           snapshot.Cloud.SiteLabel,
-			"groupLabel":          snapshot.Cloud.GroupLabel,
-			"pairingPhase":        snapshot.Pairing.Phase,
-			"serviceMode":         s.mode,
-			"meshtasticState":     meshSnap.State,
-			"ingestQueueDepth":    len(s.steady.ingestQueue),
-			"coarseFailureReason": coarseFailure,
-			"releaseChannel":      s.build.Channel,
-			"buildCommit":         s.build.Commit,
-			"buildDate":           s.build.BuildDate,
-			"buildID":             s.build.BuildID,
-			"installType":         snapshot.Runtime.InstallType,
-			"updateStatus":        updateSnap.UpdateStatus,
-			"updateVersion":       updateSnap.UpdateRecommendedVersion,
-			"failureCode":         updateSnap.FailureCode,
-			"failureSummary":      updateSnap.FailureSummary,
-			"failureHint":         updateSnap.FailureHint,
-			"attentionState":      updateSnap.AttentionState,
-			"attentionCategory":   updateSnap.AttentionCategory,
-			"attentionCode":       updateSnap.AttentionCode,
-			"attentionSummary":    updateSnap.AttentionSummary,
-			"attentionHint":       updateSnap.AttentionHint,
-			"attentionRequired":   updateSnap.AttentionActionRequired,
-			"operationalStatus":   ops.Overall,
-			"operationalSummary":  ops.Summary,
+			"installationId":         snapshot.Installation.ID,
+			"localName":              snapshot.Installation.LocalName,
+			"hostname":               snapshot.Installation.Hostname,
+			"receiverId":             snapshot.Cloud.ReceiverID,
+			"receiverLabel":          snapshot.Cloud.ReceiverLabel,
+			"siteLabel":              snapshot.Cloud.SiteLabel,
+			"groupLabel":             snapshot.Cloud.GroupLabel,
+			"pairingPhase":           snapshot.Pairing.Phase,
+			"serviceMode":            s.mode,
+			"meshtasticState":        meshSnap.State,
+			"ingestQueueDepth":       len(s.steady.ingestQueue),
+			"coarseFailureReason":    coarseFailure,
+			"releaseChannel":         s.build.Channel,
+			"buildCommit":            s.build.Commit,
+			"buildDate":              s.build.BuildDate,
+			"buildID":                s.build.BuildID,
+			"installType":            snapshot.Runtime.InstallType,
+			"updateStatus":           updateSnap.UpdateStatus,
+			"updateVersion":          updateSnap.UpdateRecommendedVersion,
+			"failureCode":            updateSnap.FailureCode,
+			"failureSummary":         updateSnap.FailureSummary,
+			"failureHint":            updateSnap.FailureHint,
+			"attentionState":         updateSnap.AttentionState,
+			"attentionCategory":      updateSnap.AttentionCategory,
+			"attentionCode":          updateSnap.AttentionCode,
+			"attentionSummary":       updateSnap.AttentionSummary,
+			"attentionHint":          updateSnap.AttentionHint,
+			"attentionRequired":      updateSnap.AttentionActionRequired,
+			"operationalStatus":      ops.Overall,
+			"operationalSummary":     ops.Summary,
+			"homeAutoSessionEnabled": updateSnap.HomeAutoSession.Enabled,
+			"homeAutoSessionMode":    updateSnap.HomeAutoSession.Mode,
+			"homeAutoSessionState":   updateSnap.HomeAutoSession.State,
+			"homeAutoSessionSummary": updateSnap.HomeAutoSession.Summary,
+			"homeAutoDecision":       updateSnap.HomeAutoSession.LastDecisionReason,
+			"homeAutoLastError":      updateSnap.HomeAutoSession.LastError,
 		},
 	})
 	if err != nil {

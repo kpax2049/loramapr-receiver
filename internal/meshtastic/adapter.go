@@ -50,7 +50,13 @@ type Packet struct {
 	PortNum           int
 	Payload           []byte
 	ReceivedAt        time.Time
+	Position          *Position
 	Meta              map[string]string
+}
+
+type Position struct {
+	Lat float64
+	Lon float64
 }
 
 type NodeStatus struct {

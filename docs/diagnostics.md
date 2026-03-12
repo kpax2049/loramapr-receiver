@@ -106,6 +106,13 @@ Overall state:
   - installation id
   - local name and hostname hints
   - cloud receiver/site/group labels (when present)
+- Home Auto Session context:
+  - enabled/mode
+  - module state
+  - tracked nodes summary
+  - active session/trigger node
+  - last decision reason
+  - last error (if any)
 - config/state schema markers
 - pairing/lifecycle/update summaries
 - cloud/network/node probes
@@ -122,6 +129,9 @@ Redacted by default (never exported):
 
 Identity and label fields are intentionally support-safe so multiple receivers can
 be distinguished during troubleshooting.
+
+Home Auto Session diagnostics are support-safe and do not include credential
+secrets.
 
 ## Minimal Field Triage
 

@@ -29,6 +29,22 @@ type FailureEvent struct {
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
+type HomeAutoSessionSnapshot struct {
+	Enabled            bool      `json:"enabled"`
+	Mode               string    `json:"mode,omitempty"`
+	State              string    `json:"state,omitempty"`
+	Summary            string    `json:"summary,omitempty"`
+	HomeSummary        string    `json:"home_summary,omitempty"`
+	TrackedNodeIDs     []string  `json:"tracked_node_ids,omitempty"`
+	ActiveSessionID    string    `json:"active_session_id,omitempty"`
+	ActiveTriggerNode  string    `json:"active_trigger_node_id,omitempty"`
+	LastDecisionReason string    `json:"last_decision_reason,omitempty"`
+	LastError          string    `json:"last_error,omitempty"`
+	ObservedQueueDepth int       `json:"observed_queue_depth,omitempty"`
+	ObservedDropped    int       `json:"observed_dropped,omitempty"`
+	UpdatedAt          time.Time `json:"updated_at,omitempty"`
+}
+
 type Snapshot struct {
 	InstallationID           string                     `json:"installation_id"`
 	LocalName                string                     `json:"local_name,omitempty"`
@@ -81,6 +97,7 @@ type Snapshot struct {
 	UpdateManifestChannel    string                     `json:"update_manifest_channel,omitempty"`
 	UpdateRecommendedVersion string                     `json:"update_recommended_version,omitempty"`
 	UpdateCheckedAt          *time.Time                 `json:"update_checked_at,omitempty"`
+	HomeAutoSession          HomeAutoSessionSnapshot    `json:"home_auto_session"`
 	StartedAt                time.Time                  `json:"started_at"`
 	UpdatedAt                time.Time                  `json:"updated_at"`
 	Components               map[string]ComponentStatus `json:"components,omitempty"`
@@ -119,6 +136,7 @@ func (m *Model) Snapshot() Snapshot {
 	out.FailureSince = cloneTimePtr(m.snap.FailureSince)
 	out.AttentionUpdatedAt = cloneTimePtr(m.snap.AttentionUpdatedAt)
 	out.UpdateCheckedAt = cloneTimePtr(m.snap.UpdateCheckedAt)
+	out.HomeAutoSession.TrackedNodeIDs = append([]string(nil), m.snap.HomeAutoSession.TrackedNodeIDs...)
 	return out
 }
 
@@ -300,6 +318,26 @@ func (m *Model) SetAttention(state, category, code, summary, hint string, action
 		}
 		updatedAt := m.now().UTC()
 		s.AttentionUpdatedAt = &updatedAt
+	})
+}
+
+func (m *Model) SetHomeAutoSession(module HomeAutoSessionSnapshot) {
+	m.Update(func(s *Snapshot) {
+		s.HomeAutoSession = HomeAutoSessionSnapshot{
+			Enabled:            module.Enabled,
+			Mode:               normalize(module.Mode),
+			State:              normalize(module.State),
+			Summary:            normalize(module.Summary),
+			HomeSummary:        normalize(module.HomeSummary),
+			TrackedNodeIDs:     append([]string(nil), module.TrackedNodeIDs...),
+			ActiveSessionID:    normalize(module.ActiveSessionID),
+			ActiveTriggerNode:  normalize(module.ActiveTriggerNode),
+			LastDecisionReason: normalize(module.LastDecisionReason),
+			LastError:          normalize(module.LastError),
+			ObservedQueueDepth: module.ObservedQueueDepth,
+			ObservedDropped:    module.ObservedDropped,
+			UpdatedAt:          m.now().UTC(),
+		}
 	})
 }
 

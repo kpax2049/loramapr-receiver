@@ -39,6 +39,10 @@ Portal reference: [Embedded Local Setup Portal](./docs/local-portal.md)
 For households/teams with multiple receivers, see
 [Multi-Receiver Identity and Guidance](./docs/multi-receiver-identity.md).
 
+Optional automation module:
+
+- [Embedded Home Auto Session (Milestone 1)](./docs/home-auto-session.md)
+
 ## Local Attention States
 
 The portal and diagnostics show one attention state:

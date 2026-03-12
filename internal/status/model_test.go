@@ -212,3 +212,43 @@ func TestAttentionStatus(t *testing.T) {
 		t.Fatal("expected attention_updated_at to clear for none state")
 	}
 }
+
+func TestHomeAutoSessionStatus(t *testing.T) {
+	t.Parallel()
+
+	model := New()
+	model.SetHomeAutoSession(HomeAutoSessionSnapshot{
+		Enabled:            true,
+		Mode:               "observe",
+		State:              "start_pending",
+		Summary:            "waiting for start debounce",
+		HomeSummary:        "37.3349,-122.0090 radius 150m",
+		TrackedNodeIDs:     []string{"!nodeA", "!nodeB"},
+		ActiveSessionID:    "session-1",
+		ActiveTriggerNode:  "!nodeA",
+		LastDecisionReason: "inside->outside transition",
+		LastError:          "",
+		ObservedQueueDepth: 3,
+		ObservedDropped:    1,
+	})
+	snap := model.Snapshot()
+
+	if !snap.HomeAutoSession.Enabled {
+		t.Fatal("expected home_auto_session enabled")
+	}
+	if snap.HomeAutoSession.Mode != "observe" {
+		t.Fatalf("unexpected home_auto_session mode: %q", snap.HomeAutoSession.Mode)
+	}
+	if snap.HomeAutoSession.State != "start_pending" {
+		t.Fatalf("unexpected home_auto_session state: %q", snap.HomeAutoSession.State)
+	}
+	if len(snap.HomeAutoSession.TrackedNodeIDs) != 2 {
+		t.Fatalf("unexpected tracked nodes: %#v", snap.HomeAutoSession.TrackedNodeIDs)
+	}
+
+	snap.HomeAutoSession.TrackedNodeIDs[0] = "tampered"
+	snap2 := model.Snapshot()
+	if snap2.HomeAutoSession.TrackedNodeIDs[0] != "!nodeA" {
+		t.Fatalf("expected snapshot copy for tracked node IDs, got %#v", snap2.HomeAutoSession.TrackedNodeIDs)
+	}
+}

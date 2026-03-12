@@ -11,7 +11,7 @@ behavior for `loramapr-receiverd`.
 
 Current config schema:
 
-- `schema_version: 2`
+- `schema_version: 3`
 
 Key sections:
 
@@ -22,13 +22,14 @@ Key sections:
 - `cloud`
 - `update`
 - `meshtastic`
+- `home_auto_session`
 - `logging`
 
 Example (minimal):
 
 ```json
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "service": {
     "mode": "auto",
     "heartbeat": "30s"
@@ -55,6 +56,26 @@ Example (minimal):
   },
   "meshtastic": {
     "transport": "serial"
+  },
+  "home_auto_session": {
+    "enabled": false,
+    "mode": "off",
+    "home": {
+      "lat": 0,
+      "lon": 0,
+      "radius_m": 150
+    },
+    "tracked_node_ids": [],
+    "start_debounce": "30s",
+    "stop_debounce": "30s",
+    "idle_stop_timeout": "15m",
+    "startup_reconcile": true,
+    "session_name_template": "Home Auto {{.NodeID}}",
+    "session_notes_template": "Automatically managed by LoRaMapr Receiver",
+    "cloud": {
+      "start_endpoint": "/api/receiver/home-auto-session/start",
+      "stop_endpoint": "/api/receiver/home-auto-session/stop"
+    }
   },
   "logging": {
     "level": "info",
@@ -99,6 +120,28 @@ This logic is informational only; no self-update actions are performed.
 - `json_stream`
 - `disabled`
 
+### `home_auto_session` block
+
+Optional embedded Home Auto Session module config:
+
+- `enabled`
+- `mode` (`off|observe|control`)
+- `home.lat`, `home.lon`, `home.radius_m`
+- `tracked_node_ids[]`
+- `start_debounce`
+- `stop_debounce`
+- `idle_stop_timeout`
+- `startup_reconcile`
+- `session_name_template`
+- `session_notes_template`
+- `cloud.start_endpoint`, `cloud.stop_endpoint`
+
+Milestone 1 behavior assumptions:
+
+- one home geofence
+- explicit tracked node IDs
+- one active auto session per receiver
+
 ## State File
 
 - Path: `paths.state_file`
@@ -108,7 +151,7 @@ This logic is informational only; no self-update actions are performed.
 
 Current state schema:
 
-- `schema_version: 3`
+- `schema_version: 4`
 
 Top-level sections:
 
@@ -117,6 +160,7 @@ Top-level sections:
 - `cloud`
 - `runtime`
 - `update`
+- `home_auto_session`
 - `metadata`
 
 ### Persisted identity and pairing
@@ -152,17 +196,31 @@ Top-level sections:
 - `update.last_checked_at`
 - `update.last_error`
 
+### Persisted Home Auto Session runtime state
+
+- `home_auto_session.module_state`
+- `home_auto_session.active_session_id`
+- `home_auto_session.active_trigger_node_id`
+- `home_auto_session.last_decision_reason`
+- `home_auto_session.last_start_dedupe_key`
+- `home_auto_session.last_stop_dedupe_key`
+- `home_auto_session.last_error`
+- `home_auto_session.cooldown_until`
+- `home_auto_session.observed_dropped`
+
 ## Migration and Compatibility
 
 ### Config
 
-- Legacy/unspecified config schema is migrated to `2`.
+- Legacy/unspecified config schema is migrated to `3`.
+- Schema `2 -> 3` migration adds Home Auto Session config block support.
 - Config schema newer than supported runtime fails startup.
 
 ### State
 
 - Legacy pairing phase values are normalized during migration.
 - Schema `2 -> 3` migration adds install type/update defaults.
+- Schema `3 -> 4` migration adds persisted Home Auto Session runtime state.
 - State schema newer than supported runtime fails startup.
 
 ### Cloud config compatibility

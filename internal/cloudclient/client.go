@@ -76,6 +76,35 @@ type ReceiverHeartbeatAck struct {
 	NodeCount       int
 }
 
+type HomeAutoSessionStartRequest struct {
+	TriggerNodeID string         `json:"triggerNodeId,omitempty"`
+	DedupeKey     string         `json:"dedupeKey,omitempty"`
+	Reason        string         `json:"reason,omitempty"`
+	SessionName   string         `json:"sessionName,omitempty"`
+	SessionNotes  string         `json:"sessionNotes,omitempty"`
+	StartedAt     string         `json:"startedAt,omitempty"`
+	Home          map[string]any `json:"home,omitempty"`
+}
+
+type HomeAutoSessionStartResult struct {
+	SessionID string
+	StartedAt time.Time
+}
+
+type HomeAutoSessionStopRequest struct {
+	SessionID     string `json:"sessionId,omitempty"`
+	TriggerNodeID string `json:"triggerNodeId,omitempty"`
+	DedupeKey     string `json:"dedupeKey,omitempty"`
+	Reason        string `json:"reason,omitempty"`
+	StoppedAt     string `json:"stoppedAt,omitempty"`
+}
+
+type HomeAutoSessionStopResult struct {
+	SessionID string
+	StoppedAt time.Time
+	Status    string
+}
+
 type APIError struct {
 	StatusCode int
 	Message    string
@@ -325,6 +354,90 @@ func (c *HTTPClient) SendReceiverHeartbeat(
 		ConfigVersion:   strings.TrimSpace(response.ConfigVersion),
 		LastHeartbeatAt: lastHeartbeatAt,
 		NodeCount:       response.NodeCount,
+	}, nil
+}
+
+func (c *HTTPClient) StartHomeAutoSession(
+	ctx context.Context,
+	startEndpoint string,
+	apiKey string,
+	request HomeAutoSessionStartRequest,
+) (HomeAutoSessionStartResult, error) {
+	trimmedKey := strings.TrimSpace(apiKey)
+	if trimmedKey == "" {
+		return HomeAutoSessionStartResult{}, errors.New("ingest API key is required")
+	}
+
+	headers := map[string]string{
+		"x-api-key": trimmedKey,
+	}
+	if key := strings.TrimSpace(request.DedupeKey); key != "" {
+		headers["x-idempotency-key"] = key
+	}
+
+	var response struct {
+		SessionID string `json:"sessionId"`
+		StartedAt string `json:"startedAt"`
+	}
+	if err := c.postJSON(ctx, startEndpoint, request, headers, &response); err != nil {
+		return HomeAutoSessionStartResult{}, err
+	}
+
+	startedAt := time.Now().UTC()
+	if strings.TrimSpace(response.StartedAt) != "" {
+		parsed, err := time.Parse(time.RFC3339, response.StartedAt)
+		if err != nil {
+			return HomeAutoSessionStartResult{}, fmt.Errorf("parse home auto session startedAt: %w", err)
+		}
+		startedAt = parsed.UTC()
+	}
+
+	return HomeAutoSessionStartResult{
+		SessionID: strings.TrimSpace(response.SessionID),
+		StartedAt: startedAt,
+	}, nil
+}
+
+func (c *HTTPClient) StopHomeAutoSession(
+	ctx context.Context,
+	stopEndpoint string,
+	apiKey string,
+	request HomeAutoSessionStopRequest,
+) (HomeAutoSessionStopResult, error) {
+	trimmedKey := strings.TrimSpace(apiKey)
+	if trimmedKey == "" {
+		return HomeAutoSessionStopResult{}, errors.New("ingest API key is required")
+	}
+
+	headers := map[string]string{
+		"x-api-key": trimmedKey,
+	}
+	if key := strings.TrimSpace(request.DedupeKey); key != "" {
+		headers["x-idempotency-key"] = key
+	}
+
+	var response struct {
+		SessionID string `json:"sessionId"`
+		StoppedAt string `json:"stoppedAt"`
+		Status    string `json:"status"`
+	}
+	if err := c.postJSON(ctx, stopEndpoint, request, headers, &response); err != nil {
+		return HomeAutoSessionStopResult{}, err
+	}
+
+	stoppedAt := time.Now().UTC()
+	if strings.TrimSpace(response.StoppedAt) != "" {
+		parsed, err := time.Parse(time.RFC3339, response.StoppedAt)
+		if err != nil {
+			return HomeAutoSessionStopResult{}, fmt.Errorf("parse home auto session stoppedAt: %w", err)
+		}
+		stoppedAt = parsed.UTC()
+	}
+
+	return HomeAutoSessionStopResult{
+		SessionID: strings.TrimSpace(response.SessionID),
+		StoppedAt: stoppedAt,
+		Status:    strings.TrimSpace(response.Status),
 	}, nil
 }
 

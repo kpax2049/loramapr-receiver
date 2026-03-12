@@ -17,7 +17,7 @@ const (
 	// DefaultPath is the local development fallback.
 	DefaultPath = "./receiver.json"
 
-	CurrentSchemaVersion = 2
+	CurrentSchemaVersion = 3
 )
 
 type RunMode string
@@ -29,15 +29,17 @@ const (
 )
 
 type Config struct {
-	SchemaVersion int              `json:"schema_version,omitempty"`
-	Service       ServiceConfig    `json:"service"`
-	Runtime       RuntimeConfig    `json:"runtime"`
-	Paths         PathsConfig      `json:"paths"`
-	Portal        PortalConfig     `json:"portal"`
-	Cloud         CloudConfig      `json:"cloud"`
-	Update        UpdateConfig     `json:"update"`
-	Meshtastic    MeshtasticConfig `json:"meshtastic"`
-	Logging       LoggingConfig    `json:"logging"`
+	SchemaVersion    int                   `json:"schema_version,omitempty"`
+	Service          ServiceConfig         `json:"service"`
+	Runtime          RuntimeConfig         `json:"runtime"`
+	Paths            PathsConfig           `json:"paths"`
+	Portal           PortalConfig          `json:"portal"`
+	Cloud            CloudConfig           `json:"cloud"`
+	Update           UpdateConfig          `json:"update"`
+	Meshtastic       MeshtasticConfig      `json:"meshtastic"`
+	HomeAutoSession  HomeAutoSessionConfig `json:"home_auto_session,omitempty"`
+	Logging          LoggingConfig         `json:"logging"`
+	LoadedFromConfig string                `json:"-"`
 }
 
 type ServiceConfig struct {
@@ -74,6 +76,39 @@ type MeshtasticConfig struct {
 	Transport string `json:"transport,omitempty"`
 	Device    string `json:"device,omitempty"`
 	Network   string `json:"network,omitempty"`
+}
+
+type HomeAutoSessionMode string
+
+const (
+	HomeAutoSessionModeOff     HomeAutoSessionMode = "off"
+	HomeAutoSessionModeObserve HomeAutoSessionMode = "observe"
+	HomeAutoSessionModeControl HomeAutoSessionMode = "control"
+)
+
+type HomeAutoSessionConfig struct {
+	Enabled              bool                    `json:"enabled"`
+	Mode                 HomeAutoSessionMode     `json:"mode,omitempty"`
+	Home                 HomeGeofenceConfig      `json:"home"`
+	TrackedNodeIDs       []string                `json:"tracked_node_ids,omitempty"`
+	StartDebounce        Duration                `json:"start_debounce"`
+	StopDebounce         Duration                `json:"stop_debounce"`
+	IdleStopTimeout      Duration                `json:"idle_stop_timeout"`
+	StartupReconcile     bool                    `json:"startup_reconcile"`
+	SessionNameTemplate  string                  `json:"session_name_template,omitempty"`
+	SessionNotesTemplate string                  `json:"session_notes_template,omitempty"`
+	Cloud                HomeAutoSessionCloudCfg `json:"cloud,omitempty"`
+}
+
+type HomeGeofenceConfig struct {
+	Lat     float64 `json:"lat"`
+	Lon     float64 `json:"lon"`
+	RadiusM float64 `json:"radius_m"`
+}
+
+type HomeAutoSessionCloudCfg struct {
+	StartEndpoint string `json:"start_endpoint,omitempty"`
+	StopEndpoint  string `json:"stop_endpoint,omitempty"`
 }
 
 type LoggingConfig struct {
@@ -146,6 +181,18 @@ func Default() Config {
 		Meshtastic: MeshtasticConfig{
 			Transport: "serial",
 		},
+		HomeAutoSession: HomeAutoSessionConfig{
+			Enabled:          false,
+			Mode:             HomeAutoSessionModeOff,
+			StartDebounce:    Duration(30 * time.Second),
+			StopDebounce:     Duration(30 * time.Second),
+			IdleStopTimeout:  Duration(15 * time.Minute),
+			StartupReconcile: true,
+			Cloud: HomeAutoSessionCloudCfg{
+				StartEndpoint: "/api/receiver/home-auto-session/start",
+				StopEndpoint:  "/api/receiver/home-auto-session/stop",
+			},
+		},
 		Logging: LoggingConfig{
 			Level:  "info",
 			Format: "json",
@@ -159,6 +206,7 @@ func Load(path string) (Config, error) {
 	}
 
 	cfg := Default()
+	cfg.LoadedFromConfig = path
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -180,6 +228,7 @@ func Load(path string) (Config, error) {
 	if err := cfg.Validate(); err != nil {
 		return Config{}, err
 	}
+	cfg.LoadedFromConfig = path
 	return cfg, nil
 }
 
@@ -250,6 +299,9 @@ func (c Config) Validate() error {
 	default:
 		return fmt.Errorf("invalid meshtastic.transport %q", c.Meshtastic.Transport)
 	}
+	if err := c.validateHomeAutoSession(); err != nil {
+		return err
+	}
 
 	switch strings.ToLower(c.Logging.Level) {
 	case "debug", "info", "warn", "error":
@@ -274,6 +326,7 @@ func Save(path string, cfg Config) error {
 	if err := cfg.Validate(); err != nil {
 		return err
 	}
+	cfg.LoadedFromConfig = path
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
@@ -317,6 +370,27 @@ func (c *Config) applyDefaults() {
 	if c.Meshtastic.Transport == "" {
 		c.Meshtastic.Transport = defaults.Meshtastic.Transport
 	}
+	if c.HomeAutoSession.Mode == "" {
+		c.HomeAutoSession.Mode = defaults.HomeAutoSession.Mode
+	}
+	if c.HomeAutoSession.StartDebounce.Std() <= 0 {
+		c.HomeAutoSession.StartDebounce = defaults.HomeAutoSession.StartDebounce
+	}
+	if c.HomeAutoSession.StopDebounce.Std() <= 0 {
+		c.HomeAutoSession.StopDebounce = defaults.HomeAutoSession.StopDebounce
+	}
+	if c.HomeAutoSession.IdleStopTimeout.Std() <= 0 {
+		c.HomeAutoSession.IdleStopTimeout = defaults.HomeAutoSession.IdleStopTimeout
+	}
+	if strings.TrimSpace(c.HomeAutoSession.Cloud.StartEndpoint) == "" {
+		c.HomeAutoSession.Cloud.StartEndpoint = defaults.HomeAutoSession.Cloud.StartEndpoint
+	}
+	if strings.TrimSpace(c.HomeAutoSession.Cloud.StopEndpoint) == "" {
+		c.HomeAutoSession.Cloud.StopEndpoint = defaults.HomeAutoSession.Cloud.StopEndpoint
+	}
+	c.HomeAutoSession.TrackedNodeIDs = normalizeNodeIDs(c.HomeAutoSession.TrackedNodeIDs)
+	c.HomeAutoSession.SessionNameTemplate = strings.TrimSpace(c.HomeAutoSession.SessionNameTemplate)
+	c.HomeAutoSession.SessionNotesTemplate = strings.TrimSpace(c.HomeAutoSession.SessionNotesTemplate)
 	if c.Logging.Level == "" {
 		c.Logging.Level = defaults.Logging.Level
 	}
@@ -334,10 +408,78 @@ func (c *Config) migrate() error {
 	if version <= 1 {
 		version = 2
 	}
+	if version <= 2 {
+		version = 3
+	}
 	if version > CurrentSchemaVersion {
 		return fmt.Errorf("config schema version %d is newer than runtime supports (%d)", version, CurrentSchemaVersion)
 	}
 
 	c.SchemaVersion = version
 	return nil
+}
+
+func (c Config) validateHomeAutoSession() error {
+	mode := HomeAutoSessionMode(strings.ToLower(strings.TrimSpace(string(c.HomeAutoSession.Mode))))
+	switch mode {
+	case HomeAutoSessionModeOff, HomeAutoSessionModeObserve, HomeAutoSessionModeControl:
+	default:
+		return fmt.Errorf("invalid home_auto_session.mode %q", c.HomeAutoSession.Mode)
+	}
+
+	if c.HomeAutoSession.StartDebounce.Std() <= 0 {
+		return errors.New("home_auto_session.start_debounce must be > 0")
+	}
+	if c.HomeAutoSession.StopDebounce.Std() <= 0 {
+		return errors.New("home_auto_session.stop_debounce must be > 0")
+	}
+	if c.HomeAutoSession.IdleStopTimeout.Std() <= 0 {
+		return errors.New("home_auto_session.idle_stop_timeout must be > 0")
+	}
+	if len(c.HomeAutoSession.SessionNameTemplate) > 120 {
+		return errors.New("home_auto_session.session_name_template must be <= 120 characters")
+	}
+	if len(c.HomeAutoSession.SessionNotesTemplate) > 512 {
+		return errors.New("home_auto_session.session_notes_template must be <= 512 characters")
+	}
+
+	if !c.HomeAutoSession.Enabled || mode == HomeAutoSessionModeOff {
+		return nil
+	}
+
+	if c.HomeAutoSession.Home.Lat < -90 || c.HomeAutoSession.Home.Lat > 90 {
+		return errors.New("home_auto_session.home.lat must be between -90 and 90")
+	}
+	if c.HomeAutoSession.Home.Lon < -180 || c.HomeAutoSession.Home.Lon > 180 {
+		return errors.New("home_auto_session.home.lon must be between -180 and 180")
+	}
+	if c.HomeAutoSession.Home.RadiusM <= 0 {
+		return errors.New("home_auto_session.home.radius_m must be > 0")
+	}
+	if len(normalizeNodeIDs(c.HomeAutoSession.TrackedNodeIDs)) == 0 {
+		return errors.New("home_auto_session.tracked_node_ids requires at least one node ID when enabled")
+	}
+	if len(normalizeNodeIDs(c.HomeAutoSession.TrackedNodeIDs)) > 64 {
+		return errors.New("home_auto_session.tracked_node_ids must be <= 64 entries")
+	}
+
+	return nil
+}
+
+func normalizeNodeIDs(input []string) []string {
+	seen := make(map[string]struct{}, len(input))
+	out := make([]string, 0, len(input))
+	for _, raw := range input {
+		value := strings.TrimSpace(raw)
+		if value == "" {
+			continue
+		}
+		lower := strings.ToLower(value)
+		if _, exists := seen[lower]; exists {
+			continue
+		}
+		seen[lower] = struct{}{}
+		out = append(out, value)
+	}
+	return out
 }

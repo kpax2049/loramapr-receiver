@@ -89,6 +89,21 @@ Actions:
 3. Check queue depth and last packet acknowledgement.
 4. Re-pair only if auth/lifecycle state requires it.
 
+### Home Auto Session Not Starting/Stopping
+
+Indicators:
+
+- Home Auto Session state: `misconfigured`, `cooldown`, or `degraded`
+- Home Auto Session last error/decision indicates cloud/session control issue
+
+Actions:
+
+1. Open portal `/home-auto-session` and verify geofence + tracked nodes config.
+2. Confirm mode (`observe` vs `control`) matches expected behavior.
+3. In control mode, verify receiver is paired and has valid cloud credentials.
+4. Use **Reevaluate Now** after config fixes.
+5. If stuck degraded/cooldown, use **Reset Degraded/Cooldown State** and re-test.
+
 ### Revoked, Disabled, or Replaced
 
 Indicators:

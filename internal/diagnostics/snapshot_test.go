@@ -16,6 +16,10 @@ func TestSupportSnapshotRedactsSecrets(t *testing.T) {
 	cfg := config.Default()
 	cfg.Cloud.BaseURL = "https://api.example.com"
 	cfg.Meshtastic.Device = "/dev/ttyUSB0"
+	cfg.HomeAutoSession.Enabled = true
+	cfg.HomeAutoSession.Mode = config.HomeAutoSessionModeObserve
+	cfg.HomeAutoSession.Home = config.HomeGeofenceConfig{Lat: 37.3349, Lon: -122.0090, RadiusM: 150}
+	cfg.HomeAutoSession.TrackedNodeIDs = []string{"!nodeA"}
 	data := state.Data{}
 	data.Installation.ID = "install-abc123"
 	data.Installation.LocalName = "garage-pi-a1b2c3"
@@ -30,6 +34,8 @@ func TestSupportSnapshotRedactsSecrets(t *testing.T) {
 	data.Cloud.ReceiverLabel = "Garage Receiver"
 	data.Cloud.SiteLabel = "Home"
 	data.Cloud.GroupLabel = "Outdoor"
+	data.HomeAutoSession.ModuleState = "observe_ready"
+	data.HomeAutoSession.LastDecisionReason = "observe mode ready"
 
 	snapshot := CollectSupportSnapshot(cfg, data, Finding{Code: FailureActivationFailed}, CollectOptions{
 		Now: func() time.Time { return now },
@@ -94,6 +100,12 @@ func TestSupportSnapshotRedactsSecrets(t *testing.T) {
 	}
 	if len(snapshot.Operations.Checks) == 0 {
 		t.Fatal("expected operational checks in support snapshot")
+	}
+	if !snapshot.HomeAutoSession.Enabled || snapshot.HomeAutoSession.Mode != "observe" {
+		t.Fatalf("expected home auto session config in support snapshot: %#v", snapshot.HomeAutoSession)
+	}
+	if snapshot.HomeAutoSession.State != "observe_ready" {
+		t.Fatalf("expected home auto session state in support snapshot, got %q", snapshot.HomeAutoSession.State)
 	}
 	if snapshot.Attention.State == AttentionNone {
 		t.Fatal("expected attention state in support snapshot")

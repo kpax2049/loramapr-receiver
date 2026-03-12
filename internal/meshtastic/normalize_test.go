@@ -71,3 +71,28 @@ func TestNormalizeRejectsUnknownEvent(t *testing.T) {
 		t.Fatal("expected error for unknown event type")
 	}
 }
+
+func TestNormalizePacketEventPosition(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 3, 12, 10, 0, 0, 0, time.UTC)
+	line := []byte(`{
+		"type":"packet",
+		"from":"!node-a",
+		"to":"!gw",
+		"payload":"ping",
+		"port":1,
+		"position":{"lat":37.3349,"lon":-122.0090}
+	}`)
+
+	event, err := NormalizeLine(line, now)
+	if err != nil {
+		t.Fatalf("NormalizeLine returned error: %v", err)
+	}
+	if event.Packet == nil || event.Packet.Position == nil {
+		t.Fatalf("expected packet position")
+	}
+	if event.Packet.Position.Lat != 37.3349 || event.Packet.Position.Lon != -122.0090 {
+		t.Fatalf("unexpected normalized position: %#v", event.Packet.Position)
+	}
+}

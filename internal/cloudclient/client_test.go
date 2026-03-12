@@ -281,3 +281,83 @@ func TestNewHTTPClientDefaultTimeout(t *testing.T) {
 		t.Fatalf("expected default timeout 10s, got %s", client.client.Timeout)
 	}
 }
+
+func TestStartHomeAutoSession(t *testing.T) {
+	t.Parallel()
+
+	client := &HTTPClient{
+		baseURL: "https://api.example.com",
+		client: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			if req.URL.Path != "/api/receiver/home-auto-session/start" {
+				t.Fatalf("unexpected path: %s", req.URL.Path)
+			}
+			if req.Header.Get("x-api-key") != "ingest-secret" {
+				t.Fatalf("missing x-api-key header")
+			}
+			if req.Header.Get("x-idempotency-key") != "start-1" {
+				t.Fatalf("missing x-idempotency-key header")
+			}
+			var payload map[string]any
+			if err := json.NewDecoder(req.Body).Decode(&payload); err != nil {
+				t.Fatalf("decode request: %v", err)
+			}
+			if payload["triggerNodeId"] != "!nodeA" {
+				t.Fatalf("unexpected trigger node payload: %#v", payload)
+			}
+			return jsonResponse(http.StatusCreated, `{"sessionId":"session-1","startedAt":"2026-03-12T10:00:00Z"}`), nil
+		})},
+	}
+
+	result, err := client.StartHomeAutoSession(context.Background(), "/api/receiver/home-auto-session/start", "ingest-secret", HomeAutoSessionStartRequest{
+		TriggerNodeID: "!nodeA",
+		DedupeKey:     "start-1",
+		Reason:        "tracked node exited geofence",
+	})
+	if err != nil {
+		t.Fatalf("StartHomeAutoSession returned error: %v", err)
+	}
+	if result.SessionID != "session-1" {
+		t.Fatalf("unexpected session ID: %q", result.SessionID)
+	}
+	if result.StartedAt.IsZero() {
+		t.Fatal("expected started_at to be parsed")
+	}
+}
+
+func TestStopHomeAutoSession(t *testing.T) {
+	t.Parallel()
+
+	client := &HTTPClient{
+		baseURL: "https://api.example.com",
+		client: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			if req.URL.Path != "/api/receiver/home-auto-session/stop" {
+				t.Fatalf("unexpected path: %s", req.URL.Path)
+			}
+			if req.Header.Get("x-api-key") != "ingest-secret" {
+				t.Fatalf("missing x-api-key header")
+			}
+			if req.Header.Get("x-idempotency-key") != "stop-1" {
+				t.Fatalf("missing x-idempotency-key header")
+			}
+			return jsonResponse(http.StatusOK, `{"sessionId":"session-1","stoppedAt":"2026-03-12T10:15:00Z","status":"stopped"}`), nil
+		})},
+	}
+
+	result, err := client.StopHomeAutoSession(context.Background(), "/api/receiver/home-auto-session/stop", "ingest-secret", HomeAutoSessionStopRequest{
+		SessionID: "session-1",
+		DedupeKey: "stop-1",
+		Reason:    "returned home",
+	})
+	if err != nil {
+		t.Fatalf("StopHomeAutoSession returned error: %v", err)
+	}
+	if result.SessionID != "session-1" {
+		t.Fatalf("unexpected session ID: %q", result.SessionID)
+	}
+	if result.Status != "stopped" {
+		t.Fatalf("unexpected status: %q", result.Status)
+	}
+	if result.StoppedAt.IsZero() {
+		t.Fatal("expected stopped_at to be parsed")
+	}
+}

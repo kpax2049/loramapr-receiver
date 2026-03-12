@@ -1,6 +1,7 @@
 package diagnostics
 
 import (
+	"fmt"
 	"net"
 	"net/url"
 	"runtime"
@@ -96,6 +97,19 @@ type SupportSnapshot struct {
 		LastCheckedAt      *time.Time `json:"last_checked_at,omitempty"`
 		ConfiguredMin      string     `json:"configured_min_supported_version,omitempty"`
 	} `json:"update"`
+	HomeAutoSession struct {
+		Enabled            bool       `json:"enabled"`
+		Mode               string     `json:"mode,omitempty"`
+		State              string     `json:"state,omitempty"`
+		Summary            string     `json:"summary,omitempty"`
+		HomeSummary        string     `json:"home_summary,omitempty"`
+		TrackedNodeIDs     []string   `json:"tracked_node_ids,omitempty"`
+		ActiveSessionID    string     `json:"active_session_id,omitempty"`
+		ActiveTriggerNode  string     `json:"active_trigger_node_id,omitempty"`
+		LastDecisionReason string     `json:"last_decision_reason,omitempty"`
+		LastError          string     `json:"last_error,omitempty"`
+		LastDecisionAt     *time.Time `json:"last_decision_at,omitempty"`
+	} `json:"home_auto_session"`
 	Operations struct {
 		Overall string             `json:"overall"`
 		Summary string             `json:"summary"`
@@ -244,6 +258,16 @@ func CollectSupportSnapshot(cfg config.Config, data state.Data, finding Finding,
 	out.Update.RecommendedVersion = strings.TrimSpace(data.Update.RecommendedVersion)
 	out.Update.LastCheckedAt = cloneTimePtr(data.Update.LastCheckedAt)
 	out.Update.ConfiguredMin = strings.TrimSpace(cfg.Update.MinSupportedVersion)
+	out.HomeAutoSession.Enabled = cfg.HomeAutoSession.Enabled
+	out.HomeAutoSession.Mode = strings.TrimSpace(string(cfg.HomeAutoSession.Mode))
+	out.HomeAutoSession.HomeSummary = formatHomeSummary(cfg.HomeAutoSession.Home)
+	out.HomeAutoSession.TrackedNodeIDs = append([]string(nil), cfg.HomeAutoSession.TrackedNodeIDs...)
+	out.HomeAutoSession.State = strings.TrimSpace(data.HomeAutoSession.ModuleState)
+	out.HomeAutoSession.ActiveSessionID = strings.TrimSpace(data.HomeAutoSession.ActiveSessionID)
+	out.HomeAutoSession.ActiveTriggerNode = strings.TrimSpace(data.HomeAutoSession.ActiveTriggerNode)
+	out.HomeAutoSession.LastDecisionReason = strings.TrimSpace(data.HomeAutoSession.LastDecisionReason)
+	out.HomeAutoSession.LastError = strings.TrimSpace(data.HomeAutoSession.LastError)
+	out.HomeAutoSession.LastDecisionAt = cloneTimePtr(data.HomeAutoSession.LastDecisionAt)
 
 	opsInput := OperationalInput{
 		Now:                 now,
@@ -287,6 +311,34 @@ func CollectSupportSnapshot(cfg config.Config, data state.Data, finding Finding,
 		if value := strings.TrimSpace(localProbe.Snapshot.CloudGroupLabel); value != "" {
 			out.Identity.CloudGroupName = value
 		}
+		out.HomeAutoSession.Enabled = localProbe.Snapshot.HomeAutoSession.Enabled
+		if value := strings.TrimSpace(localProbe.Snapshot.HomeAutoSession.Mode); value != "" {
+			out.HomeAutoSession.Mode = value
+		}
+		if value := strings.TrimSpace(localProbe.Snapshot.HomeAutoSession.State); value != "" {
+			out.HomeAutoSession.State = value
+		}
+		if value := strings.TrimSpace(localProbe.Snapshot.HomeAutoSession.Summary); value != "" {
+			out.HomeAutoSession.Summary = value
+		}
+		if value := strings.TrimSpace(localProbe.Snapshot.HomeAutoSession.HomeSummary); value != "" {
+			out.HomeAutoSession.HomeSummary = value
+		}
+		if len(localProbe.Snapshot.HomeAutoSession.TrackedNodeIDs) > 0 {
+			out.HomeAutoSession.TrackedNodeIDs = append([]string(nil), localProbe.Snapshot.HomeAutoSession.TrackedNodeIDs...)
+		}
+		if value := strings.TrimSpace(localProbe.Snapshot.HomeAutoSession.ActiveSessionID); value != "" {
+			out.HomeAutoSession.ActiveSessionID = value
+		}
+		if value := strings.TrimSpace(localProbe.Snapshot.HomeAutoSession.ActiveTriggerNode); value != "" {
+			out.HomeAutoSession.ActiveTriggerNode = value
+		}
+		if value := strings.TrimSpace(localProbe.Snapshot.HomeAutoSession.LastDecisionReason); value != "" {
+			out.HomeAutoSession.LastDecisionReason = value
+		}
+		if value := strings.TrimSpace(localProbe.Snapshot.HomeAutoSession.LastError); value != "" {
+			out.HomeAutoSession.LastError = value
+		}
 	}
 	ops := EvaluateOperational(opsInput)
 	out.Operations.Overall = ops.Overall
@@ -313,6 +365,21 @@ func CollectSupportSnapshot(cfg config.Config, data state.Data, finding Finding,
 	}
 
 	return out
+}
+
+func formatHomeSummary(home config.HomeGeofenceConfig) string {
+	if home.RadiusM <= 0 {
+		return "home geofence not configured"
+	}
+	return strings.TrimSpace(strings.Join([]string{
+		trimFloat(home.Lat),
+		trimFloat(home.Lon),
+		"radius_m=" + trimFloat(home.RadiusM),
+	}, " "))
+}
+
+func trimFloat(value float64) string {
+	return strings.TrimRight(strings.TrimRight(fmt.Sprintf("%.5f", value), "0"), ".")
 }
 
 func ProbeCloudReachability(baseURL string, timeout time.Duration) CloudProbe {

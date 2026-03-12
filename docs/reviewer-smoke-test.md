@@ -1,7 +1,7 @@
-# Reviewer Smoke Test Guide (v2.8.0 Multi-Receiver)
+# Reviewer Smoke Test Guide (v2.9.0 Embedded Home Auto Session)
 
 This guide verifies both supported install paths, portal/diagnostics behavior,
-and multi-receiver identity/coexistence guidance.
+multi-receiver identity/coexistence guidance, and Home Auto Session Milestone 1.
 
 ## 1. Build and Baseline Tests
 
@@ -108,3 +108,24 @@ validate on at least one paired receiver:
    - reset and re-pair next steps
 4. Verify paired-but-node-missing guidance includes multi-receiver attachment
    checks (node may be attached to another receiver).
+
+## 9. Home Auto Session Milestone 1
+
+Use [Embedded Home Auto Session](./home-auto-session.md):
+
+1. Open `/home-auto-session` and confirm module status section renders.
+2. Save config in `observe` mode with:
+   - home geofence lat/lon/radius
+   - tracked node list
+   - debounce/timeout values
+3. Verify status changes to `observe_ready` and shows plain-language state hint.
+4. Switch to `control` mode on a paired receiver with cloud credentials.
+5. Inject/observe tracked node outside transition and confirm:
+   - `start_pending` then `active`
+   - decision reason populated
+6. Inject return/inside transition (or wait idle timeout) and confirm:
+   - `stop_pending` then `control_ready`
+7. Verify diagnostics surfaces include Home Auto Session context:
+   - `doctor -json`
+   - `status`
+   - `support-snapshot`

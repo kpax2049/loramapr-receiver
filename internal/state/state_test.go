@@ -116,7 +116,7 @@ func TestOpenMigratesLegacyState(t *testing.T) {
 	}
 }
 
-func TestOpenMigratesSchemaV2ToV3(t *testing.T) {
+func TestOpenMigratesSchemaV2ToCurrent(t *testing.T) {
 	t.Parallel()
 
 	path := filepath.Join(t.TempDir(), "receiver-state.json")
@@ -145,5 +145,38 @@ func TestOpenMigratesSchemaV2ToV3(t *testing.T) {
 	}
 	if snapshot.Update.Status != "unknown" {
 		t.Fatalf("expected update status unknown, got %q", snapshot.Update.Status)
+	}
+	if snapshot.HomeAutoSession.ModuleState != "disabled" {
+		t.Fatalf("expected home_auto_session module_state disabled, got %q", snapshot.HomeAutoSession.ModuleState)
+	}
+}
+
+func TestOpenMigratesSchemaV3ToCurrent(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "receiver-state.json")
+	legacy := `{
+  "schema_version": 3,
+  "installation": {"id":"legacy-install","created_at":"2026-03-11T00:00:00Z","last_started_at":"2026-03-11T00:00:00Z"},
+  "pairing": {"phase":"steady_state"},
+  "cloud": {"endpoint_url":"https://api.example.com"},
+  "runtime": {"profile":"appliance-pi","mode":"service","install_type":"pi-appliance"},
+  "update": {"status":"unknown"},
+  "metadata": {}
+}`
+	if err := os.WriteFile(path, []byte(legacy), 0o600); err != nil {
+		t.Fatalf("write legacy state: %v", err)
+	}
+
+	store, err := Open(path)
+	if err != nil {
+		t.Fatalf("open migrated state: %v", err)
+	}
+	snapshot := store.Snapshot()
+	if snapshot.SchemaVersion != CurrentSchemaVersion {
+		t.Fatalf("expected schema version %d, got %d", CurrentSchemaVersion, snapshot.SchemaVersion)
+	}
+	if snapshot.HomeAutoSession.ModuleState != "disabled" {
+		t.Fatalf("expected home_auto_session module_state disabled, got %q", snapshot.HomeAutoSession.ModuleState)
 	}
 }
