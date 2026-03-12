@@ -115,6 +115,37 @@ func TestBuildInfo(t *testing.T) {
 	}
 }
 
+func TestIdentityHints(t *testing.T) {
+	t.Parallel()
+
+	model := New()
+	model.SetInstallationID("install-xyz")
+	model.SetIdentity("garage-pi-a1b2c3", "garage-pi", "rx-123", "Garage Receiver", "Home", "Outdoor")
+	snap := model.Snapshot()
+
+	if snap.InstallationID != "install-xyz" {
+		t.Fatalf("unexpected installation_id: %q", snap.InstallationID)
+	}
+	if snap.LocalName != "garage-pi-a1b2c3" {
+		t.Fatalf("unexpected local_name: %q", snap.LocalName)
+	}
+	if snap.Hostname != "garage-pi" {
+		t.Fatalf("unexpected hostname: %q", snap.Hostname)
+	}
+	if snap.CloudReceiverID != "rx-123" {
+		t.Fatalf("unexpected cloud_receiver_id: %q", snap.CloudReceiverID)
+	}
+	if snap.CloudReceiverLabel != "Garage Receiver" {
+		t.Fatalf("unexpected cloud_receiver_label: %q", snap.CloudReceiverLabel)
+	}
+	if snap.CloudSiteLabel != "Home" {
+		t.Fatalf("unexpected cloud_site_label: %q", snap.CloudSiteLabel)
+	}
+	if snap.CloudGroupLabel != "Outdoor" {
+		t.Fatalf("unexpected cloud_group_label: %q", snap.CloudGroupLabel)
+	}
+}
+
 func TestUpdateStatus(t *testing.T) {
 	t.Parallel()
 

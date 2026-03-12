@@ -150,6 +150,9 @@ func (m *Manager) ApplyLifecycleChange(change LifecycleChange, detail string, cl
 		if clearDurable {
 			data.Cloud.OwnerID = ""
 			data.Cloud.ReceiverID = ""
+			data.Cloud.ReceiverLabel = ""
+			data.Cloud.SiteLabel = ""
+			data.Cloud.GroupLabel = ""
 			data.Cloud.IngestAPIKeyID = ""
 			data.Cloud.IngestAPIKey = ""
 			data.Cloud.CredentialRef = ""
@@ -231,6 +234,15 @@ func (m *Manager) exchangeBootstrap(ctx context.Context, snapshot state.Data) er
 		if value := strings.TrimSpace(response.ConfigVersion); value != "" {
 			data.Cloud.ConfigVersion = value
 		}
+		if value := strings.TrimSpace(response.ReceiverLabel); value != "" {
+			data.Cloud.ReceiverLabel = value
+		}
+		if value := strings.TrimSpace(response.SiteLabel); value != "" {
+			data.Cloud.SiteLabel = value
+		}
+		if value := strings.TrimSpace(response.GroupLabel); value != "" {
+			data.Cloud.GroupLabel = value
+		}
 		data.Cloud.ActivateEndpoint = response.ActivateEndpoint
 		data.Cloud.HeartbeatEndpoint = response.HeartbeatEndpoint
 		data.Cloud.IngestEndpoint = response.IngestEndpoint
@@ -296,6 +308,15 @@ func (m *Manager) activate(ctx context.Context, snapshot state.Data) error {
 		data.Pairing.LastChange = "activated"
 		data.Cloud.OwnerID = response.OwnerID
 		data.Cloud.ReceiverID = response.ReceiverAgentID
+		if value := strings.TrimSpace(response.ReceiverLabel); value != "" {
+			data.Cloud.ReceiverLabel = value
+		}
+		if value := strings.TrimSpace(response.SiteLabel); value != "" {
+			data.Cloud.SiteLabel = value
+		}
+		if value := strings.TrimSpace(response.GroupLabel); value != "" {
+			data.Cloud.GroupLabel = value
+		}
 		data.Cloud.IngestAPIKeyID = response.IngestAPIKeyID
 		data.Cloud.IngestAPIKey = response.IngestAPIKey
 		if value := strings.TrimSpace(response.ConfigVersion); value != "" {

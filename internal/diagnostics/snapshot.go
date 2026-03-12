@@ -28,7 +28,16 @@ type DeviceProbe struct {
 
 type SupportSnapshot struct {
 	GeneratedAt time.Time `json:"generated_at"`
-	Runtime     struct {
+	Identity    struct {
+		InstallationID    string `json:"installation_id,omitempty"`
+		LocalName         string `json:"local_name,omitempty"`
+		Hostname          string `json:"hostname,omitempty"`
+		CloudReceiverID   string `json:"cloud_receiver_id,omitempty"`
+		CloudReceiverName string `json:"cloud_receiver_name,omitempty"`
+		CloudSiteName     string `json:"cloud_site_name,omitempty"`
+		CloudGroupName    string `json:"cloud_group_name,omitempty"`
+	} `json:"identity"`
+	Runtime struct {
 		Version     string `json:"version"`
 		Channel     string `json:"channel"`
 		Commit      string `json:"commit,omitempty"`
@@ -179,6 +188,13 @@ func CollectSupportSnapshot(cfg config.Config, data state.Data, finding Finding,
 	out.Runtime.InstallType = inferInstallType(data.Runtime.InstallType, cfg.Runtime.Profile)
 	out.Runtime.Mode = strings.TrimSpace(data.Runtime.Mode)
 	out.Runtime.ConfigPath = opts.ConfigPath
+	out.Identity.InstallationID = strings.TrimSpace(data.Installation.ID)
+	out.Identity.LocalName = strings.TrimSpace(data.Installation.LocalName)
+	out.Identity.Hostname = strings.TrimSpace(data.Installation.Hostname)
+	out.Identity.CloudReceiverID = strings.TrimSpace(data.Cloud.ReceiverID)
+	out.Identity.CloudReceiverName = strings.TrimSpace(data.Cloud.ReceiverLabel)
+	out.Identity.CloudSiteName = strings.TrimSpace(data.Cloud.SiteLabel)
+	out.Identity.CloudGroupName = strings.TrimSpace(data.Cloud.GroupLabel)
 
 	out.Config.SchemaVersion = cfg.SchemaVersion
 	out.Config.StateSchema = data.SchemaVersion
@@ -250,6 +266,27 @@ func CollectSupportSnapshot(cfg config.Config, data state.Data, finding Finding,
 		opsInput.LastPacketAck = cloneTimePtr(localProbe.Snapshot.LastPacketAck)
 		opsInput.LastPacketQueued = cloneTimePtr(localProbe.Snapshot.LastPacketQueued)
 		opsInput.UpdateStatus = strings.TrimSpace(localProbe.Snapshot.UpdateStatus)
+		if value := strings.TrimSpace(localProbe.Snapshot.InstallationID); value != "" {
+			out.Identity.InstallationID = value
+		}
+		if value := strings.TrimSpace(localProbe.Snapshot.LocalName); value != "" {
+			out.Identity.LocalName = value
+		}
+		if value := strings.TrimSpace(localProbe.Snapshot.Hostname); value != "" {
+			out.Identity.Hostname = value
+		}
+		if value := strings.TrimSpace(localProbe.Snapshot.CloudReceiverID); value != "" {
+			out.Identity.CloudReceiverID = value
+		}
+		if value := strings.TrimSpace(localProbe.Snapshot.CloudReceiverLabel); value != "" {
+			out.Identity.CloudReceiverName = value
+		}
+		if value := strings.TrimSpace(localProbe.Snapshot.CloudSiteLabel); value != "" {
+			out.Identity.CloudSiteName = value
+		}
+		if value := strings.TrimSpace(localProbe.Snapshot.CloudGroupLabel); value != "" {
+			out.Identity.CloudGroupName = value
+		}
 	}
 	ops := EvaluateOperational(opsInput)
 	out.Operations.Overall = ops.Overall

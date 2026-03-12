@@ -269,6 +269,34 @@ func TestProgressPageShowsAttentionFields(t *testing.T) {
 	}
 }
 
+func TestProgressPageShowsReceiverIdentityContext(t *testing.T) {
+	t.Parallel()
+
+	snap := sampleSnapshot()
+	snap.LocalName = "garage-pi-a1b2c3"
+	snap.Hostname = "garage-pi"
+	snap.CloudReceiverID = "rx-123"
+	snap.CloudReceiverLabel = "Garage Receiver"
+	snap.CloudSiteLabel = "Home"
+	snap.CloudGroupLabel = "Outdoor"
+
+	srv := New("127.0.0.1:0", staticStatusProvider{snapshot: snap}, &recordingPairingSubmitter{}, nil)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/progress", nil)
+	srv.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "garage-pi-a1b2c3") {
+		t.Fatalf("expected local receiver name in progress page")
+	}
+	if !strings.Contains(body, "Garage Receiver") {
+		t.Fatalf("expected cloud receiver label in progress page")
+	}
+}
+
 func TestAdvancedPage(t *testing.T) {
 	t.Parallel()
 
@@ -336,6 +364,28 @@ func TestTroubleshootingLifecycleResetHint(t *testing.T) {
 	}
 }
 
+func TestTroubleshootingShowsMultiReceiverReplacementHint(t *testing.T) {
+	t.Parallel()
+
+	snap := sampleSnapshot()
+	snap.FailureCode = "receiver_replaced"
+	snap.FailureSummary = "Receiver was replaced by another installation"
+	snap.CloudReceiverLabel = "Backyard Receiver"
+
+	srv := New("127.0.0.1:0", staticStatusProvider{snapshot: snap}, &recordingPairingSubmitter{}, nil)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/troubleshooting", nil)
+	srv.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "superseded by another receiver") {
+		t.Fatalf("expected multi-receiver replacement guidance")
+	}
+}
+
 func TestTroubleshootingUnsupportedVersionHint(t *testing.T) {
 	t.Parallel()
 
@@ -396,6 +446,8 @@ func sampleSnapshot() status.Snapshot {
 	now := time.Date(2026, 3, 10, 20, 0, 0, 0, time.UTC)
 	return status.Snapshot{
 		InstallationID: "install-1",
+		LocalName:      "receiver-install-1",
+		Hostname:       "receiver-host",
 		Mode:           "setup",
 		RuntimeProfile: "local-dev",
 		Lifecycle:      status.LifecycleRunning,

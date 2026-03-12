@@ -33,6 +33,11 @@ Capture:
 
 - portal `/progress` screenshot
 - portal `/troubleshooting` screenshot
+- identity hints:
+  - `installation_id`
+  - `local_name`
+  - `cloud_receiver_label`
+  - `cloud_site_label` / `cloud_group_label` (if present)
 - attention fields:
   - `attention_state`
   - `attention_code`
@@ -66,7 +71,8 @@ Actions:
 
 1. Check USB cable/power to Meshtastic device.
 2. Confirm serial device permissions/path.
-3. Refresh portal Progress for node state update.
+3. In multi-receiver setups, verify the node is attached to this receiver, not a different one.
+4. Refresh portal Progress for node state update.
 
 ### Paired but Not Forwarding
 
@@ -100,6 +106,9 @@ loramapr-receiverd reset-pairing -config /etc/loramapr/receiver.json
 ```
 
 3. Submit fresh pairing code.
+
+If replacement was intentional, confirm local identity labels (receiver/site/group)
+match expected cloud assignment after re-pair.
 
 ### Outdated or Unsupported Version
 

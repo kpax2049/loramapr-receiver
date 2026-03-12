@@ -13,6 +13,7 @@
 - [Service and Install Model](./service-install.md)
 - [Debian Package Lifecycle Behavior](./linux-package-lifecycle.md)
 - [Pairing and Bootstrap Lifecycle](./pairing-lifecycle.md)
+- [Multi-Receiver Identity and Guidance](./multi-receiver-identity.md)
 - [Receiver Lifecycle Management](./receiver-lifecycle.md)
 - [Steady-State Cloud Loop](./steady-state.md)
 - [Diagnostics and Failure/Attention Taxonomy](./diagnostics.md)
@@ -23,6 +24,7 @@
 - [Release Artifact Mapping](./release-artifacts.md)
 - [Publish Guide](./publish-guide.md)
 - [Release Notes Index](./release-notes.md)
+- [Release Notes v2.8.0](./release-notes-v2.8.0.md)
 - [Release Notes v2.7.0](./release-notes-v2.7.0.md)
 - [Release Notes v2.6.0](./release-notes-v2.6.0.md)
 - [Release Notes v2.5.0](./release-notes-v2.5.0.md)
@@ -35,6 +37,7 @@
 ## Architecture and Milestone Specs
 
 - [ADR 0001: Standalone Runtime](./adr/0001-standalone-receiver-runtime.md)
+- [v2.8.0 Plan: Multi-Receiver / Household / Team Operations](./ga-v2.8.0-multi-receiver-household-team.md)
 - [v2.7.0 Plan: Public Launch Hardening](./ga-v2.7.0-public-launch-hardening.md)
 - [v2.6.0 Plan: Operational Automation and Notifications](./ga-v2.6.0-operational-automation-notifications.md)
 - [v2.5.0 Plan: Support and Operations Maturity](./ga-v2.5.0-support-operations-maturity.md)

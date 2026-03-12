@@ -99,9 +99,19 @@ func New(cfg config.Config, logger *slog.Logger) (*Service, error) {
 	mode := resolveMode(cfg.Service.Mode, current.Pairing.Phase)
 	profile := resolveRuntimeProfile(cfg.Runtime.Profile, cfg.Paths.StateFile)
 	installType := installTypeFromProfile(profile)
+	hostName := runtimeHostName()
+	localName := resolveLocalNameHint(
+		cfg.Runtime.LocalName,
+		current.Installation.LocalName,
+		hostName,
+		installType,
+		current.Installation.ID,
+	)
 
 	if err := store.Update(func(data *state.Data) {
 		data.Installation.LastStartedAt = time.Now().UTC()
+		data.Installation.LocalName = localName
+		data.Installation.Hostname = hostName
 		data.Cloud.EndpointURL = cfg.Cloud.BaseURL
 		data.Runtime.Profile = profile
 		data.Runtime.Mode = string(mode)
@@ -113,6 +123,14 @@ func New(cfg config.Config, logger *slog.Logger) (*Service, error) {
 	current = store.Snapshot()
 	statusModel := status.New()
 	statusModel.SetInstallationID(current.Installation.ID)
+	statusModel.SetIdentity(
+		current.Installation.LocalName,
+		current.Installation.Hostname,
+		current.Cloud.ReceiverID,
+		current.Cloud.ReceiverLabel,
+		current.Cloud.SiteLabel,
+		current.Cloud.GroupLabel,
+	)
 	build := buildinfo.Current()
 	statusModel.SetBuildInfo(
 		build.Version,
@@ -178,6 +196,7 @@ func New(cfg config.Config, logger *slog.Logger) (*Service, error) {
 			cloud,
 			logger,
 			pairing.ActivationIdentity{
+				Label:          current.Installation.LocalName,
 				RuntimeVersion: build.Version,
 				Metadata: map[string]any{
 					"releaseChannel": build.Channel,
@@ -185,6 +204,9 @@ func New(cfg config.Config, logger *slog.Logger) (*Service, error) {
 					"buildDate":      build.BuildDate,
 					"buildID":        build.BuildID,
 					"installType":    installType,
+					"localName":      current.Installation.LocalName,
+					"hostname":       current.Installation.Hostname,
+					"installationId": current.Installation.ID,
 				},
 			},
 		),
@@ -300,6 +322,14 @@ func (s *Service) tick(ctx context.Context) {
 	snap := c.State.Snapshot()
 	meshSnap := c.Meshtastic.Snapshot()
 
+	c.Status.SetIdentity(
+		snap.Installation.LocalName,
+		snap.Installation.Hostname,
+		snap.Cloud.ReceiverID,
+		snap.Cloud.ReceiverLabel,
+		snap.Cloud.SiteLabel,
+		snap.Cloud.GroupLabel,
+	)
 	c.Status.SetPairingPhase(string(snap.Pairing.Phase))
 	c.Status.SetCloud(c.Config.Cloud.BaseURL, pairingCloudStatus(snap.Pairing))
 	c.Status.SetComponent("meshtastic", string(meshSnap.State), meshtasticStatusMessage(meshSnap))
@@ -515,6 +545,13 @@ func (s *Service) sendHeartbeat(ctx context.Context, snapshot state.Data, meshSn
 		LocalNodeID:     meshSnap.LocalNodeID,
 		ObservedNodeIDs: append([]string(nil), meshSnap.ObservedNodeIDs...),
 		Status: map[string]any{
+			"installationId":      snapshot.Installation.ID,
+			"localName":           snapshot.Installation.LocalName,
+			"hostname":            snapshot.Installation.Hostname,
+			"receiverId":          snapshot.Cloud.ReceiverID,
+			"receiverLabel":       snapshot.Cloud.ReceiverLabel,
+			"siteLabel":           snapshot.Cloud.SiteLabel,
+			"groupLabel":          snapshot.Cloud.GroupLabel,
 			"pairingPhase":        snapshot.Pairing.Phase,
 			"serviceMode":         s.mode,
 			"meshtasticState":     meshSnap.State,
@@ -554,13 +591,67 @@ func (s *Service) sendHeartbeat(ctx context.Context, snapshot state.Data, meshSn
 
 	ackAt := ack.LastHeartbeatAt.UTC()
 	s.steady.lastHeartbeatAck = &ackAt
-	if configVersion := strings.TrimSpace(ack.ConfigVersion); configVersion != "" && configVersion != strings.TrimSpace(snapshot.Cloud.ConfigVersion) {
-		if err := s.container.State.Update(func(data *state.Data) {
-			data.Cloud.ConfigVersion = configVersion
-		}); err != nil {
-			s.container.Logger.Warn("persist cloud config version failed", "err", err)
+	if s.container.State != nil {
+		if configVersion := strings.TrimSpace(ack.ConfigVersion); configVersion != "" && configVersion != strings.TrimSpace(snapshot.Cloud.ConfigVersion) {
+			if err := s.container.State.Update(func(data *state.Data) {
+				data.Cloud.ConfigVersion = configVersion
+				if value := strings.TrimSpace(ack.ReceiverAgentID); value != "" {
+					data.Cloud.ReceiverID = value
+				}
+				if value := strings.TrimSpace(ack.OwnerID); value != "" {
+					data.Cloud.OwnerID = value
+				}
+				if value := strings.TrimSpace(ack.ReceiverLabel); value != "" {
+					data.Cloud.ReceiverLabel = value
+				}
+				if value := strings.TrimSpace(ack.SiteLabel); value != "" {
+					data.Cloud.SiteLabel = value
+				}
+				if value := strings.TrimSpace(ack.GroupLabel); value != "" {
+					data.Cloud.GroupLabel = value
+				}
+				data.Cloud.UpdatedAt = time.Now().UTC()
+			}); err != nil {
+				s.container.Logger.Warn("persist cloud heartbeat identity/config failed", "err", err)
+			}
+		}
+		if strings.TrimSpace(ack.ConfigVersion) == strings.TrimSpace(snapshot.Cloud.ConfigVersion) &&
+			(strings.TrimSpace(ack.ReceiverAgentID) != "" || strings.TrimSpace(ack.ReceiverLabel) != "" ||
+				strings.TrimSpace(ack.SiteLabel) != "" || strings.TrimSpace(ack.GroupLabel) != "") {
+			if err := s.container.State.Update(func(data *state.Data) {
+				if value := strings.TrimSpace(ack.ReceiverAgentID); value != "" {
+					data.Cloud.ReceiverID = value
+				}
+				if value := strings.TrimSpace(ack.OwnerID); value != "" {
+					data.Cloud.OwnerID = value
+				}
+				if value := strings.TrimSpace(ack.ReceiverLabel); value != "" {
+					data.Cloud.ReceiverLabel = value
+				}
+				if value := strings.TrimSpace(ack.SiteLabel); value != "" {
+					data.Cloud.SiteLabel = value
+				}
+				if value := strings.TrimSpace(ack.GroupLabel); value != "" {
+					data.Cloud.GroupLabel = value
+				}
+				data.Cloud.UpdatedAt = time.Now().UTC()
+			}); err != nil {
+				s.container.Logger.Warn("persist cloud heartbeat identity failed", "err", err)
+			}
 		}
 	}
+	latest := snapshot
+	if s.container.State != nil {
+		latest = s.container.State.Snapshot()
+	}
+	s.container.Status.SetIdentity(
+		latest.Installation.LocalName,
+		latest.Installation.Hostname,
+		latest.Cloud.ReceiverID,
+		latest.Cloud.ReceiverLabel,
+		latest.Cloud.SiteLabel,
+		latest.Cloud.GroupLabel,
+	)
 	s.steady.cloudReachable = true
 	return nil
 }

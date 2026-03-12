@@ -99,6 +99,37 @@ func TestResolveRuntimeProfile(t *testing.T) {
 	}
 }
 
+func TestNewPersistsIdentityHints(t *testing.T) {
+	t.Parallel()
+
+	cfg := config.Default()
+	cfg.Paths.StateFile = filepath.Join(t.TempDir(), "receiver-state.json")
+	cfg.Runtime.Profile = "linux-service"
+	cfg.Runtime.LocalName = "Kitchen Receiver"
+	cfg.Service.Mode = config.ModeSetup
+
+	svc, err := New(cfg, slog.Default())
+	if err != nil {
+		t.Fatalf("runtime.New failed: %v", err)
+	}
+
+	snap := svc.StateStore().Snapshot()
+	if snap.Installation.LocalName != "Kitchen Receiver" {
+		t.Fatalf("expected persisted local name hint, got %q", snap.Installation.LocalName)
+	}
+	if snap.Installation.Hostname == "" {
+		t.Fatal("expected hostname hint to be persisted")
+	}
+
+	statusSnap := svc.CurrentStatus()
+	if statusSnap.LocalName != "Kitchen Receiver" {
+		t.Fatalf("expected status local_name, got %q", statusSnap.LocalName)
+	}
+	if statusSnap.InstallType != "linux-package" {
+		t.Fatalf("expected install_type linux-package, got %q", statusSnap.InstallType)
+	}
+}
+
 type mockCloudClient struct {
 	postErr      error
 	postCalls    int
@@ -273,11 +304,21 @@ func TestSendHeartbeatPayloadShaping(t *testing.T) {
 	}
 
 	err := svc.sendHeartbeat(context.Background(), state.Data{
+		Installation: state.InstallationState{
+			ID:        "install-123",
+			LocalName: "garage-pi-abc123",
+			Hostname:  "garage-pi",
+		},
 		Pairing: state.PairingState{Phase: state.PairingSteadyState},
 		Cloud: state.CloudState{
 			HeartbeatEndpoint: "/api/receiver/heartbeat",
 			IngestAPIKey:      "secret",
+			ReceiverID:        "rx-123",
+			ReceiverLabel:     "Garage Receiver",
+			SiteLabel:         "Home",
+			GroupLabel:        "Outdoor",
 		},
+		Runtime: state.RuntimeState{InstallType: "pi-appliance"},
 	}, meshtastic.Snapshot{
 		State:           meshtastic.StateConnected,
 		LocalNodeID:     "!home",
@@ -315,6 +356,12 @@ func TestSendHeartbeatPayloadShaping(t *testing.T) {
 	}
 	if _, ok := mockCloud.lastHeartbeat.Status["operationalStatus"]; !ok {
 		t.Fatalf("expected operationalStatus in heartbeat status payload")
+	}
+	if got := mockCloud.lastHeartbeat.Status["localName"]; got != "garage-pi-abc123" {
+		t.Fatalf("expected localName in heartbeat payload, got %#v", got)
+	}
+	if got := mockCloud.lastHeartbeat.Status["receiverLabel"]; got != "Garage Receiver" {
+		t.Fatalf("expected receiverLabel in heartbeat payload, got %#v", got)
 	}
 }
 

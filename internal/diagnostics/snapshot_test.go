@@ -17,12 +17,19 @@ func TestSupportSnapshotRedactsSecrets(t *testing.T) {
 	cfg.Cloud.BaseURL = "https://api.example.com"
 	cfg.Meshtastic.Device = "/dev/ttyUSB0"
 	data := state.Data{}
+	data.Installation.ID = "install-abc123"
+	data.Installation.LocalName = "garage-pi-a1b2c3"
+	data.Installation.Hostname = "garage-pi"
 	data.Pairing.Phase = state.PairingBootstrapExchanged
 	data.Pairing.PairingCode = "LMR-SECRET"
 	data.Pairing.ActivationToken = "act-secret"
 	data.Pairing.LastError = "bootstrap exchange failed"
 	data.Cloud.IngestAPIKey = "ingest-secret"
 	data.Cloud.EndpointURL = "https://api.example.com"
+	data.Cloud.ReceiverID = "rx-123"
+	data.Cloud.ReceiverLabel = "Garage Receiver"
+	data.Cloud.SiteLabel = "Home"
+	data.Cloud.GroupLabel = "Outdoor"
 
 	snapshot := CollectSupportSnapshot(cfg, data, Finding{Code: FailureActivationFailed}, CollectOptions{
 		Now: func() time.Time { return now },
@@ -72,6 +79,18 @@ func TestSupportSnapshotRedactsSecrets(t *testing.T) {
 	assertContains("cloud.credential_ref")
 	if snapshot.Config.StatePath == "" || snapshot.Config.SchemaVersion == 0 {
 		t.Fatal("expected config/state markers in support snapshot")
+	}
+	if snapshot.Identity.InstallationID != "install-abc123" {
+		t.Fatalf("expected installation identity in support snapshot, got %q", snapshot.Identity.InstallationID)
+	}
+	if snapshot.Identity.LocalName != "garage-pi-a1b2c3" {
+		t.Fatalf("expected local name in support snapshot, got %q", snapshot.Identity.LocalName)
+	}
+	if snapshot.Identity.CloudReceiverID != "rx-123" {
+		t.Fatalf("expected cloud receiver id in support snapshot, got %q", snapshot.Identity.CloudReceiverID)
+	}
+	if snapshot.Identity.CloudReceiverName != "Garage Receiver" {
+		t.Fatalf("expected cloud receiver name in support snapshot, got %q", snapshot.Identity.CloudReceiverName)
 	}
 	if len(snapshot.Operations.Checks) == 0 {
 		t.Fatal("expected operational checks in support snapshot")

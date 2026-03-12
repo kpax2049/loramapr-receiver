@@ -242,6 +242,13 @@ func doctorCommand(args []string) {
 		"state_path":            cfg.Paths.StateFile,
 		"config_schema_version": cfg.SchemaVersion,
 		"state_schema_version":  snapshot.SchemaVersion,
+		"installation_id":       snapshot.Installation.ID,
+		"local_name":            snapshot.Installation.LocalName,
+		"hostname":              snapshot.Installation.Hostname,
+		"cloud_receiver_id":     snapshot.Cloud.ReceiverID,
+		"cloud_receiver_label":  snapshot.Cloud.ReceiverLabel,
+		"cloud_site_label":      snapshot.Cloud.SiteLabel,
+		"cloud_group_label":     snapshot.Cloud.GroupLabel,
 		"pairing_phase":         snapshot.Pairing.Phase,
 		"pairing_last_change":   snapshot.Pairing.LastChange,
 		"pairing_authorized":    pairingAuthorized(snapshot),
@@ -297,6 +304,21 @@ func doctorCommand(args []string) {
 		installType(snapshot.Runtime.InstallType, cfg.Runtime.Profile),
 	)
 	fmt.Printf("[INFO] config/state schema: config=%d state=%d\n", cfg.SchemaVersion, snapshot.SchemaVersion)
+	fmt.Printf(
+		"[INFO] identity: installation_id=%s local_name=%s hostname=%s cloud_receiver_id=%s cloud_receiver_label=%s\n",
+		emptyFallback(snapshot.Installation.ID, "unknown"),
+		emptyFallback(snapshot.Installation.LocalName, "unknown"),
+		emptyFallback(snapshot.Installation.Hostname, "unknown"),
+		emptyFallback(snapshot.Cloud.ReceiverID, "unknown"),
+		emptyFallback(snapshot.Cloud.ReceiverLabel, "unknown"),
+	)
+	if strings.TrimSpace(snapshot.Cloud.SiteLabel) != "" || strings.TrimSpace(snapshot.Cloud.GroupLabel) != "" {
+		fmt.Printf(
+			"[INFO] grouping hints: site=%s group=%s\n",
+			emptyFallback(snapshot.Cloud.SiteLabel, "n/a"),
+			emptyFallback(snapshot.Cloud.GroupLabel, "n/a"),
+		)
+	}
 	fmt.Printf("[INFO] cloud probe: %s", cloudProbe.Status)
 	if cloudProbe.Detail != "" {
 		fmt.Printf(" (%s)", cloudProbe.Detail)
@@ -416,6 +438,12 @@ func statusCommand(args []string) {
 		"config_schema_version": cfg.SchemaVersion,
 		"state_schema_version":  snapshot.SchemaVersion,
 		"installation_id":       snapshot.Installation.ID,
+		"local_name":            snapshot.Installation.LocalName,
+		"hostname":              snapshot.Installation.Hostname,
+		"cloud_receiver_id":     snapshot.Cloud.ReceiverID,
+		"cloud_receiver_label":  snapshot.Cloud.ReceiverLabel,
+		"cloud_site_label":      snapshot.Cloud.SiteLabel,
+		"cloud_group_label":     snapshot.Cloud.GroupLabel,
 		"pairing_phase":         snapshot.Pairing.Phase,
 		"pairing_authorized":    pairingAuthorized(snapshot),
 		"cloud_endpoint":        cfg.Cloud.BaseURL,
@@ -660,6 +688,12 @@ func printDoctorLoadFailure(jsonOutput bool, configPath string, statePath string
 		"state_path":            statePath,
 		"config_schema_version": configSchema,
 		"state_schema_version":  stateSchema,
+		"local_name":            "",
+		"hostname":              "",
+		"cloud_receiver_id":     "",
+		"cloud_receiver_label":  "",
+		"cloud_site_label":      "",
+		"cloud_group_label":     "",
 		"failure_code":          diagnostics.FailureLocalSchemaIncompat,
 		"failure_summary":       "Local config or state schema is incompatible with this runtime",
 		"failure_hint":          upgradeCompatibilityHint(err),
@@ -690,6 +724,13 @@ func summarizeLocalProbeForOutput(probe diagnostics.LocalStatusProbe) map[string
 	out["ready_reason"] = probe.Snapshot.ReadyReason
 	out["pairing_phase"] = probe.Snapshot.PairingPhase
 	out["cloud_reachable"] = probe.Snapshot.CloudReachable
+	out["installation_id"] = probe.Snapshot.InstallationID
+	out["local_name"] = probe.Snapshot.LocalName
+	out["hostname"] = probe.Snapshot.Hostname
+	out["cloud_receiver_id"] = probe.Snapshot.CloudReceiverID
+	out["cloud_receiver_label"] = probe.Snapshot.CloudReceiverLabel
+	out["cloud_site_label"] = probe.Snapshot.CloudSiteLabel
+	out["cloud_group_label"] = probe.Snapshot.CloudGroupLabel
 	out["update_status"] = probe.Snapshot.UpdateStatus
 	out["ingest_queue_depth"] = probe.Snapshot.IngestQueueDepth
 	out["last_packet_ack"] = probe.Snapshot.LastPacketAck
@@ -922,4 +963,12 @@ func installType(stateInstallType string, profile string) string {
 	default:
 		return "manual"
 	}
+}
+
+func emptyFallback(value, fallback string) string {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return fallback
+	}
+	return trimmed
 }

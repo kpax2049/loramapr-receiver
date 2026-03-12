@@ -3,6 +3,13 @@
   <h2>Advanced Details</h2>
   <p class="muted">Use this page for support/debug metadata. Most setup tasks are handled in Pairing, Progress, and Troubleshooting.</p>
   <table>
+    <tr><th>Installation ID</th><td class="mono">{{if .Snapshot.InstallationID}}{{.Snapshot.InstallationID}}{{else}}unknown{{end}}</td></tr>
+    <tr><th>Local Receiver Name</th><td>{{if .Snapshot.LocalName}}{{.Snapshot.LocalName}}{{else}}unnamed{{end}}</td></tr>
+    <tr><th>Hostname</th><td class="mono">{{if .Snapshot.Hostname}}{{.Snapshot.Hostname}}{{else}}unknown{{end}}</td></tr>
+    <tr><th>Cloud Receiver ID</th><td class="mono">{{if .Snapshot.CloudReceiverID}}{{.Snapshot.CloudReceiverID}}{{else}}not assigned{{end}}</td></tr>
+    <tr><th>Cloud Receiver Name</th><td>{{if .Snapshot.CloudReceiverLabel}}{{.Snapshot.CloudReceiverLabel}}{{else}}not assigned{{end}}</td></tr>
+    <tr><th>Cloud Site</th><td>{{if .Snapshot.CloudSiteLabel}}{{.Snapshot.CloudSiteLabel}}{{else}}not set{{end}}</td></tr>
+    <tr><th>Cloud Group</th><td>{{if .Snapshot.CloudGroupLabel}}{{.Snapshot.CloudGroupLabel}}{{else}}not set{{end}}</td></tr>
     <tr><th>Runtime Version</th><td class="mono">{{.RuntimeVersion}}</td></tr>
     <tr><th>Release Channel</th><td class="mono">{{.ReleaseChannel}}</td></tr>
     <tr><th>Build Commit</th><td class="mono">{{if .BuildCommit}}{{.BuildCommit}}{{else}}unknown{{end}}</td></tr>
@@ -18,7 +25,6 @@
     <tr><th>Manifest Channel</th><td class="mono">{{if .Snapshot.UpdateManifestChannel}}{{.Snapshot.UpdateManifestChannel}}{{else}}unknown{{end}}</td></tr>
     <tr><th>Last Update Check</th><td class="mono">{{if .Snapshot.UpdateCheckedAt}}{{.Snapshot.UpdateCheckedAt}}{{else}}never{{end}}</td></tr>
     <tr><th>Lifecycle</th><td>{{.Snapshot.Lifecycle}}</td></tr>
-    <tr><th>Installation ID</th><td class="mono">{{.Snapshot.InstallationID}}</td></tr>
   </table>
 </section>
 <section class="panel">

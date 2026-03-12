@@ -46,7 +46,8 @@ type ServiceConfig struct {
 }
 
 type RuntimeConfig struct {
-	Profile string `json:"profile"`
+	Profile   string `json:"profile"`
+	LocalName string `json:"local_name,omitempty"`
 }
 
 type PathsConfig struct {
@@ -209,6 +210,14 @@ func (c Config) Validate() error {
 	default:
 		return fmt.Errorf("invalid runtime.profile %q", c.Runtime.Profile)
 	}
+	if value := strings.TrimSpace(c.Runtime.LocalName); value != "" {
+		if len(value) > 80 {
+			return errors.New("runtime.local_name must be <= 80 characters")
+		}
+		if strings.ContainsAny(value, "\r\n\t") {
+			return errors.New("runtime.local_name must not contain control whitespace")
+		}
+	}
 
 	if strings.TrimSpace(c.Paths.StateFile) == "" {
 		return errors.New("paths.state_file is required")
@@ -289,6 +298,7 @@ func (c *Config) applyDefaults() {
 	if c.Runtime.Profile == "" {
 		c.Runtime.Profile = defaults.Runtime.Profile
 	}
+	c.Runtime.LocalName = strings.TrimSpace(c.Runtime.LocalName)
 	if c.Paths.StateFile == "" {
 		c.Paths.StateFile = defaults.Paths.StateFile
 	}

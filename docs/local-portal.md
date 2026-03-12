@@ -21,7 +21,14 @@ Bind address is configured by `portal.bind_address`.
 2. **Pairing**: enter pairing code from LoRaMapr Cloud
 3. **Progress**: confirm cloud reachability, node connection, and forwarding
 4. **Troubleshooting**: resolve common issues and run reset/re-pair when needed
-5. **Advanced**: build/install metadata for support and diagnostics
+5. **Advanced**: build/install/identity metadata for support and diagnostics
+
+Identity shown in portal includes:
+
+- local receiver name hint
+- hostname hint
+- cloud receiver label/id when available
+- cloud site/group labels when available
 
 ## Routes
 
@@ -64,6 +71,13 @@ Common causes you may see:
 - `events_not_forwarding`
 - `receiver_credential_revoked`
 - `receiver_version_unsupported`
+
+In multi-receiver environments, portal guidance also helps distinguish:
+
+- this receiver is an additional receiver
+- this receiver replaced another receiver
+- this receiver has been replaced/revoked/disabled
+- node is attached elsewhere and not currently seen by this receiver
 
 ## Security and Privacy
 

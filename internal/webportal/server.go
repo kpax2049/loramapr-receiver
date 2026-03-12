@@ -556,10 +556,16 @@ func nextAction(snap status.Snapshot) string {
 
 	switch strings.TrimSpace(snap.FailureCode) {
 	case "receiver_credential_revoked", "receiver_disabled", "receiver_replaced":
+		if strings.TrimSpace(snap.CloudReceiverLabel) != "" {
+			return "This receiver identity is no longer active (" + strings.TrimSpace(snap.CloudReceiverLabel) + "). Use reset/re-pair to relink."
+		}
 		return "Use reset/re-pair to relink this receiver with LoRaMapr Cloud."
 	}
 	switch snap.PairingPhase {
 	case "unpaired":
+		if strings.TrimSpace(snap.CloudReceiverID) == "" {
+			return "Open Pairing and submit a code from LoRaMapr Cloud. If this is an additional household/team receiver, it will appear as a separate receiver."
+		}
 		if isAppliance {
 			return "From another LAN device, open http://loramapr-receiver.local:8080 (or the Pi IP address) and enter your pairing code."
 		}
@@ -576,6 +582,27 @@ func nextAction(snap status.Snapshot) string {
 func troubleshootingHints(snap status.Snapshot) []string {
 	hints := []string{}
 	isAppliance := strings.EqualFold(strings.TrimSpace(snap.RuntimeProfile), "appliance-pi")
+	if strings.TrimSpace(snap.LocalName) != "" {
+		hints = append(hints, "Local receiver name: "+strings.TrimSpace(snap.LocalName))
+	}
+	if strings.TrimSpace(snap.CloudReceiverLabel) != "" || strings.TrimSpace(snap.CloudReceiverID) != "" {
+		receiver := strings.TrimSpace(snap.CloudReceiverLabel)
+		if receiver == "" {
+			receiver = strings.TrimSpace(snap.CloudReceiverID)
+		}
+		hints = append(hints, "Cloud receiver identity: "+receiver)
+	}
+	if strings.TrimSpace(snap.CloudSiteLabel) != "" || strings.TrimSpace(snap.CloudGroupLabel) != "" {
+		site := strings.TrimSpace(snap.CloudSiteLabel)
+		if site == "" {
+			site = "not set"
+		}
+		group := strings.TrimSpace(snap.CloudGroupLabel)
+		if group == "" {
+			group = "not set"
+		}
+		hints = append(hints, fmt.Sprintf("Cloud grouping context: site=%s group=%s", site, group))
+	}
 	attention := deriveAttentionFromSnapshot(snap)
 	if attention.State != diagnostics.AttentionNone {
 		stateLabel := strings.TrimSpace(string(attention.State))
@@ -603,6 +630,9 @@ func troubleshootingHints(snap status.Snapshot) []string {
 	switch strings.TrimSpace(snap.FailureCode) {
 	case "receiver_credential_revoked", "receiver_disabled", "receiver_replaced":
 		hints = append(hints, "Lifecycle recovery: use reset to clear local credentials, then submit a fresh pairing code.")
+		if strings.TrimSpace(snap.FailureCode) == "receiver_replaced" {
+			hints = append(hints, "This receiver was superseded by another receiver in your household/team deployment. Re-pair only if this host should become active again.")
+		}
 	case "receiver_version_unsupported":
 		hints = append(hints, "Receiver build is unsupported and should be upgraded before continued operation.")
 	case "receiver_outdated":
@@ -620,6 +650,7 @@ func troubleshootingHints(snap status.Snapshot) []string {
 	}
 	if snap.PairingPhase == "unpaired" {
 		hints = append(hints, "Generate a fresh pairing code in LoRaMapr Cloud and submit it on the Pairing page.")
+		hints = append(hints, "If you are adding a new additional receiver, pairing this host will not remove other receivers unless cloud policy replaces one explicitly.")
 	}
 	if isAppliance {
 		hints = append(hints, "Appliance discovery: try http://loramapr-receiver.local:8080 first, then fallback to the Pi LAN IP.")
@@ -637,6 +668,9 @@ func troubleshootingHints(snap status.Snapshot) []string {
 	meshtasticState := componentState(snap, "meshtastic")
 	if meshtasticState == "not_present" {
 		hints = append(hints, "No local Meshtastic device detected yet. Check USB connection and device permissions.")
+		if snap.PairingPhase == "steady_state" {
+			hints = append(hints, "In multi-receiver setups, confirm the Meshtastic device is physically attached to this receiver and not another host.")
+		}
 	}
 	if meshtasticState == "degraded" {
 		hints = append(hints, "Meshtastic adapter is degraded. Verify configured device path and input stream format.")

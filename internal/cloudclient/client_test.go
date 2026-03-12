@@ -47,6 +47,8 @@ func TestExchangePairingCode(t *testing.T) {
 				"activationExpiresAt":"2026-03-10T18:00:00Z",
 				"configVersion":"v1.2",
 				"receiverLabel":"Home Receiver",
+				"siteLabel":"Home",
+				"groupLabel":"Outdoor",
 				"activateEndpoint":"/api/receiver/activate",
 				"heartbeatEndpoint":"/api/receiver/heartbeat",
 				"ingestEndpoint":"/api/meshtastic/event"
@@ -71,6 +73,12 @@ func TestExchangePairingCode(t *testing.T) {
 	}
 	if response.ConfigVersion != "v1.2" {
 		t.Fatalf("unexpected config version %q", response.ConfigVersion)
+	}
+	if response.ReceiverLabel != "Home Receiver" {
+		t.Fatalf("unexpected receiver label %q", response.ReceiverLabel)
+	}
+	if response.SiteLabel != "Home" || response.GroupLabel != "Outdoor" {
+		t.Fatalf("unexpected site/group labels: %q/%q", response.SiteLabel, response.GroupLabel)
 	}
 }
 
@@ -99,6 +107,9 @@ func TestActivateReceiver(t *testing.T) {
 			body := `{
 				"receiverAgentId":"agent-1",
 				"ownerId":"owner-1",
+				"receiverLabel":"Garage Receiver",
+				"siteLabel":"Home",
+				"groupLabel":"Indoor",
 				"ingestApiKeyId":"api-key-id",
 				"ingestApiKeySecret":"api-secret",
 				"configVersion":"v1.2",
@@ -131,6 +142,9 @@ func TestActivateReceiver(t *testing.T) {
 	}
 	if response.ConfigVersion != "v1.2" {
 		t.Fatalf("unexpected config version %q", response.ConfigVersion)
+	}
+	if response.ReceiverLabel != "Garage Receiver" {
+		t.Fatalf("unexpected receiver label: %q", response.ReceiverLabel)
 	}
 }
 
@@ -203,6 +217,9 @@ func TestSendReceiverHeartbeat(t *testing.T) {
 			return jsonResponse(http.StatusCreated, `{
 				"receiverAgentId":"agent-1",
 				"ownerId":"owner-1",
+				"receiverLabel":"Garage Receiver",
+				"siteLabel":"Home",
+				"groupLabel":"Outdoor",
 				"configVersion":"v1.3",
 				"lastHeartbeatAt":"2026-03-10T22:00:00Z",
 				"nodeCount":2
@@ -229,6 +246,9 @@ func TestSendReceiverHeartbeat(t *testing.T) {
 	}
 	if ack.ConfigVersion != "v1.3" {
 		t.Fatalf("unexpected config version: %q", ack.ConfigVersion)
+	}
+	if ack.ReceiverLabel != "Garage Receiver" || ack.SiteLabel != "Home" || ack.GroupLabel != "Outdoor" {
+		t.Fatalf("unexpected receiver/site/group labels: %q/%q/%q", ack.ReceiverLabel, ack.SiteLabel, ack.GroupLabel)
 	}
 }
 

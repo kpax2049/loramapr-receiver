@@ -1,5 +1,8 @@
 # LoRaMapr Receiver Release Notes
 
+For Multi-Receiver / Household / Team Operations notes targeting `v2.8.0`, see
+`docs/release-notes-v2.8.0.md`.
+
 For Public Launch Hardening and Docs Polish notes targeting `v2.7.0`, see
 `docs/release-notes-v2.7.0.md`.
 

@@ -3,6 +3,8 @@
   <h2>Welcome to LoRaMapr Receiver</h2>
   <p>Use this local portal to pair your receiver, verify node connection, and confirm packet forwarding.</p>
   <div class="status-grid">
+    <div class="status-chip"><div class="label">Local Receiver Name</div><div class="value">{{if .Snapshot.LocalName}}{{.Snapshot.LocalName}}{{else}}unnamed{{end}}</div></div>
+    <div class="status-chip"><div class="label">Cloud Receiver</div><div class="value">{{if .Snapshot.CloudReceiverLabel}}{{.Snapshot.CloudReceiverLabel}}{{else if .Snapshot.CloudReceiverID}}{{.Snapshot.CloudReceiverID}}{{else}}not assigned{{end}}</div></div>
     <div class="status-chip"><div class="label">Pairing Status</div><div class="value">{{.Snapshot.PairingPhase}}</div></div>
     <div class="status-chip"><div class="label">Cloud Status</div><div class="value">{{.Snapshot.CloudStatus}}</div></div>
     <div class="status-chip"><div class="label">Service Status</div><div class="value">{{.Snapshot.Lifecycle}}</div></div>

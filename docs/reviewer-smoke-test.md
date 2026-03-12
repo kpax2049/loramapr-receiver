@@ -1,7 +1,7 @@
-# Reviewer Smoke Test Guide (v2.7.0 Public Launch)
+# Reviewer Smoke Test Guide (v2.8.0 Multi-Receiver)
 
-This guide verifies public launch readiness for both supported install paths,
-portal guidance, and troubleshooting/support flows.
+This guide verifies both supported install paths, portal/diagnostics behavior,
+and multi-receiver identity/coexistence guidance.
 
 ## 1. Build and Baseline Tests
 
@@ -89,3 +89,22 @@ References:
 
 - [Release Artifact Mapping](./release-artifacts.md)
 - [Release Notes Index](./release-notes.md)
+
+## 8. Multi-Receiver Identity and Coexistence
+
+Use [Multi-Receiver Identity and Guidance](./multi-receiver-identity.md) and
+validate on at least one paired receiver:
+
+1. Verify local portal shows identity context:
+   - `local_name`
+   - `cloud_receiver_label` (when cloud provides it)
+   - site/group labels (when cloud provides them)
+2. Verify `doctor -json` and `support-snapshot` include identity fields:
+   - installation/local/host hints
+   - cloud receiver/site/group labels
+3. Simulate replacement/revocation state and verify local guidance explains:
+   - this receiver replaced
+   - this receiver has been replaced
+   - reset and re-pair next steps
+4. Verify paired-but-node-missing guidance includes multi-receiver attachment
+   checks (node may be attached to another receiver).

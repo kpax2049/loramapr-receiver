@@ -31,6 +31,12 @@ type FailureEvent struct {
 
 type Snapshot struct {
 	InstallationID           string                     `json:"installation_id"`
+	LocalName                string                     `json:"local_name,omitempty"`
+	Hostname                 string                     `json:"hostname,omitempty"`
+	CloudReceiverID          string                     `json:"cloud_receiver_id,omitempty"`
+	CloudReceiverLabel       string                     `json:"cloud_receiver_label,omitempty"`
+	CloudSiteLabel           string                     `json:"cloud_site_label,omitempty"`
+	CloudGroupLabel          string                     `json:"cloud_group_label,omitempty"`
 	ReceiverVersion          string                     `json:"receiver_version,omitempty"`
 	ReleaseChannel           string                     `json:"release_channel,omitempty"`
 	BuildCommit              string                     `json:"build_commit,omitempty"`
@@ -144,6 +150,17 @@ func (m *Model) SetRuntimeProfile(profile string) {
 func (m *Model) SetInstallationID(id string) {
 	m.Update(func(s *Snapshot) {
 		s.InstallationID = id
+	})
+}
+
+func (m *Model) SetIdentity(localName, hostname, cloudReceiverID, cloudReceiverLabel, cloudSiteLabel, cloudGroupLabel string) {
+	m.Update(func(s *Snapshot) {
+		s.LocalName = normalize(localName)
+		s.Hostname = normalize(hostname)
+		s.CloudReceiverID = normalize(cloudReceiverID)
+		s.CloudReceiverLabel = normalize(cloudReceiverLabel)
+		s.CloudSiteLabel = normalize(cloudSiteLabel)
+		s.CloudGroupLabel = normalize(cloudGroupLabel)
 	})
 }
 

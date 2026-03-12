@@ -14,6 +14,8 @@
 <section class="panel">
   <h2>Current Receiver Status</h2>
   <table>
+    <tr><th>Local Receiver Name</th><td>{{if .Snapshot.LocalName}}{{.Snapshot.LocalName}}{{else}}unnamed{{end}}</td></tr>
+    <tr><th>Cloud Receiver</th><td>{{if .Snapshot.CloudReceiverLabel}}{{.Snapshot.CloudReceiverLabel}}{{else if .Snapshot.CloudReceiverID}}{{.Snapshot.CloudReceiverID}}{{else}}not assigned yet{{end}}</td></tr>
     <tr><th>Pairing Phase</th><td class="mono">{{.Snapshot.PairingPhase}}</td></tr>
     <tr><th>Cloud Status</th><td>{{.Snapshot.CloudStatus}}</td></tr>
     <tr><th>Service Status</th><td>{{.Snapshot.Lifecycle}}</td></tr>

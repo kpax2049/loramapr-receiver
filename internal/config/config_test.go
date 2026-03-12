@@ -81,6 +81,20 @@ func TestLoadRejectsInvalidRuntimeProfile(t *testing.T) {
 	}
 }
 
+func TestLoadRejectsInvalidRuntimeLocalName(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "receiver.json")
+	if err := os.WriteFile(path, []byte("{\"runtime\":{\"local_name\":\"line1\\nline2\"}}"), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected validation error for invalid runtime local_name")
+	}
+}
+
 func TestLoadRejectsNewerSchemaVersion(t *testing.T) {
 	t.Parallel()
 
@@ -122,6 +136,7 @@ func TestSaveAndLoadRoundTrip(t *testing.T) {
 	cfg.Logging.Format = "text"
 	cfg.Logging.Level = "debug"
 	cfg.Runtime.Profile = "appliance-pi"
+	cfg.Runtime.LocalName = "garden-pi"
 	cfg.Update.Enabled = true
 	cfg.Update.ManifestURL = "https://downloads.loramapr.com/receiver/stable/latest/cloud-manifest.fragment.json"
 	cfg.Update.MinSupportedVersion = "v2.2.0"
@@ -149,6 +164,9 @@ func TestSaveAndLoadRoundTrip(t *testing.T) {
 	}
 	if loaded.Runtime.Profile != "appliance-pi" {
 		t.Fatalf("unexpected runtime profile: %s", loaded.Runtime.Profile)
+	}
+	if loaded.Runtime.LocalName != "garden-pi" {
+		t.Fatalf("unexpected runtime local_name: %s", loaded.Runtime.LocalName)
 	}
 	if loaded.Update.ManifestURL == "" {
 		t.Fatalf("expected update manifest URL to persist")

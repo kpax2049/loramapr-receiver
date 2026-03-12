@@ -102,6 +102,10 @@ Overall state:
 `support-snapshot` includes support-safe context:
 
 - runtime version/channel/build/platform/install type
+- identity context:
+  - installation id
+  - local name and hostname hints
+  - cloud receiver/site/group labels (when present)
 - config/state schema markers
 - pairing/lifecycle/update summaries
 - cloud/network/node probes
@@ -115,6 +119,9 @@ Redacted by default (never exported):
 - pairing code value
 - activation token
 - raw credential secret material
+
+Identity and label fields are intentionally support-safe so multiple receivers can
+be distinguished during troubleshooting.
 
 ## Minimal Field Triage
 

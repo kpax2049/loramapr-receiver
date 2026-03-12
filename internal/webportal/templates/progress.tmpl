@@ -6,6 +6,8 @@
   <div class="hint {{.FlashClass}}">{{.Flash}}</div>
   {{end}}
   <div class="status-grid">
+    <div class="status-chip"><div class="label">Local Receiver Name</div><div class="value">{{if .Snapshot.LocalName}}{{.Snapshot.LocalName}}{{else}}unnamed{{end}}</div></div>
+    <div class="status-chip"><div class="label">Cloud Receiver</div><div class="value">{{if .Snapshot.CloudReceiverLabel}}{{.Snapshot.CloudReceiverLabel}}{{else if .Snapshot.CloudReceiverID}}{{.Snapshot.CloudReceiverID}}{{else}}not assigned{{end}}</div></div>
     <div class="status-chip"><div class="label">Pairing State</div><div class="value mono">{{.Snapshot.PairingPhase}}</div></div>
     <div class="status-chip"><div class="label">Cloud Connectivity</div><div class="value">{{.Snapshot.CloudStatus}}</div></div>
     <div class="status-chip"><div class="label">Network</div><div class="value">{{.NetworkState}}</div></div>
@@ -50,6 +52,13 @@
 <section class="panel">
   <h2>Detailed Status</h2>
   <table>
+    <tr><th>Installation ID</th><td class="mono">{{if .Snapshot.InstallationID}}{{.Snapshot.InstallationID}}{{else}}unknown{{end}}</td></tr>
+    <tr><th>Local Name</th><td>{{if .Snapshot.LocalName}}{{.Snapshot.LocalName}}{{else}}unnamed{{end}}</td></tr>
+    <tr><th>Hostname</th><td class="mono">{{if .Snapshot.Hostname}}{{.Snapshot.Hostname}}{{else}}unknown{{end}}</td></tr>
+    <tr><th>Cloud Receiver ID</th><td class="mono">{{if .Snapshot.CloudReceiverID}}{{.Snapshot.CloudReceiverID}}{{else}}not assigned{{end}}</td></tr>
+    <tr><th>Cloud Receiver Name</th><td>{{if .Snapshot.CloudReceiverLabel}}{{.Snapshot.CloudReceiverLabel}}{{else}}not assigned{{end}}</td></tr>
+    <tr><th>Cloud Site</th><td>{{if .Snapshot.CloudSiteLabel}}{{.Snapshot.CloudSiteLabel}}{{else}}not set{{end}}</td></tr>
+    <tr><th>Cloud Group</th><td>{{if .Snapshot.CloudGroupLabel}}{{.Snapshot.CloudGroupLabel}}{{else}}not set{{end}}</td></tr>
     <tr><th>Ready</th><td>{{if .Snapshot.Ready}}yes{{else}}no{{end}} {{if .Snapshot.ReadyReason}}({{.Snapshot.ReadyReason}}){{end}}</td></tr>
     <tr><th>Cloud Reachable</th><td>{{if .Snapshot.CloudReachable}}yes{{else}}no{{end}}</td></tr>
     <tr><th>Heartbeat Fresh</th><td>{{if .Snapshot.HeartbeatFresh}}yes{{else}}no{{end}}</td></tr>

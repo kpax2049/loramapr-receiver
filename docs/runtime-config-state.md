@@ -34,7 +34,8 @@ Example (minimal):
     "heartbeat": "30s"
   },
   "runtime": {
-    "profile": "auto"
+    "profile": "auto",
+    "local_name": ""
   },
   "paths": {
     "state_file": "./data/receiver-state.json"
@@ -76,6 +77,12 @@ Example (minimal):
 - `windows-user`
 - `appliance-pi`
 
+### `runtime.local_name`
+
+- optional local operator-facing receiver name hint
+- used for portal/diagnostics/cloud status context
+- if empty, runtime derives a stable default from hostname/install type
+
 ### `update` block
 
 - `enabled`: enables manifest-based currentness checks.
@@ -115,12 +122,15 @@ Top-level sections:
 ### Persisted identity and pairing
 
 - `installation.id` (stable local installation identity)
+- `installation.local_name` (stable local name hint)
+- `installation.hostname` (runtime hostname hint)
 - `pairing.phase` (`unpaired`, `pairing_code_entered`, `bootstrap_exchanged`, `activated`, `steady_state`)
 - pairing lifecycle metadata (`retry_count`, `next_retry_at`, `last_error`, `last_change`)
 
 ### Persisted cloud material
 
 - `cloud.endpoint_url`
+- cloud identity labels (`receiver_id`, `receiver_label`, `site_label`, `group_label`)
 - `cloud.config_version`
 - `cloud.activate_endpoint`, `cloud.heartbeat_endpoint`, `cloud.ingest_endpoint`
 - durable credential fields (`ingest_api_key_id`, `ingest_api_key_secret`, `credential_ref`)

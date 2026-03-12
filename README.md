@@ -36,6 +36,9 @@ code from LoRaMapr Cloud.
 
 Portal reference: [Embedded Local Setup Portal](./docs/local-portal.md)
 
+For households/teams with multiple receivers, see
+[Multi-Receiver Identity and Guidance](./docs/multi-receiver-identity.md).
+
 ## Local Attention States
 
 The portal and diagnostics show one attention state:

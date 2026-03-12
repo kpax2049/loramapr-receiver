@@ -58,6 +58,9 @@ func TestPairingLifecycleProgression(t *testing.T) {
 			ActivationToken:   "rx_act_abc123",
 			ActivationExpires: now.Add(10 * time.Minute),
 			ConfigVersion:     "v1.2",
+			ReceiverLabel:     "Garage Receiver",
+			SiteLabel:         "Home",
+			GroupLabel:        "Outdoor",
 			ActivateEndpoint:  "https://api.example.com/api/receiver/activate",
 			HeartbeatEndpoint: "https://api.example.com/api/receiver/heartbeat",
 			IngestEndpoint:    "https://api.example.com/api/meshtastic/event",
@@ -65,6 +68,9 @@ func TestPairingLifecycleProgression(t *testing.T) {
 		activateResult: cloudclient.ActivationResult{
 			ReceiverAgentID:   "agent-1",
 			OwnerID:           "owner-1",
+			ReceiverLabel:     "Garage Receiver",
+			SiteLabel:         "Home",
+			GroupLabel:        "Outdoor",
 			IngestAPIKeyID:    "key-id-1",
 			IngestAPIKey:      "secret-1",
 			ConfigVersion:     "v1.3",
@@ -87,6 +93,13 @@ func TestPairingLifecycleProgression(t *testing.T) {
 	if phase := store.Snapshot().Pairing.Phase; phase != state.PairingBootstrapExchanged {
 		t.Fatalf("expected phase %q, got %q", state.PairingBootstrapExchanged, phase)
 	}
+	afterExchange := store.Snapshot()
+	if afterExchange.Cloud.ReceiverLabel != "Garage Receiver" {
+		t.Fatalf("expected cloud receiver label from bootstrap exchange, got %q", afterExchange.Cloud.ReceiverLabel)
+	}
+	if afterExchange.Cloud.SiteLabel != "Home" || afterExchange.Cloud.GroupLabel != "Outdoor" {
+		t.Fatalf("expected cloud site/group labels from bootstrap exchange, got %q/%q", afterExchange.Cloud.SiteLabel, afterExchange.Cloud.GroupLabel)
+	}
 
 	if err := manager.Process(context.Background()); err != nil {
 		t.Fatalf("process activation: %v", err)
@@ -100,6 +113,12 @@ func TestPairingLifecycleProgression(t *testing.T) {
 	}
 	if snap.Cloud.ConfigVersion != "v1.3" {
 		t.Fatalf("expected cloud config version to be persisted, got %q", snap.Cloud.ConfigVersion)
+	}
+	if snap.Cloud.ReceiverLabel != "Garage Receiver" {
+		t.Fatalf("expected cloud receiver label to persist, got %q", snap.Cloud.ReceiverLabel)
+	}
+	if snap.Cloud.SiteLabel != "Home" || snap.Cloud.GroupLabel != "Outdoor" {
+		t.Fatalf("expected cloud site/group labels to persist, got %q/%q", snap.Cloud.SiteLabel, snap.Cloud.GroupLabel)
 	}
 
 	if err := manager.Process(context.Background()); err != nil {
@@ -296,6 +315,9 @@ func TestApplyLifecycleChangeClearsDurableCredentials(t *testing.T) {
 		data.Pairing.Phase = state.PairingSteadyState
 		data.Cloud.OwnerID = "owner-1"
 		data.Cloud.ReceiverID = "receiver-1"
+		data.Cloud.ReceiverLabel = "Patio Receiver"
+		data.Cloud.SiteLabel = "Home"
+		data.Cloud.GroupLabel = "Outdoor"
 		data.Cloud.IngestAPIKeyID = "key-1"
 		data.Cloud.IngestAPIKey = "secret"
 		data.Cloud.CredentialRef = "receiver-1"
@@ -318,6 +340,9 @@ func TestApplyLifecycleChangeClearsDurableCredentials(t *testing.T) {
 	}
 	if snap.Cloud.IngestAPIKey != "" || snap.Cloud.IngestAPIKeyID != "" || snap.Cloud.CredentialRef != "" {
 		t.Fatalf("expected durable cloud credentials to be cleared")
+	}
+	if snap.Cloud.ReceiverLabel != "" || snap.Cloud.SiteLabel != "" || snap.Cloud.GroupLabel != "" {
+		t.Fatalf("expected cloud receiver/site/group labels to be cleared")
 	}
 }
 

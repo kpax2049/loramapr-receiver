@@ -5,7 +5,8 @@
     "heartbeat": "30s"
   },
   "runtime": {
-    "profile": "auto"
+    "profile": "auto",
+    "local_name": ""
   },
   "paths": {
     "state_file": "./data/receiver-state.json"

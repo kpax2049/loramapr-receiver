@@ -37,6 +37,8 @@ type Data struct {
 
 type InstallationState struct {
 	ID            string    `json:"id"`
+	LocalName     string    `json:"local_name,omitempty"`
+	Hostname      string    `json:"hostname,omitempty"`
 	CreatedAt     time.Time `json:"created_at"`
 	LastStartedAt time.Time `json:"last_started_at"`
 }
@@ -64,6 +66,9 @@ type CloudState struct {
 	IngestEndpoint    string    `json:"ingest_endpoint,omitempty"`
 	OwnerID           string    `json:"owner_id,omitempty"`
 	ReceiverID        string    `json:"receiver_id,omitempty"`
+	ReceiverLabel     string    `json:"receiver_label,omitempty"`
+	SiteLabel         string    `json:"site_label,omitempty"`
+	GroupLabel        string    `json:"group_label,omitempty"`
 	IngestAPIKeyID    string    `json:"ingest_api_key_id,omitempty"`
 	IngestAPIKey      string    `json:"ingest_api_key_secret,omitempty"`
 	CredentialRef     string    `json:"credential_ref,omitempty"`
