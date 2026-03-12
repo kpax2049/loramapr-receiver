@@ -1,7 +1,8 @@
-# Reviewer Smoke Test Guide (v2.9.0 Embedded Home Auto Session)
+# Reviewer Smoke Test Guide (v2.10.0 Home Auto Session M2)
 
 This guide verifies both supported install paths, portal/diagnostics behavior,
-multi-receiver identity/coexistence guidance, and Home Auto Session Milestone 1.
+multi-receiver identity/coexistence guidance, and Home Auto Session Milestone 2
+correctness/recovery behavior.
 
 ## 1. Build and Baseline Tests
 
@@ -109,7 +110,7 @@ validate on at least one paired receiver:
 4. Verify paired-but-node-missing guidance includes multi-receiver attachment
    checks (node may be attached to another receiver).
 
-## 9. Home Auto Session Milestone 1
+## 9. Home Auto Session Milestone 2
 
 Use [Embedded Home Auto Session](./home-auto-session.md):
 
@@ -125,7 +126,17 @@ Use [Embedded Home Auto Session](./home-auto-session.md):
    - decision reason populated
 6. Inject return/inside transition (or wait idle timeout) and confirm:
    - `stop_pending` then `control_ready`
-7. Verify diagnostics surfaces include Home Auto Session context:
+7. Restart `loramapr-receiverd` while Home Auto Session is active and verify:
+   - startup reconciliation state is visible
+   - duplicate start/stop is not issued
+8. Inject stale/invalid/boundary GPS and verify:
+   - no auto start is issued from unusable GPS
+   - portal shows plain-language GPS reason
+9. Force retryable cloud/session error and verify:
+   - state transitions to `cooldown`
+   - pending action is shown
+   - repeated API spam does not occur
+10. Verify diagnostics surfaces include Home Auto Session context:
    - `doctor -json`
    - `status`
    - `support-snapshot`

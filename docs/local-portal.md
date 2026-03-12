@@ -89,6 +89,13 @@ Home Auto Session module states you may see:
 - `cooldown`
 - `degraded`
 
+Home Auto Session recovery/status details now include:
+
+- reconciliation state (startup recovery outcome)
+- pending action (`start|stop`) during retry/recovery
+- GPS validity state (`missing|invalid|stale|boundary_uncertain|valid`)
+- blocked reason for degraded mode
+
 Typical plain-language hints:
 
 - waiting for tracked node near home geofence transition
@@ -96,6 +103,8 @@ Typical plain-language hints:
 - session active
 - waiting for node to return home
 - cloud/session API unavailable
+- recovering pending start/stop action after restart
+- waiting for stable position near geofence boundary
 
 In multi-receiver environments, portal guidance also helps distinguish:
 

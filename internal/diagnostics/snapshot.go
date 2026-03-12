@@ -98,17 +98,28 @@ type SupportSnapshot struct {
 		ConfiguredMin      string     `json:"configured_min_supported_version,omitempty"`
 	} `json:"update"`
 	HomeAutoSession struct {
-		Enabled            bool       `json:"enabled"`
-		Mode               string     `json:"mode,omitempty"`
-		State              string     `json:"state,omitempty"`
-		Summary            string     `json:"summary,omitempty"`
-		HomeSummary        string     `json:"home_summary,omitempty"`
-		TrackedNodeIDs     []string   `json:"tracked_node_ids,omitempty"`
-		ActiveSessionID    string     `json:"active_session_id,omitempty"`
-		ActiveTriggerNode  string     `json:"active_trigger_node_id,omitempty"`
-		LastDecisionReason string     `json:"last_decision_reason,omitempty"`
-		LastError          string     `json:"last_error,omitempty"`
-		LastDecisionAt     *time.Time `json:"last_decision_at,omitempty"`
+		Enabled              bool       `json:"enabled"`
+		Mode                 string     `json:"mode,omitempty"`
+		State                string     `json:"state,omitempty"`
+		Summary              string     `json:"summary,omitempty"`
+		HomeSummary          string     `json:"home_summary,omitempty"`
+		TrackedNodeIDs       []string   `json:"tracked_node_ids,omitempty"`
+		ReconciliationState  string     `json:"reconciliation_state,omitempty"`
+		PendingAction        string     `json:"pending_action,omitempty"`
+		ActiveSessionID      string     `json:"active_session_id,omitempty"`
+		ActiveTriggerNode    string     `json:"active_trigger_node_id,omitempty"`
+		LastDecisionReason   string     `json:"last_decision_reason,omitempty"`
+		LastError            string     `json:"last_error,omitempty"`
+		LastSuccessfulAction string     `json:"last_successful_action,omitempty"`
+		LastSuccessfulAt     *time.Time `json:"last_successful_at,omitempty"`
+		BlockedReason        string     `json:"blocked_reason,omitempty"`
+		ConsecutiveFailures  int        `json:"consecutive_failures,omitempty"`
+		CooldownUntil        *time.Time `json:"cooldown_until,omitempty"`
+		GPSStatus            string     `json:"gps_status,omitempty"`
+		GPSReason            string     `json:"gps_reason,omitempty"`
+		GPSNodeID            string     `json:"gps_node_id,omitempty"`
+		GPSUpdatedAt         *time.Time `json:"gps_updated_at,omitempty"`
+		LastDecisionAt       *time.Time `json:"last_decision_at,omitempty"`
 	} `json:"home_auto_session"`
 	Operations struct {
 		Overall string             `json:"overall"`
@@ -263,10 +274,21 @@ func CollectSupportSnapshot(cfg config.Config, data state.Data, finding Finding,
 	out.HomeAutoSession.HomeSummary = formatHomeSummary(cfg.HomeAutoSession.Home)
 	out.HomeAutoSession.TrackedNodeIDs = append([]string(nil), cfg.HomeAutoSession.TrackedNodeIDs...)
 	out.HomeAutoSession.State = strings.TrimSpace(data.HomeAutoSession.ModuleState)
+	out.HomeAutoSession.ReconciliationState = strings.TrimSpace(data.HomeAutoSession.ReconciliationState)
+	out.HomeAutoSession.PendingAction = strings.TrimSpace(data.HomeAutoSession.PendingAction)
 	out.HomeAutoSession.ActiveSessionID = strings.TrimSpace(data.HomeAutoSession.ActiveSessionID)
 	out.HomeAutoSession.ActiveTriggerNode = strings.TrimSpace(data.HomeAutoSession.ActiveTriggerNode)
 	out.HomeAutoSession.LastDecisionReason = strings.TrimSpace(data.HomeAutoSession.LastDecisionReason)
 	out.HomeAutoSession.LastError = strings.TrimSpace(data.HomeAutoSession.LastError)
+	out.HomeAutoSession.LastSuccessfulAction = strings.TrimSpace(data.HomeAutoSession.LastSuccessfulAction)
+	out.HomeAutoSession.LastSuccessfulAt = cloneTimePtr(data.HomeAutoSession.LastSuccessfulActionAt)
+	out.HomeAutoSession.BlockedReason = strings.TrimSpace(data.HomeAutoSession.BlockedReason)
+	out.HomeAutoSession.ConsecutiveFailures = data.HomeAutoSession.ConsecutiveFailures
+	out.HomeAutoSession.CooldownUntil = cloneTimePtr(data.HomeAutoSession.CooldownUntil)
+	out.HomeAutoSession.GPSStatus = strings.TrimSpace(data.HomeAutoSession.GPSStatus)
+	out.HomeAutoSession.GPSReason = strings.TrimSpace(data.HomeAutoSession.GPSReason)
+	out.HomeAutoSession.GPSNodeID = strings.TrimSpace(data.HomeAutoSession.GPSNodeID)
+	out.HomeAutoSession.GPSUpdatedAt = cloneTimePtr(data.HomeAutoSession.GPSUpdatedAt)
 	out.HomeAutoSession.LastDecisionAt = cloneTimePtr(data.HomeAutoSession.LastDecisionAt)
 
 	opsInput := OperationalInput{
@@ -318,6 +340,12 @@ func CollectSupportSnapshot(cfg config.Config, data state.Data, finding Finding,
 		if value := strings.TrimSpace(localProbe.Snapshot.HomeAutoSession.State); value != "" {
 			out.HomeAutoSession.State = value
 		}
+		if value := strings.TrimSpace(localProbe.Snapshot.HomeAutoSession.ReconciliationState); value != "" {
+			out.HomeAutoSession.ReconciliationState = value
+		}
+		if value := strings.TrimSpace(localProbe.Snapshot.HomeAutoSession.PendingAction); value != "" {
+			out.HomeAutoSession.PendingAction = value
+		}
 		if value := strings.TrimSpace(localProbe.Snapshot.HomeAutoSession.Summary); value != "" {
 			out.HomeAutoSession.Summary = value
 		}
@@ -338,6 +366,33 @@ func CollectSupportSnapshot(cfg config.Config, data state.Data, finding Finding,
 		}
 		if value := strings.TrimSpace(localProbe.Snapshot.HomeAutoSession.LastError); value != "" {
 			out.HomeAutoSession.LastError = value
+		}
+		if value := strings.TrimSpace(localProbe.Snapshot.HomeAutoSession.LastSuccessfulAction); value != "" {
+			out.HomeAutoSession.LastSuccessfulAction = value
+		}
+		if localProbe.Snapshot.HomeAutoSession.LastSuccessfulAt != nil {
+			out.HomeAutoSession.LastSuccessfulAt = cloneTimePtr(localProbe.Snapshot.HomeAutoSession.LastSuccessfulAt)
+		}
+		if value := strings.TrimSpace(localProbe.Snapshot.HomeAutoSession.BlockedReason); value != "" {
+			out.HomeAutoSession.BlockedReason = value
+		}
+		if localProbe.Snapshot.HomeAutoSession.ConsecutiveFailures > 0 {
+			out.HomeAutoSession.ConsecutiveFailures = localProbe.Snapshot.HomeAutoSession.ConsecutiveFailures
+		}
+		if localProbe.Snapshot.HomeAutoSession.CooldownUntil != nil {
+			out.HomeAutoSession.CooldownUntil = cloneTimePtr(localProbe.Snapshot.HomeAutoSession.CooldownUntil)
+		}
+		if value := strings.TrimSpace(localProbe.Snapshot.HomeAutoSession.GPSStatus); value != "" {
+			out.HomeAutoSession.GPSStatus = value
+		}
+		if value := strings.TrimSpace(localProbe.Snapshot.HomeAutoSession.GPSReason); value != "" {
+			out.HomeAutoSession.GPSReason = value
+		}
+		if value := strings.TrimSpace(localProbe.Snapshot.HomeAutoSession.GPSNodeID); value != "" {
+			out.HomeAutoSession.GPSNodeID = value
+		}
+		if localProbe.Snapshot.HomeAutoSession.GPSUpdatedAt != nil {
+			out.HomeAutoSession.GPSUpdatedAt = cloneTimePtr(localProbe.Snapshot.HomeAutoSession.GPSUpdatedAt)
 		}
 	}
 	ops := EvaluateOperational(opsInput)

@@ -16,7 +16,7 @@ import (
 type PairingPhase string
 
 const (
-	CurrentSchemaVersion = 4
+	CurrentSchemaVersion = 5
 
 	PairingUnpaired           PairingPhase = "unpaired"
 	PairingCodeEntered        PairingPhase = "pairing_code_entered"
@@ -95,18 +95,34 @@ type UpdateState struct {
 }
 
 type HomeAutoSessionState struct {
-	ModuleState        string     `json:"module_state,omitempty"`
-	ActiveSessionID    string     `json:"active_session_id,omitempty"`
-	ActiveTriggerNode  string     `json:"active_trigger_node_id,omitempty"`
-	LastDecisionReason string     `json:"last_decision_reason,omitempty"`
-	LastStartDedupeKey string     `json:"last_start_dedupe_key,omitempty"`
-	LastStopDedupeKey  string     `json:"last_stop_dedupe_key,omitempty"`
-	LastError          string     `json:"last_error,omitempty"`
-	LastDecisionAt     *time.Time `json:"last_decision_at,omitempty"`
-	LastEventAt        *time.Time `json:"last_event_at,omitempty"`
-	CooldownUntil      *time.Time `json:"cooldown_until,omitempty"`
-	ObservedDropped    int        `json:"observed_dropped,omitempty"`
-	UpdatedAt          time.Time  `json:"updated_at,omitempty"`
+	ModuleState            string     `json:"module_state,omitempty"`
+	ReconciliationState    string     `json:"reconciliation_state,omitempty"`
+	ActiveSessionID        string     `json:"active_session_id,omitempty"`
+	ActiveTriggerNode      string     `json:"active_trigger_node_id,omitempty"`
+	PendingAction          string     `json:"pending_action,omitempty"`
+	PendingTriggerNode     string     `json:"pending_trigger_node_id,omitempty"`
+	PendingReason          string     `json:"pending_reason,omitempty"`
+	PendingDedupeKey       string     `json:"pending_dedupe_key,omitempty"`
+	PendingSince           *time.Time `json:"pending_since,omitempty"`
+	LastDecisionReason     string     `json:"last_decision_reason,omitempty"`
+	LastStartDedupeKey     string     `json:"last_start_dedupe_key,omitempty"`
+	LastStopDedupeKey      string     `json:"last_stop_dedupe_key,omitempty"`
+	LastSuccessfulAction   string     `json:"last_successful_action,omitempty"`
+	LastSuccessfulActionAt *time.Time `json:"last_successful_action_at,omitempty"`
+	LastError              string     `json:"last_error,omitempty"`
+	BlockedReason          string     `json:"blocked_reason,omitempty"`
+	ConsecutiveFailures    int        `json:"consecutive_failures,omitempty"`
+	LastDecisionAt         *time.Time `json:"last_decision_at,omitempty"`
+	LastEventAt            *time.Time `json:"last_event_at,omitempty"`
+	CooldownUntil          *time.Time `json:"cooldown_until,omitempty"`
+	DecisionCooldownUntil  *time.Time `json:"decision_cooldown_until,omitempty"`
+	GPSStatus              string     `json:"gps_status,omitempty"`
+	GPSReason              string     `json:"gps_reason,omitempty"`
+	GPSNodeID              string     `json:"gps_node_id,omitempty"`
+	GPSUpdatedAt           *time.Time `json:"gps_updated_at,omitempty"`
+	GPSDistanceM           *float64   `json:"gps_distance_m,omitempty"`
+	ObservedDropped        int        `json:"observed_dropped,omitempty"`
+	UpdatedAt              time.Time  `json:"updated_at,omitempty"`
 }
 
 type MetadataState struct {
@@ -242,6 +258,10 @@ func (s *Store) ensureDefaults() (bool, error) {
 		s.data.HomeAutoSession.ModuleState = "disabled"
 		changed = true
 	}
+	if strings.TrimSpace(s.data.HomeAutoSession.ReconciliationState) == "" {
+		s.data.HomeAutoSession.ReconciliationState = "clean_idle"
+		changed = true
+	}
 	return changed, nil
 }
 
@@ -293,6 +313,14 @@ func (s *Store) migrate() (bool, error) {
 			changed = true
 		}
 		version = 4
+		changed = true
+	}
+	if version <= 4 {
+		if strings.TrimSpace(s.data.HomeAutoSession.ReconciliationState) == "" {
+			s.data.HomeAutoSession.ReconciliationState = "clean_idle"
+			changed = true
+		}
+		version = 5
 		changed = true
 	}
 

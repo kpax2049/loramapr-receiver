@@ -1010,21 +1010,48 @@ func homeAutoStateHint(snap status.Snapshot) string {
 	case "misconfigured":
 		return "Home Auto Session config is incomplete or invalid."
 	case "observe_ready":
-		return "Waiting for tracked node near home geofence transition (observe mode)."
+		return homeAutoGPSHint(module, "Waiting for tracked node geofence transition (observe mode).")
 	case "control_ready":
-		return "Waiting for tracked node near home geofence transition (control mode)."
+		return homeAutoGPSHint(module, "Waiting for tracked node geofence transition (control mode).")
 	case "start_pending":
+		if module.PendingAction == "start" {
+			return "Start action is pending/recovering after restart or retry."
+		}
 		return "Start candidate detected; waiting for debounce before action."
 	case "active":
 		return "Session active."
 	case "stop_pending":
+		if module.PendingAction == "stop" {
+			return "Stop action is pending/recovering after restart or retry."
+		}
 		return "Stop candidate detected; waiting for debounce before action."
 	case "cooldown":
+		if module.PendingAction != "" {
+			return "Cloud/session API unavailable; waiting for cooldown before retrying pending action."
+		}
 		return "Cloud/session API unavailable; waiting for cooldown before retry."
 	case "degraded":
+		if reason := strings.TrimSpace(module.BlockedReason); reason != "" {
+			return "Home Auto Session is degraded: " + reason
+		}
 		return "Home Auto Session is degraded; review last error and reset/reevaluate."
 	default:
 		return "Home Auto Session status is initializing."
+	}
+}
+
+func homeAutoGPSHint(module status.HomeAutoSessionSnapshot, fallback string) string {
+	switch strings.TrimSpace(module.GPSStatus) {
+	case "missing":
+		return "Waiting for tracked node position updates."
+	case "invalid":
+		return "Ignoring invalid tracked-node GPS coordinates until valid samples arrive."
+	case "stale":
+		return "Tracked-node GPS sample is stale; waiting for fresh position."
+	case "boundary_uncertain":
+		return "Tracked node is near geofence boundary; waiting for stable position to avoid flap."
+	default:
+		return fallback
 	}
 }
 

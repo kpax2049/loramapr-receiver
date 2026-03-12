@@ -1,12 +1,12 @@
-# Embedded Home Auto Session (Milestone 1)
+# Embedded Home Auto Session (Milestone 2: Correctness and Recovery)
 
 Home Auto Session is an optional embedded receiver module. It is not a separate
-daemon and does not block packet forwarding.
+service and never blocks packet forwarding.
 
 ## Purpose
 
-When enabled, the module observes normalized Meshtastic packet events and applies
-a simple local geofence rule for configured tracked node IDs.
+When enabled, the module observes normalized Meshtastic packet events and
+applies a simple local geofence policy for tracked node IDs.
 
 Modes:
 
@@ -14,16 +14,70 @@ Modes:
 - `observe`: evaluate start/stop decisions but do not call cloud session APIs
 - `control`: evaluate decisions and call cloud session start/stop APIs
 
-## Milestone 1 Scope
-
-Milestone 1 intentionally supports only:
+## Scope (Still Intentionally Narrow)
 
 - one home geofence
 - explicit tracked node IDs
 - one active auto session per receiver
 - start on `inside -> outside` transition after start debounce
-- stop on `outside -> inside` transition after stop debounce
-- stop on idle timeout when active
+- stop on `outside -> inside` transition or idle timeout
+
+## Milestone 2 Hardening
+
+Milestone 2 adds correctness/recovery behavior without expanding policy scope.
+
+### Startup Reconciliation
+
+On runtime start, module reconciles persisted state into explicit outcomes:
+
+- `clean_idle`
+- `startup_reconcile_disabled`
+- `active_recovered_unverified`
+- `pending_start_recovering`
+- `pending_stop_recovering`
+- `pending_start_resolved`
+- `pending_stop_resolved`
+- `inconsistent_degraded`
+
+### Idempotency and Pending Action Recovery
+
+Persisted control metadata now includes pending action context so retries across
+restart use the same dedupe key:
+
+- `pending_action`
+- `pending_trigger_node_id`
+- `pending_reason`
+- `pending_dedupe_key`
+- `pending_since`
+
+Successful control metadata:
+
+- `last_start_dedupe_key`
+- `last_stop_dedupe_key`
+- `last_successful_action`
+- `last_successful_action_at`
+
+### GPS Validity and Geofence Flap Protection
+
+Module now classifies tracked-node position quality:
+
+- `missing`
+- `invalid`
+- `stale`
+- `boundary_uncertain`
+- `valid`
+
+Safety rules:
+
+- no auto-start from missing/invalid/stale/boundary-uncertain position
+- boundary uncertainty band suppresses start/stop flap near geofence radius
+- post-action decision cooldown suppresses immediate flip-flop actions
+
+### Failure and Degraded Handling
+
+- retryable cloud/session failures -> `cooldown` with bounded retry backoff
+- non-retryable failures -> `degraded` with explicit `blocked_reason`
+- persistent failure counters and last error are persisted for support
 
 ## Configuration
 
@@ -46,49 +100,29 @@ Portal path:
 
 - `GET /home-auto-session`
 
-## Runtime State
+## Operator Visibility
 
-Persisted local state includes:
+Portal, `doctor`, `status`, and `support-snapshot` expose support-safe fields:
 
-- `active_session_id`
-- `active_trigger_node_id`
-- `last_decision_reason`
-- `last_start_dedupe_key`
-- `last_stop_dedupe_key`
-- `last_error`
-- `cooldown_until`
+- module state + reconciliation state
+- pending action + active session context
+- last decision + last error + blocked reason
+- GPS status and reason
+- last successful control action
 
-This supports restart-safe dedupe and operator diagnostics.
+## Cloud Contract Assumptions
 
-## Cloud Session Contract Assumptions
-
-Milestone 1 uses a thin receiver-authenticated client with configurable endpoint
-paths:
+Receiver uses receiver-authenticated endpoints (with idempotency keys):
 
 - start endpoint (default): `/api/receiver/home-auto-session/start`
 - stop endpoint (default): `/api/receiver/home-auto-session/stop`
 
-Requests include idempotency via `x-idempotency-key` and use receiver durable
-credential auth (`x-api-key`).
-
-## Portal and Diagnostics
-
-Portal exposes:
-
-- enabled/mode
-- current module state
-- geofence/tracked-node summary
-- active session summary
-- last decision reason
-- last error
-
-Diagnostics surfaces (`doctor`, `status`, `support-snapshot`) include the same
-support-safe module context.
+No full cloud-side verification endpoint is required for M2.
 
 ## Troubleshooting Basics
 
-- `misconfigured`: verify geofence and tracked node IDs
-- `observe_ready`: module is evaluating but not issuing cloud control calls
-- `control_ready`: waiting for transition; no active session
-- `cooldown`: recent cloud/session error; module will retry after cooldown
-- `degraded`: recover by fixing config/connectivity and using portal reset/reevaluate
+- `misconfigured`: fix geofence and tracked node IDs
+- `cooldown`: transient cloud/API retry window in progress
+- `degraded`: non-retryable failure or inconsistent local state; use reset/reevaluate
+- `boundary_uncertain`: wait for a stable point outside uncertainty band
+- `stale`/`missing`: wait for fresh tracked-node GPS position updates

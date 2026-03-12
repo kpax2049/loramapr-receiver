@@ -35,7 +35,13 @@ func TestSupportSnapshotRedactsSecrets(t *testing.T) {
 	data.Cloud.SiteLabel = "Home"
 	data.Cloud.GroupLabel = "Outdoor"
 	data.HomeAutoSession.ModuleState = "observe_ready"
+	data.HomeAutoSession.ReconciliationState = "clean_idle"
+	data.HomeAutoSession.PendingAction = "start"
 	data.HomeAutoSession.LastDecisionReason = "observe mode ready"
+	data.HomeAutoSession.GPSStatus = "stale"
+	data.HomeAutoSession.GPSReason = "position sample older than threshold"
+	data.HomeAutoSession.BlockedReason = "cloud session endpoint unavailable"
+	data.HomeAutoSession.ConsecutiveFailures = 2
 
 	snapshot := CollectSupportSnapshot(cfg, data, Finding{Code: FailureActivationFailed}, CollectOptions{
 		Now: func() time.Time { return now },
@@ -106,6 +112,12 @@ func TestSupportSnapshotRedactsSecrets(t *testing.T) {
 	}
 	if snapshot.HomeAutoSession.State != "observe_ready" {
 		t.Fatalf("expected home auto session state in support snapshot, got %q", snapshot.HomeAutoSession.State)
+	}
+	if snapshot.HomeAutoSession.ReconciliationState == "" {
+		t.Fatal("expected home auto reconciliation state in support snapshot")
+	}
+	if snapshot.HomeAutoSession.GPSStatus == "" {
+		t.Fatal("expected home auto gps status in support snapshot")
 	}
 	if snapshot.Attention.State == AttentionNone {
 		t.Fatal("expected attention state in support snapshot")

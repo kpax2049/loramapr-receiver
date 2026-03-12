@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log/slog"
 	"math"
@@ -32,10 +33,44 @@ const (
 	StateDegraded      ModuleState = "degraded"
 )
 
+type pendingActionKind string
+
 const (
-	observationQueueDepth = 256
-	controlCallTimeout    = 8 * time.Second
-	retryCooldown         = 30 * time.Second
+	actionStart pendingActionKind = "start"
+	actionStop  pendingActionKind = "stop"
+)
+
+const (
+	reconciliationCleanIdle              = "clean_idle"
+	reconciliationStartupDisabled        = "startup_reconcile_disabled"
+	reconciliationActiveRecovered        = "active_recovered_unverified"
+	reconciliationPendingStartRecovering = "pending_start_recovering"
+	reconciliationPendingStopRecovering  = "pending_stop_recovering"
+	reconciliationPendingStartResolved   = "pending_start_resolved"
+	reconciliationPendingStopResolved    = "pending_stop_resolved"
+	reconciliationInconsistentDegraded   = "inconsistent_degraded"
+)
+
+const (
+	gpsStatusMissing           = "missing"
+	gpsStatusInvalid           = "invalid"
+	gpsStatusStale             = "stale"
+	gpsStatusBoundaryUncertain = "boundary_uncertain"
+	gpsStatusValid             = "valid"
+)
+
+const (
+	observationQueueDepth   = 256
+	controlCallTimeout      = 8 * time.Second
+	retryCooldown           = 30 * time.Second
+	retryCooldownMax        = 4 * time.Minute
+	gpsStaleFloor           = 2 * time.Minute
+	gpsStaleCeiling         = 10 * time.Minute
+	decisionCooldownFloor   = 1 * time.Second
+	decisionCooldownCeiling = 30 * time.Second
+	boundaryMarginFloorM    = 8.0
+	boundaryMarginCapM      = 75.0
+	boundaryMarginFraction  = 0.08
 )
 
 type SessionClient interface {
@@ -55,14 +90,32 @@ type Module struct {
 	state          ModuleState
 	summary        string
 
+	reconciliationState string
+	blockedReason       string
+
 	activeSessionID   string
 	activeTriggerNode string
 	lastDecision      string
 	lastError         string
 	lastStartDedupe   string
 	lastStopDedupe    string
-	cooldownUntil     *time.Time
-	observedDropped   int
+
+	lastSuccessfulAction   string
+	lastSuccessfulActionAt *time.Time
+	lastEventAt            *time.Time
+
+	pendingAction *pendingAction
+
+	cooldownUntil         *time.Time
+	decisionCooldownUntil *time.Time
+	consecutiveFailures   int
+	observedDropped       int
+
+	gpsStatus    string
+	gpsReason    string
+	gpsNodeID    string
+	gpsUpdatedAt *time.Time
+	gpsDistanceM *float64
 
 	startCandidate *transitionCandidate
 	stopCandidate  *transitionCandidate
@@ -71,6 +124,14 @@ type Module struct {
 	events     chan meshtastic.Event
 	reevaluate chan struct{}
 	started    bool
+}
+
+type pendingAction struct {
+	Action    pendingActionKind
+	NodeID    string
+	Reason    string
+	DedupeKey string
+	Since     time.Time
 }
 
 type transitionCandidate struct {
@@ -85,6 +146,7 @@ type nodeFact struct {
 	InsideGeofence  bool
 	LastLat         float64
 	LastLon         float64
+	LastDistanceM   float64
 	LastSeenAt      time.Time
 	LastTransition  time.Time
 	LastOutsideSeen time.Time
@@ -95,20 +157,19 @@ func New(cfg config.HomeAutoSessionConfig, store *state.Store, statusModel *stat
 		logger = slog.Default()
 	}
 	m := &Module{
-		logger:          logger.With("component", "home_auto_session"),
-		store:           store,
-		status:          statusModel,
-		client:          client,
-		events:          make(chan meshtastic.Event, observationQueueDepth),
-		reevaluate:      make(chan struct{}, 1),
-		nodeFacts:       make(map[string]nodeFact),
-		trackedByLower:  make(map[string]string),
-		state:           StateDisabled,
-		summary:         "module disabled",
-		startCandidate:  nil,
-		stopCandidate:   nil,
-		cooldownUntil:   nil,
-		observedDropped: 0,
+		logger:              logger.With("component", "home_auto_session"),
+		store:               store,
+		status:              statusModel,
+		client:              client,
+		events:              make(chan meshtastic.Event, observationQueueDepth),
+		reevaluate:          make(chan struct{}, 1),
+		nodeFacts:           make(map[string]nodeFact),
+		trackedByLower:      make(map[string]string),
+		state:               StateDisabled,
+		summary:             "module disabled",
+		reconciliationState: reconciliationCleanIdle,
+		gpsStatus:           gpsStatusMissing,
+		gpsReason:           "waiting for tracked-node position updates",
 	}
 	_ = m.ApplyConfig(cfg)
 	return m
@@ -122,6 +183,8 @@ func (m *Module) Start(ctx context.Context) {
 	}
 	m.started = true
 	m.bootstrapFromStateLocked()
+	m.publishLocked()
+	m.persistLocked()
 	m.mu.Unlock()
 
 	go m.run(ctx)
@@ -134,10 +197,7 @@ func (m *Module) ObserveEvent(event meshtastic.Event) {
 		m.mu.Lock()
 		m.observedDropped++
 		m.lastError = "home auto session observation queue is full"
-		m.state = StateDegraded
-		m.summary = "event observation queue overflow"
-		m.persistLocked()
-		m.publishLocked()
+		m.markDegradedLocked(time.Now().UTC(), "event observation queue overflow", "manual action required after event queue overflow")
 		m.mu.Unlock()
 	}
 }
@@ -171,10 +231,17 @@ func (m *Module) Reevaluate() {
 func (m *Module) ResetDegraded() {
 	m.mu.Lock()
 	m.lastError = ""
+	m.blockedReason = ""
 	m.cooldownUntil = nil
+	m.decisionCooldownUntil = nil
 	m.stopCandidate = nil
 	m.startCandidate = nil
+	m.pendingAction = nil
+	m.consecutiveFailures = 0
 	m.summary = "degraded state reset"
+	if m.state == StateDegraded {
+		m.state = StateControlReady
+	}
 	m.persistLocked()
 	m.publishLocked()
 	m.mu.Unlock()
@@ -212,28 +279,140 @@ func (m *Module) run(ctx context.Context) {
 
 func (m *Module) bootstrapFromStateLocked() {
 	if m.store == nil {
+		if m.reconciliationState == "" {
+			m.reconciliationState = reconciliationCleanIdle
+		}
 		return
 	}
+
 	snap := m.store.Snapshot().HomeAutoSession
 	m.activeSessionID = strings.TrimSpace(snap.ActiveSessionID)
 	m.activeTriggerNode = strings.TrimSpace(snap.ActiveTriggerNode)
 	m.lastDecision = strings.TrimSpace(snap.LastDecisionReason)
 	m.lastStartDedupe = strings.TrimSpace(snap.LastStartDedupeKey)
 	m.lastStopDedupe = strings.TrimSpace(snap.LastStopDedupeKey)
+	m.lastSuccessfulAction = strings.TrimSpace(snap.LastSuccessfulAction)
+	m.lastSuccessfulActionAt = cloneTimePtr(snap.LastSuccessfulActionAt)
 	m.lastError = strings.TrimSpace(snap.LastError)
-	if snap.CooldownUntil != nil {
-		value := snap.CooldownUntil.UTC()
-		m.cooldownUntil = &value
-	}
+	m.blockedReason = strings.TrimSpace(snap.BlockedReason)
+	m.consecutiveFailures = snap.ConsecutiveFailures
+	m.cooldownUntil = cloneTimePtr(snap.CooldownUntil)
+	m.decisionCooldownUntil = cloneTimePtr(snap.DecisionCooldownUntil)
+	m.lastEventAt = cloneTimePtr(snap.LastEventAt)
 	m.observedDropped = snap.ObservedDropped
+	m.gpsStatus = strings.TrimSpace(snap.GPSStatus)
+	m.gpsReason = strings.TrimSpace(snap.GPSReason)
+	m.gpsNodeID = strings.TrimSpace(snap.GPSNodeID)
+	m.gpsUpdatedAt = cloneTimePtr(snap.GPSUpdatedAt)
+	m.gpsDistanceM = cloneFloat64Ptr(snap.GPSDistanceM)
+	m.reconciliationState = strings.TrimSpace(snap.ReconciliationState)
+
 	if strings.TrimSpace(snap.ModuleState) != "" {
 		m.state = ModuleState(strings.TrimSpace(snap.ModuleState))
 	}
-	if !m.cfg.StartupReconcile && m.activeSessionID != "" {
+
+	pendingActionCode := normalizePendingAction(strings.TrimSpace(snap.PendingAction))
+	if pendingActionCode != "" {
+		since := time.Now().UTC()
+		if snap.PendingSince != nil {
+			since = snap.PendingSince.UTC()
+		}
+		m.pendingAction = &pendingAction{
+			Action:    pendingActionCode,
+			NodeID:    strings.TrimSpace(snap.PendingTriggerNode),
+			Reason:    strings.TrimSpace(snap.PendingReason),
+			DedupeKey: strings.TrimSpace(snap.PendingDedupeKey),
+			Since:     since,
+		}
+	}
+
+	if !m.cfg.StartupReconcile {
+		if m.activeSessionID != "" || m.pendingAction != nil {
+			m.lastDecision = "startup reconcile disabled; cleared prior local session markers"
+		}
 		m.activeSessionID = ""
 		m.activeTriggerNode = ""
-		m.lastDecision = "startup reconcile disabled; cleared prior active local session marker"
+		m.pendingAction = nil
+		m.startCandidate = nil
+		m.stopCandidate = nil
+		m.reconciliationState = reconciliationStartupDisabled
+		m.blockedReason = ""
+		return
 	}
+
+	m.reconcileStartupLocked(time.Now().UTC())
+}
+
+func (m *Module) reconcileStartupLocked(now time.Time) {
+	if m.pendingAction != nil {
+		pending := *m.pendingAction
+		if strings.TrimSpace(pending.NodeID) == "" || strings.TrimSpace(pending.DedupeKey) == "" {
+			m.markStartupInconsistentLocked(now, "pending action state is incomplete")
+			return
+		}
+		if pending.Action == actionStart {
+			if pending.DedupeKey == m.lastStartDedupe {
+				m.pendingAction = nil
+				m.reconciliationState = reconciliationPendingStartResolved
+				m.lastDecision = "pending start action already completed before restart"
+			} else {
+				m.startCandidate = &transitionCandidate{
+					NodeID:    pending.NodeID,
+					At:        pending.Since,
+					Reason:    pending.Reason,
+					DedupeKey: pending.DedupeKey,
+				}
+				m.stopCandidate = nil
+				m.reconciliationState = reconciliationPendingStartRecovering
+				m.lastDecision = "recovering pending start action after restart"
+			}
+		} else {
+			if m.activeSessionID == "" || pending.DedupeKey == m.lastStopDedupe {
+				m.pendingAction = nil
+				m.reconciliationState = reconciliationPendingStopResolved
+				m.lastDecision = "pending stop action already resolved before restart"
+			} else {
+				m.stopCandidate = &transitionCandidate{
+					NodeID:    pending.NodeID,
+					At:        pending.Since,
+					Reason:    pending.Reason,
+					DedupeKey: pending.DedupeKey,
+				}
+				m.startCandidate = nil
+				m.reconciliationState = reconciliationPendingStopRecovering
+				m.lastDecision = "recovering pending stop action after restart"
+			}
+		}
+	}
+
+	if m.activeSessionID != "" {
+		if strings.TrimSpace(m.activeTriggerNode) == "" {
+			m.markStartupInconsistentLocked(now, "active session state is missing trigger node")
+			return
+		}
+		m.reconciliationState = reconciliationActiveRecovered
+		if m.summary == "" {
+			m.summary = "recovered active home auto session from local state"
+		}
+		m.state = StateActive
+		return
+	}
+
+	if m.activeSessionID == "" && strings.TrimSpace(m.activeTriggerNode) != "" {
+		m.markStartupInconsistentLocked(now, "trigger node persisted without active session")
+		return
+	}
+
+	m.reconciliationState = reconciliationCleanIdle
+	if m.lastDecision == "" {
+		m.lastDecision = "startup reconciliation complete"
+	}
+}
+
+func (m *Module) markStartupInconsistentLocked(now time.Time, reason string) {
+	m.reconciliationState = reconciliationInconsistentDegraded
+	m.lastError = strings.TrimSpace(reason)
+	m.markDegradedLocked(now, "local persisted state is inconsistent", "manual reset required before control actions")
 }
 
 func (m *Module) consumeEventLocked(event meshtastic.Event) {
@@ -248,23 +427,54 @@ func (m *Module) consumeEventLocked(event meshtastic.Event) {
 	if nodeID == "" {
 		return
 	}
-	if _, ok := m.trackedByLower[strings.ToLower(nodeID)]; !ok {
+	nodeKey := strings.ToLower(nodeID)
+	if _, ok := m.trackedByLower[nodeKey]; !ok {
 		return
 	}
 
 	now := eventTime(event)
-	fact := m.nodeFacts[strings.ToLower(nodeID)]
+	m.lastEventAt = cloneTime(now)
+
+	fact := m.nodeFacts[nodeKey]
 	fact.LastSeenAt = now
 
 	if event.Packet.Position == nil {
-		m.nodeFacts[strings.ToLower(nodeID)] = fact
+		m.setGPSStatusLocked(gpsStatusMissing, "waiting for tracked-node position updates", nodeID, nil, now)
+		m.nodeFacts[nodeKey] = fact
 		return
 	}
-	inside := pointInsideHome(cfg.Home, event.Packet.Position.Lat, event.Packet.Position.Lon)
+
+	lat := event.Packet.Position.Lat
+	lon := event.Packet.Position.Lon
+	if !coordinatesValid(lat, lon) {
+		m.setGPSStatusLocked(gpsStatusInvalid, "ignored invalid GPS coordinates from tracked node", nodeID, nil, now)
+		m.nodeFacts[nodeKey] = fact
+		return
+	}
+
+	if positionIsStale(now, stalePositionThreshold(cfg)) {
+		reason := fmt.Sprintf("position sample is stale (older than %s)", stalePositionThreshold(cfg).Round(time.Second))
+		m.setGPSStatusLocked(gpsStatusStale, reason, nodeID, nil, time.Now().UTC())
+		m.nodeFacts[nodeKey] = fact
+		return
+	}
+
+	distance := haversineMeters(cfg.Home.Lat, cfg.Home.Lon, lat, lon)
+	margin := geofenceBoundaryMargin(cfg.Home.RadiusM)
+	if math.Abs(distance-cfg.Home.RadiusM) <= margin {
+		reason := fmt.Sprintf("position is near boundary (±%.0fm uncertainty)", margin)
+		m.setGPSStatusLocked(gpsStatusBoundaryUncertain, reason, nodeID, &distance, now)
+		fact.LastLat = lat
+		fact.LastLon = lon
+		fact.LastDistanceM = distance
+		m.nodeFacts[nodeKey] = fact
+		return
+	}
+
+	inside := distance <= cfg.Home.RadiusM
 	if !inside {
 		fact.LastOutsideSeen = now
 	}
-
 	if fact.HasPosition {
 		if fact.InsideGeofence && !inside {
 			m.startCandidate = &transitionCandidate{
@@ -289,9 +499,25 @@ func (m *Module) consumeEventLocked(event meshtastic.Event) {
 
 	fact.HasPosition = true
 	fact.InsideGeofence = inside
-	fact.LastLat = event.Packet.Position.Lat
-	fact.LastLon = event.Packet.Position.Lon
-	m.nodeFacts[strings.ToLower(nodeID)] = fact
+	fact.LastLat = lat
+	fact.LastLon = lon
+	fact.LastDistanceM = distance
+	m.nodeFacts[nodeKey] = fact
+	m.setGPSStatusLocked(gpsStatusValid, "tracked node position is valid for geofence decisions", nodeID, &distance, now)
+}
+
+func (m *Module) setGPSStatusLocked(code, reason, nodeID string, distanceM *float64, at time.Time) {
+	m.gpsStatus = strings.TrimSpace(code)
+	m.gpsReason = strings.TrimSpace(reason)
+	m.gpsNodeID = strings.TrimSpace(nodeID)
+	if m.gpsNodeID == "" {
+		m.gpsNodeID = ""
+	}
+	if at.IsZero() {
+		at = time.Now().UTC()
+	}
+	m.gpsUpdatedAt = cloneTime(at)
+	m.gpsDistanceM = cloneFloat64Ptr(distanceM)
 }
 
 func (m *Module) evaluateLocked(ctx context.Context, now time.Time, trigger string) {
@@ -316,6 +542,16 @@ func (m *Module) evaluateLocked(ctx context.Context, now time.Time, trigger stri
 		return
 	}
 
+	if m.state == StateDegraded && strings.TrimSpace(m.blockedReason) != "" {
+		m.summary = "home auto session is degraded"
+		if m.lastDecision == "" {
+			m.lastDecision = "manual action required to recover control mode"
+		}
+		m.publishLocked()
+		m.persistLocked()
+		return
+	}
+
 	if m.cooldownUntil != nil && now.Before(m.cooldownUntil.UTC()) {
 		m.state = StateCooldown
 		m.summary = "cooldown after prior cloud/session error"
@@ -324,11 +560,28 @@ func (m *Module) evaluateLocked(ctx context.Context, now time.Time, trigger stri
 		m.persistLocked()
 		return
 	}
+	if m.decisionCooldownUntil != nil && now.Before(m.decisionCooldownUntil.UTC()) {
+		m.state = StateCooldown
+		m.summary = "stabilization cooldown after prior home-auto action"
+		m.lastDecision = "waiting for geofence stabilization window"
+		m.publishLocked()
+		m.persistLocked()
+		return
+	}
+
+	m.promotePendingActionLocked()
 
 	if m.activeSessionID != "" {
 		if m.stopCandidate == nil && m.shouldStopByIdleLocked(now, cfg) {
+			nodeID := m.activeTriggerNode
+			if strings.TrimSpace(nodeID) == "" {
+				nodeID = m.gpsNodeID
+			}
+			if strings.TrimSpace(nodeID) == "" {
+				nodeID = "unknown"
+			}
 			m.stopCandidate = &transitionCandidate{
-				NodeID: m.activeTriggerNode,
+				NodeID: nodeID,
 				At:     now,
 				Reason: "idle stop timeout elapsed without tracked-node updates",
 			}
@@ -384,15 +637,35 @@ func (m *Module) evaluateLocked(ctx context.Context, now time.Time, trigger stri
 
 	if mode == config.HomeAutoSessionModeControl {
 		m.state = StateControlReady
-		m.summary = "waiting for tracked-node geofence transition"
+		m.summary = readySummaryForGPS(m.gpsStatus, m.gpsReason, "waiting for tracked-node geofence transition")
 		m.lastDecision = "control mode ready"
 	} else {
 		m.state = StateObserveReady
-		m.summary = "waiting for tracked-node geofence transition"
+		m.summary = readySummaryForGPS(m.gpsStatus, m.gpsReason, "waiting for tracked-node geofence transition")
 		m.lastDecision = "observe mode ready"
 	}
 	m.publishLocked()
 	m.persistLocked()
+}
+
+func (m *Module) promotePendingActionLocked() {
+	if m.pendingAction == nil {
+		return
+	}
+	pending := *m.pendingAction
+	candidate := &transitionCandidate{
+		NodeID:    pending.NodeID,
+		At:        pending.Since,
+		Reason:    pending.Reason,
+		DedupeKey: pending.DedupeKey,
+	}
+	if pending.Action == actionStart {
+		m.startCandidate = candidate
+		m.stopCandidate = nil
+	} else if pending.Action == actionStop {
+		m.stopCandidate = candidate
+		m.startCandidate = nil
+	}
 }
 
 func (m *Module) attemptStartLocked(ctx context.Context, now time.Time, cfg config.HomeAutoSessionConfig, trigger string) {
@@ -402,10 +675,11 @@ func (m *Module) attemptStartLocked(ctx context.Context, now time.Time, cfg conf
 
 	candidate := *m.startCandidate
 	if candidate.DedupeKey == "" {
-		candidate.DedupeKey = dedupeKey("start", candidate.NodeID, candidate.At, candidate.Reason)
+		candidate.DedupeKey = dedupeKey(string(actionStart), candidate.NodeID, candidate.At, candidate.Reason)
 	}
 	if strings.TrimSpace(candidate.DedupeKey) == strings.TrimSpace(m.lastStartDedupe) {
 		m.startCandidate = nil
+		m.pendingAction = nil
 		m.state = StateControlReady
 		m.summary = "duplicate start decision suppressed"
 		m.lastDecision = "start dedupe key already executed"
@@ -413,7 +687,7 @@ func (m *Module) attemptStartLocked(ctx context.Context, now time.Time, cfg conf
 		m.persistLocked()
 		return
 	}
-	apiKey, startEndpoint, ok := m.resolveControlAuthLocked(cfg)
+	apiKey, startEndpoint, ok := m.resolveControlAuthLocked(cfg, actionStart)
 	if !ok {
 		m.state = StateControlReady
 		m.summary = "waiting for paired receiver credentials before control actions"
@@ -423,9 +697,17 @@ func (m *Module) attemptStartLocked(ctx context.Context, now time.Time, cfg conf
 		return
 	}
 	if m.client == nil {
-		m.markDegradedLocked(now, "home auto session cloud client is unavailable")
+		m.lastError = "home auto session cloud client is unavailable"
+		m.markDegradedLocked(now, "cloud session client is unavailable", "manual action required to recover control mode")
 		return
 	}
+
+	m.setPendingActionLocked(actionStart, candidate, now)
+	m.state = StateStartPending
+	m.summary = "executing start request"
+	m.lastDecision = fmt.Sprintf("starting session for node %s", candidate.NodeID)
+	m.publishLocked()
+	m.persistLocked()
 
 	name, notes := renderSessionText(cfg, candidate.NodeID)
 	request := cloudclient.HomeAutoSessionStartRequest{
@@ -446,17 +728,28 @@ func (m *Module) attemptStartLocked(ctx context.Context, now time.Time, cfg conf
 	defer cancel()
 	result, err := m.client.StartHomeAutoSession(callCtx, startEndpoint, apiKey, request)
 	if err != nil {
-		m.handleCloudErrorLocked(now, "start", err)
+		m.handleCloudErrorLocked(now, actionStart, err)
 		return
 	}
 
+	startedAt := now
+	if !result.StartedAt.IsZero() {
+		startedAt = result.StartedAt.UTC()
+	}
+	m.pendingAction = nil
 	m.startCandidate = nil
 	m.stopCandidate = nil
 	m.lastError = ""
+	m.blockedReason = ""
 	m.cooldownUntil = nil
+	m.consecutiveFailures = 0
 	m.lastStartDedupe = candidate.DedupeKey
 	m.activeSessionID = strings.TrimSpace(result.SessionID)
 	m.activeTriggerNode = candidate.NodeID
+	m.lastSuccessfulAction = string(actionStart)
+	m.lastSuccessfulActionAt = cloneTime(startedAt)
+	decisionCooldown := now.Add(decisionCooldownDuration(cfg))
+	m.decisionCooldownUntil = &decisionCooldown
 	m.state = StateActive
 	m.summary = "home auto session started"
 	m.lastDecision = fmt.Sprintf("session start executed via trigger %s", candidate.NodeID)
@@ -471,10 +764,11 @@ func (m *Module) attemptStopLocked(ctx context.Context, now time.Time, cfg confi
 	}
 	candidate := *m.stopCandidate
 	if candidate.DedupeKey == "" {
-		candidate.DedupeKey = dedupeKey("stop", candidate.NodeID, candidate.At, candidate.Reason)
+		candidate.DedupeKey = dedupeKey(string(actionStop), candidate.NodeID, candidate.At, candidate.Reason)
 	}
 	if strings.TrimSpace(candidate.DedupeKey) == strings.TrimSpace(m.lastStopDedupe) {
 		m.stopCandidate = nil
+		m.pendingAction = nil
 		m.state = StateControlReady
 		m.summary = "duplicate stop decision suppressed"
 		m.lastDecision = "stop dedupe key already executed"
@@ -482,7 +776,7 @@ func (m *Module) attemptStopLocked(ctx context.Context, now time.Time, cfg confi
 		m.persistLocked()
 		return
 	}
-	apiKey, stopEndpoint, ok := m.resolveControlAuthLocked(cfg)
+	apiKey, stopEndpoint, ok := m.resolveControlAuthLocked(cfg, actionStop)
 	if !ok {
 		m.state = StateControlReady
 		m.summary = "waiting for paired receiver credentials before control actions"
@@ -492,9 +786,17 @@ func (m *Module) attemptStopLocked(ctx context.Context, now time.Time, cfg confi
 		return
 	}
 	if m.client == nil {
-		m.markDegradedLocked(now, "home auto session cloud client is unavailable")
+		m.lastError = "home auto session cloud client is unavailable"
+		m.markDegradedLocked(now, "cloud session client is unavailable", "manual action required to recover control mode")
 		return
 	}
+
+	m.setPendingActionLocked(actionStop, candidate, now)
+	m.state = StateStopPending
+	m.summary = "executing stop request"
+	m.lastDecision = fmt.Sprintf("stopping session for node %s", candidate.NodeID)
+	m.publishLocked()
+	m.persistLocked()
 
 	request := cloudclient.HomeAutoSessionStopRequest{
 		SessionID:     m.activeSessionID,
@@ -505,28 +807,61 @@ func (m *Module) attemptStopLocked(ctx context.Context, now time.Time, cfg confi
 	}
 	callCtx, cancel := context.WithTimeout(ctx, controlCallTimeout)
 	defer cancel()
-	_, err := m.client.StopHomeAutoSession(callCtx, stopEndpoint, apiKey, request)
+	result, err := m.client.StopHomeAutoSession(callCtx, stopEndpoint, apiKey, request)
 	if err != nil {
-		m.handleCloudErrorLocked(now, "stop", err)
+		if stopAlreadyResolvedError(err) {
+			m.completeStopLocked(candidate, now, trigger, cloudclient.HomeAutoSessionStopResult{SessionID: m.activeSessionID, StoppedAt: now, Status: "already_stopped"})
+			return
+		}
+		m.handleCloudErrorLocked(now, actionStop, err)
 		return
 	}
 
+	m.completeStopLocked(candidate, now, trigger, result)
+}
+
+func (m *Module) completeStopLocked(candidate transitionCandidate, now time.Time, trigger string, result cloudclient.HomeAutoSessionStopResult) {
+	stoppedAt := now
+	if !result.StoppedAt.IsZero() {
+		stoppedAt = result.StoppedAt.UTC()
+	}
+	m.pendingAction = nil
 	m.stopCandidate = nil
 	m.startCandidate = nil
 	m.lastError = ""
+	m.blockedReason = ""
 	m.cooldownUntil = nil
+	m.consecutiveFailures = 0
 	m.lastStopDedupe = candidate.DedupeKey
 	m.activeSessionID = ""
 	m.activeTriggerNode = ""
+	m.lastSuccessfulAction = string(actionStop)
+	m.lastSuccessfulActionAt = cloneTime(stoppedAt)
+	decisionCooldown := now.Add(decisionCooldownDuration(m.cfg))
+	m.decisionCooldownUntil = &decisionCooldown
 	m.state = StateControlReady
 	m.summary = "home auto session stopped"
 	m.lastDecision = "session stop executed"
-	m.logger.Info("home auto session stopped", "trigger_node", candidate.NodeID, "trigger", trigger)
+	m.logger.Info("home auto session stopped", "trigger_node", candidate.NodeID, "trigger", trigger, "status", strings.TrimSpace(result.Status))
 	m.publishLocked()
 	m.persistLocked()
 }
 
-func (m *Module) resolveControlAuthLocked(cfg config.HomeAutoSessionConfig) (string, string, bool) {
+func (m *Module) setPendingActionLocked(action pendingActionKind, candidate transitionCandidate, now time.Time) {
+	since := candidate.At.UTC()
+	if since.IsZero() || since.After(now) {
+		since = now.UTC()
+	}
+	m.pendingAction = &pendingAction{
+		Action:    action,
+		NodeID:    strings.TrimSpace(candidate.NodeID),
+		Reason:    strings.TrimSpace(candidate.Reason),
+		DedupeKey: strings.TrimSpace(candidate.DedupeKey),
+		Since:     since,
+	}
+}
+
+func (m *Module) resolveControlAuthLocked(cfg config.HomeAutoSessionConfig, action pendingActionKind) (string, string, bool) {
 	if m.store == nil {
 		return "", "", false
 	}
@@ -538,16 +873,16 @@ func (m *Module) resolveControlAuthLocked(cfg config.HomeAutoSessionConfig) (str
 	if apiKey == "" {
 		return "", "", false
 	}
-	endpoint := strings.TrimSpace(cfg.Cloud.StartEndpoint)
-	if endpoint == "" {
-		endpoint = "/api/receiver/home-auto-session/start"
-	}
-	if m.stopCandidate != nil {
+	if action == actionStop {
 		stopEndpoint := strings.TrimSpace(cfg.Cloud.StopEndpoint)
 		if stopEndpoint == "" {
 			stopEndpoint = "/api/receiver/home-auto-session/stop"
 		}
 		return apiKey, stopEndpoint, true
+	}
+	endpoint := strings.TrimSpace(cfg.Cloud.StartEndpoint)
+	if endpoint == "" {
+		endpoint = "/api/receiver/home-auto-session/start"
 	}
 	return apiKey, endpoint, true
 }
@@ -557,35 +892,58 @@ func (m *Module) shouldStopByIdleLocked(now time.Time, cfg config.HomeAutoSessio
 		return false
 	}
 	fact, ok := m.nodeFacts[strings.ToLower(m.activeTriggerNode)]
-	if !ok || fact.LastSeenAt.IsZero() {
+	if ok && !fact.LastSeenAt.IsZero() {
+		return now.Sub(fact.LastSeenAt) >= cfg.IdleStopTimeout.Std()
+	}
+	if m.lastEventAt == nil {
 		return false
 	}
-	return now.Sub(fact.LastSeenAt) >= cfg.IdleStopTimeout.Std()
+	return now.Sub(m.lastEventAt.UTC()) >= cfg.IdleStopTimeout.Std()
 }
 
-func (m *Module) handleCloudErrorLocked(now time.Time, action string, err error) {
-	m.logger.Warn("home auto session cloud action failed", "action", action, "err", err)
+func (m *Module) handleCloudErrorLocked(now time.Time, action pendingActionKind, err error) {
+	actionName := string(action)
+	errText := strings.TrimSpace(err.Error())
+	if errText == "" {
+		errText = "cloud/session API error"
+	}
+	m.lastError = errText
+	m.consecutiveFailures++
+	m.logger.Warn("home auto session cloud action failed", "action", actionName, "err", err)
+
 	if cloudclient.IsRetryable(err) {
-		cooldown := now.Add(retryCooldown)
+		delay := retryDelay(m.consecutiveFailures)
+		cooldown := now.Add(delay)
 		m.cooldownUntil = &cooldown
+		m.blockedReason = ""
 		m.state = StateCooldown
 		m.summary = "cloud/session API unavailable, retrying after cooldown"
-		m.lastDecision = "temporary cloud/session error"
-		m.lastError = err.Error()
+		m.lastDecision = fmt.Sprintf("%s action retry scheduled after %s", actionName, delay.Round(time.Second))
 		m.publishLocked()
 		m.persistLocked()
 		return
 	}
-	m.markDegradedLocked(now, err.Error())
+
+	blocked := nonRetryableBlockedReason(action, err)
+	decision := fmt.Sprintf("%s action blocked by non-retryable cloud error", actionName)
+	m.markDegradedLocked(now, blocked, decision)
 }
 
-func (m *Module) markDegradedLocked(now time.Time, reason string) {
-	m.lastError = strings.TrimSpace(reason)
+func (m *Module) markDegradedLocked(now time.Time, blockedReason, decision string) {
+	m.blockedReason = strings.TrimSpace(blockedReason)
+	if m.blockedReason == "" {
+		m.blockedReason = "home auto session control path is blocked"
+	}
 	m.state = StateDegraded
 	m.summary = "home auto session is degraded"
-	m.lastDecision = "manual action required to recover control mode"
-	cooldown := now.Add(retryCooldown)
-	m.cooldownUntil = &cooldown
+	if strings.TrimSpace(decision) == "" {
+		decision = "manual action required to recover control mode"
+	}
+	m.lastDecision = strings.TrimSpace(decision)
+	if m.lastError == "" {
+		m.lastError = m.blockedReason
+	}
+	m.cooldownUntil = nil
 	m.publishLocked()
 	m.persistLocked()
 }
@@ -603,18 +961,64 @@ func (m *Module) persistLocked() {
 	lastStart := strings.TrimSpace(m.lastStartDedupe)
 	lastStop := strings.TrimSpace(m.lastStopDedupe)
 	cooldown := cloneTimePtr(m.cooldownUntil)
+	decisionCooldown := cloneTimePtr(m.decisionCooldownUntil)
+	lastSuccessAction := strings.TrimSpace(m.lastSuccessfulAction)
+	lastSuccessAt := cloneTimePtr(m.lastSuccessfulActionAt)
+	blockedReason := strings.TrimSpace(m.blockedReason)
+	reconciliation := strings.TrimSpace(m.reconciliationState)
+	if reconciliation == "" {
+		reconciliation = reconciliationCleanIdle
+	}
+	lastEventAt := cloneTimePtr(m.lastEventAt)
+	gpsStatus := strings.TrimSpace(m.gpsStatus)
+	gpsReason := strings.TrimSpace(m.gpsReason)
+	gpsNode := strings.TrimSpace(m.gpsNodeID)
+	gpsUpdatedAt := cloneTimePtr(m.gpsUpdatedAt)
+	gpsDistance := cloneFloat64Ptr(m.gpsDistanceM)
 	observedDropped := m.observedDropped
+	consecutiveFailures := m.consecutiveFailures
+
+	pendingActionCode := ""
+	pendingNode := ""
+	pendingReason := ""
+	pendingDedupe := ""
+	var pendingSince *time.Time
+	if m.pendingAction != nil {
+		pendingActionCode = string(m.pendingAction.Action)
+		pendingNode = strings.TrimSpace(m.pendingAction.NodeID)
+		pendingReason = strings.TrimSpace(m.pendingAction.Reason)
+		pendingDedupe = strings.TrimSpace(m.pendingAction.DedupeKey)
+		pendingSince = cloneTime(m.pendingAction.Since)
+	}
+
 	_ = m.store.Update(func(data *state.Data) {
 		data.HomeAutoSession.ModuleState = stateCode
+		data.HomeAutoSession.ReconciliationState = reconciliation
 		data.HomeAutoSession.ActiveSessionID = activeID
 		data.HomeAutoSession.ActiveTriggerNode = activeNode
+		data.HomeAutoSession.PendingAction = pendingActionCode
+		data.HomeAutoSession.PendingTriggerNode = pendingNode
+		data.HomeAutoSession.PendingReason = pendingReason
+		data.HomeAutoSession.PendingDedupeKey = pendingDedupe
+		data.HomeAutoSession.PendingSince = pendingSince
 		data.HomeAutoSession.LastDecisionReason = decision
 		data.HomeAutoSession.LastStartDedupeKey = lastStart
 		data.HomeAutoSession.LastStopDedupeKey = lastStop
+		data.HomeAutoSession.LastSuccessfulAction = lastSuccessAction
+		data.HomeAutoSession.LastSuccessfulActionAt = lastSuccessAt
 		data.HomeAutoSession.LastError = lastErr
-		data.HomeAutoSession.CooldownUntil = cooldown
-		data.HomeAutoSession.ObservedDropped = observedDropped
+		data.HomeAutoSession.BlockedReason = blockedReason
+		data.HomeAutoSession.ConsecutiveFailures = consecutiveFailures
 		data.HomeAutoSession.LastDecisionAt = cloneTime(now)
+		data.HomeAutoSession.LastEventAt = lastEventAt
+		data.HomeAutoSession.CooldownUntil = cooldown
+		data.HomeAutoSession.DecisionCooldownUntil = decisionCooldown
+		data.HomeAutoSession.GPSStatus = gpsStatus
+		data.HomeAutoSession.GPSReason = gpsReason
+		data.HomeAutoSession.GPSNodeID = gpsNode
+		data.HomeAutoSession.GPSUpdatedAt = gpsUpdatedAt
+		data.HomeAutoSession.GPSDistanceM = gpsDistance
+		data.HomeAutoSession.ObservedDropped = observedDropped
 		if !now.IsZero() {
 			data.HomeAutoSession.UpdatedAt = now
 		}
@@ -631,19 +1035,41 @@ func (m *Module) publishLocked() {
 	if summary == "" {
 		summary = "home auto session status unavailable"
 	}
+
+	pendingActionCode := ""
+	var pendingSince *time.Time
+	if m.pendingAction != nil {
+		pendingActionCode = string(m.pendingAction.Action)
+		pendingSince = cloneTime(m.pendingAction.Since)
+	}
+
 	m.status.SetHomeAutoSession(status.HomeAutoSessionSnapshot{
-		Enabled:            m.cfg.Enabled,
-		Mode:               string(normalizeMode(m.cfg.Mode)),
-		State:              string(m.state),
-		Summary:            summary,
-		HomeSummary:        formatHomeSummary(m.cfg.Home),
-		TrackedNodeIDs:     tracked,
-		ActiveSessionID:    m.activeSessionID,
-		ActiveTriggerNode:  m.activeTriggerNode,
-		LastDecisionReason: m.lastDecision,
-		LastError:          m.lastError,
-		ObservedQueueDepth: len(m.events),
-		ObservedDropped:    m.observedDropped,
+		Enabled:               m.cfg.Enabled,
+		Mode:                  string(normalizeMode(m.cfg.Mode)),
+		State:                 string(m.state),
+		Summary:               summary,
+		HomeSummary:           formatHomeSummary(m.cfg.Home),
+		TrackedNodeIDs:        tracked,
+		ReconciliationState:   m.reconciliationState,
+		PendingAction:         pendingActionCode,
+		PendingSince:          pendingSince,
+		ActiveSessionID:       m.activeSessionID,
+		ActiveTriggerNode:     m.activeTriggerNode,
+		LastDecisionReason:    m.lastDecision,
+		LastError:             m.lastError,
+		LastSuccessfulAction:  m.lastSuccessfulAction,
+		LastSuccessfulAt:      cloneTimePtr(m.lastSuccessfulActionAt),
+		BlockedReason:         m.blockedReason,
+		ConsecutiveFailures:   m.consecutiveFailures,
+		CooldownUntil:         cloneTimePtr(m.cooldownUntil),
+		DecisionCooldownUntil: cloneTimePtr(m.decisionCooldownUntil),
+		GPSStatus:             m.gpsStatus,
+		GPSReason:             m.gpsReason,
+		GPSNodeID:             m.gpsNodeID,
+		GPSUpdatedAt:          cloneTimePtr(m.gpsUpdatedAt),
+		GPSDistanceM:          cloneFloat64Ptr(m.gpsDistanceM),
+		ObservedQueueDepth:    len(m.events),
+		ObservedDropped:       m.observedDropped,
 	})
 	m.status.SetComponent("home_auto_session", string(m.state), summary)
 }
@@ -680,6 +1106,17 @@ func normalizeMode(mode config.HomeAutoSessionMode) config.HomeAutoSessionMode {
 		return config.HomeAutoSessionModeControl
 	default:
 		return config.HomeAutoSessionModeOff
+	}
+}
+
+func normalizePendingAction(value string) pendingActionKind {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case string(actionStart):
+		return actionStart
+	case string(actionStop):
+		return actionStop
+	default:
+		return ""
 	}
 }
 
@@ -727,8 +1164,123 @@ func renderTemplateText(templateText, nodeID string) string {
 	return strings.TrimSpace(value)
 }
 
-func pointInsideHome(home config.HomeGeofenceConfig, lat, lon float64) bool {
-	return haversineMeters(home.Lat, home.Lon, lat, lon) <= home.RadiusM
+func coordinatesValid(lat, lon float64) bool {
+	return lat >= -90 && lat <= 90 && lon >= -180 && lon <= 180
+}
+
+func positionIsStale(sampleTime time.Time, threshold time.Duration) bool {
+	if sampleTime.IsZero() {
+		return true
+	}
+	age := time.Since(sampleTime.UTC())
+	return age > threshold
+}
+
+func stalePositionThreshold(cfg config.HomeAutoSessionConfig) time.Duration {
+	threshold := cfg.IdleStopTimeout.Std() / 3
+	if threshold < gpsStaleFloor {
+		threshold = gpsStaleFloor
+	}
+	if threshold > gpsStaleCeiling {
+		threshold = gpsStaleCeiling
+	}
+	return threshold
+}
+
+func geofenceBoundaryMargin(radiusM float64) float64 {
+	margin := radiusM * boundaryMarginFraction
+	if margin < boundaryMarginFloorM {
+		margin = boundaryMarginFloorM
+	}
+	if margin > boundaryMarginCapM {
+		margin = boundaryMarginCapM
+	}
+	return margin
+}
+
+func decisionCooldownDuration(cfg config.HomeAutoSessionConfig) time.Duration {
+	duration := cfg.StartDebounce.Std() / 2
+	if stop := cfg.StopDebounce.Std() / 2; stop > duration {
+		duration = stop
+	}
+	if duration < decisionCooldownFloor {
+		duration = decisionCooldownFloor
+	}
+	if duration > decisionCooldownCeiling {
+		duration = decisionCooldownCeiling
+	}
+	return duration
+}
+
+func retryDelay(failures int) time.Duration {
+	if failures <= 1 {
+		return retryCooldown
+	}
+	delay := retryCooldown
+	for i := 1; i < failures && i < 4; i++ {
+		delay *= 2
+	}
+	if delay > retryCooldownMax {
+		return retryCooldownMax
+	}
+	return delay
+}
+
+func nonRetryableBlockedReason(action pendingActionKind, err error) string {
+	var apiErr *cloudclient.APIError
+	if errors.As(err, &apiErr) {
+		switch apiErr.StatusCode {
+		case 401, 403:
+			return "receiver credentials were rejected by cloud"
+		case 404:
+			if action == actionStop {
+				return "cloud session was not found during stop"
+			}
+			return "cloud session endpoint was not found"
+		case 409:
+			return "cloud reported conflicting session state"
+		case 400, 422:
+			return "cloud rejected Home Auto Session request"
+		default:
+			if text := strings.TrimSpace(apiErr.Message); text != "" {
+				return text
+			}
+		}
+	}
+	return "home auto session control request failed"
+}
+
+func stopAlreadyResolvedError(err error) bool {
+	var apiErr *cloudclient.APIError
+	if !errors.As(err, &apiErr) {
+		return false
+	}
+	if apiErr.StatusCode != 404 && apiErr.StatusCode != 409 {
+		return false
+	}
+	msg := strings.ToLower(strings.TrimSpace(apiErr.Message))
+	if msg == "" {
+		return apiErr.StatusCode == 404
+	}
+	if strings.Contains(msg, "not found") {
+		return true
+	}
+	if strings.Contains(msg, "already") && (strings.Contains(msg, "stopped") || strings.Contains(msg, "closed") || strings.Contains(msg, "ended")) {
+		return true
+	}
+	return false
+}
+
+func readySummaryForGPS(gpsStatus, gpsReason, fallback string) string {
+	switch strings.TrimSpace(gpsStatus) {
+	case gpsStatusMissing, gpsStatusInvalid, gpsStatusStale, gpsStatusBoundaryUncertain:
+		if strings.TrimSpace(gpsReason) != "" {
+			return gpsReason
+		}
+		return "waiting for valid tracked-node position updates"
+	default:
+		return fallback
+	}
 }
 
 func haversineMeters(lat1, lon1, lat2, lon2 float64) float64 {
@@ -780,5 +1332,13 @@ func cloneTimePtr(input *time.Time) *time.Time {
 		return nil
 	}
 	value := input.UTC()
+	return &value
+}
+
+func cloneFloat64Ptr(input *float64) *float64 {
+	if input == nil {
+		return nil
+	}
+	value := *input
 	return &value
 }

@@ -267,13 +267,20 @@ func doctorCommand(args []string) {
 			"recommended": snapshot.Update.RecommendedVersion,
 		},
 		"home_auto_session": map[string]any{
-			"enabled":             cfg.HomeAutoSession.Enabled,
-			"mode":                cfg.HomeAutoSession.Mode,
-			"state":               snapshot.HomeAutoSession.ModuleState,
-			"active_session_id":   snapshot.HomeAutoSession.ActiveSessionID,
-			"active_trigger_node": snapshot.HomeAutoSession.ActiveTriggerNode,
-			"last_decision":       snapshot.HomeAutoSession.LastDecisionReason,
-			"last_error":          snapshot.HomeAutoSession.LastError,
+			"enabled":                cfg.HomeAutoSession.Enabled,
+			"mode":                   cfg.HomeAutoSession.Mode,
+			"state":                  snapshot.HomeAutoSession.ModuleState,
+			"reconciliation_state":   snapshot.HomeAutoSession.ReconciliationState,
+			"pending_action":         snapshot.HomeAutoSession.PendingAction,
+			"active_session_id":      snapshot.HomeAutoSession.ActiveSessionID,
+			"active_trigger_node":    snapshot.HomeAutoSession.ActiveTriggerNode,
+			"last_decision":          snapshot.HomeAutoSession.LastDecisionReason,
+			"last_error":             snapshot.HomeAutoSession.LastError,
+			"last_successful_action": snapshot.HomeAutoSession.LastSuccessfulAction,
+			"blocked_reason":         snapshot.HomeAutoSession.BlockedReason,
+			"consecutive_failures":   snapshot.HomeAutoSession.ConsecutiveFailures,
+			"gps_status":             snapshot.HomeAutoSession.GPSStatus,
+			"gps_reason":             snapshot.HomeAutoSession.GPSReason,
 		},
 		"meshtastic_transport": cfg.Meshtastic.Transport,
 		"meshtastic_probe":     deviceProbe,
@@ -329,14 +336,26 @@ func doctorCommand(args []string) {
 		)
 	}
 	fmt.Printf(
-		"[INFO] home auto session: enabled=%t mode=%s state=%s active_session=%s\n",
+		"[INFO] home auto session: enabled=%t mode=%s state=%s reconcile=%s pending=%s active_session=%s\n",
 		cfg.HomeAutoSession.Enabled,
 		cfg.HomeAutoSession.Mode,
 		emptyFallback(snapshot.HomeAutoSession.ModuleState, "unknown"),
+		emptyFallback(snapshot.HomeAutoSession.ReconciliationState, "n/a"),
+		emptyFallback(snapshot.HomeAutoSession.PendingAction, "none"),
 		emptyFallback(snapshot.HomeAutoSession.ActiveSessionID, "none"),
 	)
 	if strings.TrimSpace(snapshot.HomeAutoSession.LastDecisionReason) != "" {
 		fmt.Printf("[INFO] home auto decision: %s\n", snapshot.HomeAutoSession.LastDecisionReason)
+	}
+	if strings.TrimSpace(snapshot.HomeAutoSession.GPSStatus) != "" {
+		fmt.Printf("[INFO] home auto gps: %s", snapshot.HomeAutoSession.GPSStatus)
+		if reason := strings.TrimSpace(snapshot.HomeAutoSession.GPSReason); reason != "" {
+			fmt.Printf(" (%s)", reason)
+		}
+		fmt.Println()
+	}
+	if strings.TrimSpace(snapshot.HomeAutoSession.BlockedReason) != "" {
+		fmt.Printf("[WARN] home auto blocked: %s\n", snapshot.HomeAutoSession.BlockedReason)
 	}
 	if strings.TrimSpace(snapshot.HomeAutoSession.LastError) != "" {
 		fmt.Printf("[WARN] home auto last error: %s\n", snapshot.HomeAutoSession.LastError)
@@ -486,13 +505,20 @@ func statusCommand(args []string) {
 			"recommended": snapshot.Update.RecommendedVersion,
 		},
 		"home_auto_session": map[string]any{
-			"enabled":             cfg.HomeAutoSession.Enabled,
-			"mode":                cfg.HomeAutoSession.Mode,
-			"state":               snapshot.HomeAutoSession.ModuleState,
-			"active_session_id":   snapshot.HomeAutoSession.ActiveSessionID,
-			"active_trigger_node": snapshot.HomeAutoSession.ActiveTriggerNode,
-			"last_decision":       snapshot.HomeAutoSession.LastDecisionReason,
-			"last_error":          snapshot.HomeAutoSession.LastError,
+			"enabled":                cfg.HomeAutoSession.Enabled,
+			"mode":                   cfg.HomeAutoSession.Mode,
+			"state":                  snapshot.HomeAutoSession.ModuleState,
+			"reconciliation_state":   snapshot.HomeAutoSession.ReconciliationState,
+			"pending_action":         snapshot.HomeAutoSession.PendingAction,
+			"active_session_id":      snapshot.HomeAutoSession.ActiveSessionID,
+			"active_trigger_node":    snapshot.HomeAutoSession.ActiveTriggerNode,
+			"last_decision":          snapshot.HomeAutoSession.LastDecisionReason,
+			"last_error":             snapshot.HomeAutoSession.LastError,
+			"last_successful_action": snapshot.HomeAutoSession.LastSuccessfulAction,
+			"blocked_reason":         snapshot.HomeAutoSession.BlockedReason,
+			"consecutive_failures":   snapshot.HomeAutoSession.ConsecutiveFailures,
+			"gps_status":             snapshot.HomeAutoSession.GPSStatus,
+			"gps_reason":             snapshot.HomeAutoSession.GPSReason,
 		},
 		"last_pairing_err":    snapshot.Pairing.LastError,
 		"failure_code":        finding.Code,
@@ -726,13 +752,20 @@ func printDoctorLoadFailure(jsonOutput bool, configPath string, statePath string
 		"cloud_site_label":      "",
 		"cloud_group_label":     "",
 		"home_auto_session": map[string]any{
-			"enabled":             false,
-			"mode":                "off",
-			"state":               "disabled",
-			"active_session_id":   "",
-			"active_trigger_node": "",
-			"last_decision":       "",
-			"last_error":          "",
+			"enabled":                false,
+			"mode":                   "off",
+			"state":                  "disabled",
+			"reconciliation_state":   "clean_idle",
+			"pending_action":         "",
+			"active_session_id":      "",
+			"active_trigger_node":    "",
+			"last_decision":          "",
+			"last_error":             "",
+			"last_successful_action": "",
+			"blocked_reason":         "",
+			"consecutive_failures":   0,
+			"gps_status":             "",
+			"gps_reason":             "",
 		},
 		"failure_code":       diagnostics.FailureLocalSchemaIncompat,
 		"failure_summary":    "Local config or state schema is incompatible with this runtime",
@@ -773,13 +806,20 @@ func summarizeLocalProbeForOutput(probe diagnostics.LocalStatusProbe) map[string
 	out["cloud_group_label"] = probe.Snapshot.CloudGroupLabel
 	out["update_status"] = probe.Snapshot.UpdateStatus
 	out["home_auto_session"] = map[string]any{
-		"enabled":             probe.Snapshot.HomeAutoSession.Enabled,
-		"mode":                probe.Snapshot.HomeAutoSession.Mode,
-		"state":               probe.Snapshot.HomeAutoSession.State,
-		"active_session_id":   probe.Snapshot.HomeAutoSession.ActiveSessionID,
-		"active_trigger_node": probe.Snapshot.HomeAutoSession.ActiveTriggerNode,
-		"last_decision":       probe.Snapshot.HomeAutoSession.LastDecisionReason,
-		"last_error":          probe.Snapshot.HomeAutoSession.LastError,
+		"enabled":                probe.Snapshot.HomeAutoSession.Enabled,
+		"mode":                   probe.Snapshot.HomeAutoSession.Mode,
+		"state":                  probe.Snapshot.HomeAutoSession.State,
+		"reconciliation_state":   probe.Snapshot.HomeAutoSession.ReconciliationState,
+		"pending_action":         probe.Snapshot.HomeAutoSession.PendingAction,
+		"active_session_id":      probe.Snapshot.HomeAutoSession.ActiveSessionID,
+		"active_trigger_node":    probe.Snapshot.HomeAutoSession.ActiveTriggerNode,
+		"last_decision":          probe.Snapshot.HomeAutoSession.LastDecisionReason,
+		"last_error":             probe.Snapshot.HomeAutoSession.LastError,
+		"last_successful_action": probe.Snapshot.HomeAutoSession.LastSuccessfulAction,
+		"blocked_reason":         probe.Snapshot.HomeAutoSession.BlockedReason,
+		"consecutive_failures":   probe.Snapshot.HomeAutoSession.ConsecutiveFailures,
+		"gps_status":             probe.Snapshot.HomeAutoSession.GPSStatus,
+		"gps_reason":             probe.Snapshot.HomeAutoSession.GPSReason,
 	}
 	out["ingest_queue_depth"] = probe.Snapshot.IngestQueueDepth
 	out["last_packet_ack"] = probe.Snapshot.LastPacketAck

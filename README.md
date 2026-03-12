@@ -41,7 +41,7 @@ For households/teams with multiple receivers, see
 
 Optional automation module:
 
-- [Embedded Home Auto Session (Milestone 1)](./docs/home-auto-session.md)
+- [Embedded Home Auto Session (Milestone 2)](./docs/home-auto-session.md)
 
 ## Local Attention States
 

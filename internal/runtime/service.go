@@ -646,9 +646,14 @@ func (s *Service) sendHeartbeat(ctx context.Context, snapshot state.Data, meshSn
 			"homeAutoSessionEnabled": updateSnap.HomeAutoSession.Enabled,
 			"homeAutoSessionMode":    updateSnap.HomeAutoSession.Mode,
 			"homeAutoSessionState":   updateSnap.HomeAutoSession.State,
+			"homeAutoReconciliation": updateSnap.HomeAutoSession.ReconciliationState,
+			"homeAutoPendingAction":  updateSnap.HomeAutoSession.PendingAction,
 			"homeAutoSessionSummary": updateSnap.HomeAutoSession.Summary,
 			"homeAutoDecision":       updateSnap.HomeAutoSession.LastDecisionReason,
 			"homeAutoLastError":      updateSnap.HomeAutoSession.LastError,
+			"homeAutoBlockedReason":  updateSnap.HomeAutoSession.BlockedReason,
+			"homeAutoGPSStatus":      updateSnap.HomeAutoSession.GPSStatus,
+			"homeAutoGPSReason":      updateSnap.HomeAutoSession.GPSReason,
 		},
 	})
 	if err != nil {

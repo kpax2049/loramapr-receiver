@@ -217,19 +217,38 @@ func TestHomeAutoSessionStatus(t *testing.T) {
 	t.Parallel()
 
 	model := New()
+	pendingSince := time.Date(2026, 3, 12, 12, 0, 0, 0, time.UTC)
+	lastSuccess := pendingSince.Add(-2 * time.Minute)
+	cooldownUntil := pendingSince.Add(30 * time.Second)
+	gpsAt := pendingSince.Add(-10 * time.Second)
+	gpsDistance := 182.5
 	model.SetHomeAutoSession(HomeAutoSessionSnapshot{
-		Enabled:            true,
-		Mode:               "observe",
-		State:              "start_pending",
-		Summary:            "waiting for start debounce",
-		HomeSummary:        "37.3349,-122.0090 radius 150m",
-		TrackedNodeIDs:     []string{"!nodeA", "!nodeB"},
-		ActiveSessionID:    "session-1",
-		ActiveTriggerNode:  "!nodeA",
-		LastDecisionReason: "inside->outside transition",
-		LastError:          "",
-		ObservedQueueDepth: 3,
-		ObservedDropped:    1,
+		Enabled:               true,
+		Mode:                  "observe",
+		State:                 "start_pending",
+		Summary:               "waiting for start debounce",
+		HomeSummary:           "37.3349,-122.0090 radius 150m",
+		TrackedNodeIDs:        []string{"!nodeA", "!nodeB"},
+		ReconciliationState:   "pending_start_recovering",
+		PendingAction:         "start",
+		PendingSince:          &pendingSince,
+		ActiveSessionID:       "session-1",
+		ActiveTriggerNode:     "!nodeA",
+		LastDecisionReason:    "inside->outside transition",
+		LastError:             "",
+		LastSuccessfulAction:  "start",
+		LastSuccessfulAt:      &lastSuccess,
+		BlockedReason:         "",
+		ConsecutiveFailures:   2,
+		CooldownUntil:         &cooldownUntil,
+		DecisionCooldownUntil: &cooldownUntil,
+		GPSStatus:             "valid",
+		GPSReason:             "tracked node position valid",
+		GPSNodeID:             "!nodeA",
+		GPSUpdatedAt:          &gpsAt,
+		GPSDistanceM:          &gpsDistance,
+		ObservedQueueDepth:    3,
+		ObservedDropped:       1,
 	})
 	snap := model.Snapshot()
 
@@ -242,13 +261,23 @@ func TestHomeAutoSessionStatus(t *testing.T) {
 	if snap.HomeAutoSession.State != "start_pending" {
 		t.Fatalf("unexpected home_auto_session state: %q", snap.HomeAutoSession.State)
 	}
+	if snap.HomeAutoSession.PendingAction != "start" {
+		t.Fatalf("unexpected home_auto_session pending action: %q", snap.HomeAutoSession.PendingAction)
+	}
+	if snap.HomeAutoSession.GPSDistanceM == nil {
+		t.Fatal("expected gps distance pointer")
+	}
 	if len(snap.HomeAutoSession.TrackedNodeIDs) != 2 {
 		t.Fatalf("unexpected tracked nodes: %#v", snap.HomeAutoSession.TrackedNodeIDs)
 	}
 
 	snap.HomeAutoSession.TrackedNodeIDs[0] = "tampered"
+	*snap.HomeAutoSession.GPSDistanceM = 1
 	snap2 := model.Snapshot()
 	if snap2.HomeAutoSession.TrackedNodeIDs[0] != "!nodeA" {
 		t.Fatalf("expected snapshot copy for tracked node IDs, got %#v", snap2.HomeAutoSession.TrackedNodeIDs)
+	}
+	if snap2.HomeAutoSession.GPSDistanceM == nil || *snap2.HomeAutoSession.GPSDistanceM != gpsDistance {
+		t.Fatalf("expected snapshot copy for home_auto_session GPSDistanceM, got %#v", snap2.HomeAutoSession.GPSDistanceM)
 	}
 }

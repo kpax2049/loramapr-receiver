@@ -151,7 +151,7 @@ Milestone 1 behavior assumptions:
 
 Current state schema:
 
-- `schema_version: 4`
+- `schema_version: 5`
 
 Top-level sections:
 
@@ -199,13 +199,30 @@ Top-level sections:
 ### Persisted Home Auto Session runtime state
 
 - `home_auto_session.module_state`
+- `home_auto_session.reconciliation_state`
 - `home_auto_session.active_session_id`
 - `home_auto_session.active_trigger_node_id`
+- `home_auto_session.pending_action`
+- `home_auto_session.pending_trigger_node_id`
+- `home_auto_session.pending_reason`
+- `home_auto_session.pending_dedupe_key`
+- `home_auto_session.pending_since`
 - `home_auto_session.last_decision_reason`
 - `home_auto_session.last_start_dedupe_key`
 - `home_auto_session.last_stop_dedupe_key`
+- `home_auto_session.last_successful_action`
+- `home_auto_session.last_successful_action_at`
 - `home_auto_session.last_error`
+- `home_auto_session.blocked_reason`
+- `home_auto_session.consecutive_failures`
+- `home_auto_session.last_event_at`
 - `home_auto_session.cooldown_until`
+- `home_auto_session.decision_cooldown_until`
+- `home_auto_session.gps_status`
+- `home_auto_session.gps_reason`
+- `home_auto_session.gps_node_id`
+- `home_auto_session.gps_updated_at`
+- `home_auto_session.gps_distance_m`
 - `home_auto_session.observed_dropped`
 
 ## Migration and Compatibility
@@ -221,6 +238,7 @@ Top-level sections:
 - Legacy pairing phase values are normalized during migration.
 - Schema `2 -> 3` migration adds install type/update defaults.
 - Schema `3 -> 4` migration adds persisted Home Auto Session runtime state.
+- Schema `4 -> 5` migration adds Home Auto Session reconciliation defaults.
 - State schema newer than supported runtime fails startup.
 
 ### Cloud config compatibility

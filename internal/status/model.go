@@ -30,19 +30,33 @@ type FailureEvent struct {
 }
 
 type HomeAutoSessionSnapshot struct {
-	Enabled            bool      `json:"enabled"`
-	Mode               string    `json:"mode,omitempty"`
-	State              string    `json:"state,omitempty"`
-	Summary            string    `json:"summary,omitempty"`
-	HomeSummary        string    `json:"home_summary,omitempty"`
-	TrackedNodeIDs     []string  `json:"tracked_node_ids,omitempty"`
-	ActiveSessionID    string    `json:"active_session_id,omitempty"`
-	ActiveTriggerNode  string    `json:"active_trigger_node_id,omitempty"`
-	LastDecisionReason string    `json:"last_decision_reason,omitempty"`
-	LastError          string    `json:"last_error,omitempty"`
-	ObservedQueueDepth int       `json:"observed_queue_depth,omitempty"`
-	ObservedDropped    int       `json:"observed_dropped,omitempty"`
-	UpdatedAt          time.Time `json:"updated_at,omitempty"`
+	Enabled               bool       `json:"enabled"`
+	Mode                  string     `json:"mode,omitempty"`
+	State                 string     `json:"state,omitempty"`
+	Summary               string     `json:"summary,omitempty"`
+	HomeSummary           string     `json:"home_summary,omitempty"`
+	TrackedNodeIDs        []string   `json:"tracked_node_ids,omitempty"`
+	ReconciliationState   string     `json:"reconciliation_state,omitempty"`
+	PendingAction         string     `json:"pending_action,omitempty"`
+	PendingSince          *time.Time `json:"pending_since,omitempty"`
+	ActiveSessionID       string     `json:"active_session_id,omitempty"`
+	ActiveTriggerNode     string     `json:"active_trigger_node_id,omitempty"`
+	LastDecisionReason    string     `json:"last_decision_reason,omitempty"`
+	LastError             string     `json:"last_error,omitempty"`
+	LastSuccessfulAction  string     `json:"last_successful_action,omitempty"`
+	LastSuccessfulAt      *time.Time `json:"last_successful_at,omitempty"`
+	BlockedReason         string     `json:"blocked_reason,omitempty"`
+	ConsecutiveFailures   int        `json:"consecutive_failures,omitempty"`
+	CooldownUntil         *time.Time `json:"cooldown_until,omitempty"`
+	DecisionCooldownUntil *time.Time `json:"decision_cooldown_until,omitempty"`
+	GPSStatus             string     `json:"gps_status,omitempty"`
+	GPSReason             string     `json:"gps_reason,omitempty"`
+	GPSNodeID             string     `json:"gps_node_id,omitempty"`
+	GPSUpdatedAt          *time.Time `json:"gps_updated_at,omitempty"`
+	GPSDistanceM          *float64   `json:"gps_distance_m,omitempty"`
+	ObservedQueueDepth    int        `json:"observed_queue_depth,omitempty"`
+	ObservedDropped       int        `json:"observed_dropped,omitempty"`
+	UpdatedAt             time.Time  `json:"updated_at,omitempty"`
 }
 
 type Snapshot struct {
@@ -137,6 +151,12 @@ func (m *Model) Snapshot() Snapshot {
 	out.AttentionUpdatedAt = cloneTimePtr(m.snap.AttentionUpdatedAt)
 	out.UpdateCheckedAt = cloneTimePtr(m.snap.UpdateCheckedAt)
 	out.HomeAutoSession.TrackedNodeIDs = append([]string(nil), m.snap.HomeAutoSession.TrackedNodeIDs...)
+	out.HomeAutoSession.PendingSince = cloneTimePtr(m.snap.HomeAutoSession.PendingSince)
+	out.HomeAutoSession.LastSuccessfulAt = cloneTimePtr(m.snap.HomeAutoSession.LastSuccessfulAt)
+	out.HomeAutoSession.CooldownUntil = cloneTimePtr(m.snap.HomeAutoSession.CooldownUntil)
+	out.HomeAutoSession.DecisionCooldownUntil = cloneTimePtr(m.snap.HomeAutoSession.DecisionCooldownUntil)
+	out.HomeAutoSession.GPSUpdatedAt = cloneTimePtr(m.snap.HomeAutoSession.GPSUpdatedAt)
+	out.HomeAutoSession.GPSDistanceM = cloneFloat64Ptr(m.snap.HomeAutoSession.GPSDistanceM)
 	return out
 }
 
@@ -324,19 +344,33 @@ func (m *Model) SetAttention(state, category, code, summary, hint string, action
 func (m *Model) SetHomeAutoSession(module HomeAutoSessionSnapshot) {
 	m.Update(func(s *Snapshot) {
 		s.HomeAutoSession = HomeAutoSessionSnapshot{
-			Enabled:            module.Enabled,
-			Mode:               normalize(module.Mode),
-			State:              normalize(module.State),
-			Summary:            normalize(module.Summary),
-			HomeSummary:        normalize(module.HomeSummary),
-			TrackedNodeIDs:     append([]string(nil), module.TrackedNodeIDs...),
-			ActiveSessionID:    normalize(module.ActiveSessionID),
-			ActiveTriggerNode:  normalize(module.ActiveTriggerNode),
-			LastDecisionReason: normalize(module.LastDecisionReason),
-			LastError:          normalize(module.LastError),
-			ObservedQueueDepth: module.ObservedQueueDepth,
-			ObservedDropped:    module.ObservedDropped,
-			UpdatedAt:          m.now().UTC(),
+			Enabled:               module.Enabled,
+			Mode:                  normalize(module.Mode),
+			State:                 normalize(module.State),
+			Summary:               normalize(module.Summary),
+			HomeSummary:           normalize(module.HomeSummary),
+			TrackedNodeIDs:        append([]string(nil), module.TrackedNodeIDs...),
+			ReconciliationState:   normalize(module.ReconciliationState),
+			PendingAction:         normalize(module.PendingAction),
+			PendingSince:          cloneTimePtr(module.PendingSince),
+			ActiveSessionID:       normalize(module.ActiveSessionID),
+			ActiveTriggerNode:     normalize(module.ActiveTriggerNode),
+			LastDecisionReason:    normalize(module.LastDecisionReason),
+			LastError:             normalize(module.LastError),
+			LastSuccessfulAction:  normalize(module.LastSuccessfulAction),
+			LastSuccessfulAt:      cloneTimePtr(module.LastSuccessfulAt),
+			BlockedReason:         normalize(module.BlockedReason),
+			ConsecutiveFailures:   module.ConsecutiveFailures,
+			CooldownUntil:         cloneTimePtr(module.CooldownUntil),
+			DecisionCooldownUntil: cloneTimePtr(module.DecisionCooldownUntil),
+			GPSStatus:             normalize(module.GPSStatus),
+			GPSReason:             normalize(module.GPSReason),
+			GPSNodeID:             normalize(module.GPSNodeID),
+			GPSUpdatedAt:          cloneTimePtr(module.GPSUpdatedAt),
+			GPSDistanceM:          cloneFloat64Ptr(module.GPSDistanceM),
+			ObservedQueueDepth:    module.ObservedQueueDepth,
+			ObservedDropped:       module.ObservedDropped,
+			UpdatedAt:             m.now().UTC(),
 		}
 	})
 }
@@ -350,5 +384,13 @@ func cloneTimePtr(input *time.Time) *time.Time {
 		return nil
 	}
 	value := input.UTC()
+	return &value
+}
+
+func cloneFloat64Ptr(input *float64) *float64 {
+	if input == nil {
+		return nil
+	}
+	value := *input
 	return &value
 }

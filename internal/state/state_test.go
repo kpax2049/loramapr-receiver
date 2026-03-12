@@ -31,6 +31,9 @@ func TestOpenInitializesDefaults(t *testing.T) {
 	if snapshot.Update.Status != "unknown" {
 		t.Fatalf("expected default update status unknown, got %q", snapshot.Update.Status)
 	}
+	if snapshot.HomeAutoSession.ReconciliationState != "clean_idle" {
+		t.Fatalf("expected default home_auto_session reconciliation clean_idle, got %q", snapshot.HomeAutoSession.ReconciliationState)
+	}
 }
 
 func TestUpdatePersistsAcrossRestart(t *testing.T) {
@@ -149,6 +152,9 @@ func TestOpenMigratesSchemaV2ToCurrent(t *testing.T) {
 	if snapshot.HomeAutoSession.ModuleState != "disabled" {
 		t.Fatalf("expected home_auto_session module_state disabled, got %q", snapshot.HomeAutoSession.ModuleState)
 	}
+	if snapshot.HomeAutoSession.ReconciliationState != "clean_idle" {
+		t.Fatalf("expected home_auto_session reconciliation_state clean_idle, got %q", snapshot.HomeAutoSession.ReconciliationState)
+	}
 }
 
 func TestOpenMigratesSchemaV3ToCurrent(t *testing.T) {
@@ -178,5 +184,8 @@ func TestOpenMigratesSchemaV3ToCurrent(t *testing.T) {
 	}
 	if snapshot.HomeAutoSession.ModuleState != "disabled" {
 		t.Fatalf("expected home_auto_session module_state disabled, got %q", snapshot.HomeAutoSession.ModuleState)
+	}
+	if snapshot.HomeAutoSession.ReconciliationState != "clean_idle" {
+		t.Fatalf("expected home_auto_session reconciliation_state clean_idle, got %q", snapshot.HomeAutoSession.ReconciliationState)
 	}
 }
