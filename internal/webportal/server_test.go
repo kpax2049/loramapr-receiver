@@ -592,6 +592,37 @@ func TestHomeAutoStateHintConflictBlocked(t *testing.T) {
 	}
 }
 
+func TestHomeAutoConfigHintCloudManaged(t *testing.T) {
+	t.Parallel()
+
+	snap := sampleSnapshot()
+	snap.HomeAutoSession.EffectiveConfigSource = "cloud_managed"
+	snap.HomeAutoSession.EffectiveConfigVer = "has-v2"
+	snap.HomeAutoSession.DesiredConfigEnabled = true
+	snap.HomeAutoSession.DesiredConfigMode = "control"
+
+	hint := homeAutoConfigHint(snap)
+	if !strings.Contains(strings.ToLower(hint), "cloud-managed") {
+		t.Fatalf("expected cloud-managed hint, got %q", hint)
+	}
+	if !strings.Contains(hint, "has-v2") {
+		t.Fatalf("expected config version in hint, got %q", hint)
+	}
+}
+
+func TestHomeAutoConfigHintInvalidCloudFallback(t *testing.T) {
+	t.Parallel()
+
+	snap := sampleSnapshot()
+	snap.HomeAutoSession.EffectiveConfigSource = "local_fallback"
+	snap.HomeAutoSession.LastConfigApplyResult = "cloud_config_invalid_local_fallback"
+
+	hint := homeAutoConfigHint(snap)
+	if !strings.Contains(strings.ToLower(hint), "invalid") {
+		t.Fatalf("expected invalid-cloud fallback hint, got %q", hint)
+	}
+}
+
 func newTestServer(t *testing.T) *Server {
 	t.Helper()
 	return New("127.0.0.1:0", staticStatusProvider{snapshot: sampleSnapshot()}, &recordingPairingSubmitter{}, nil)

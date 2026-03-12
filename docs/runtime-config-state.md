@@ -151,7 +151,7 @@ Milestone 1 behavior assumptions:
 
 Current state schema:
 
-- `schema_version: 6`
+- `schema_version: 7`
 
 Top-level sections:
 
@@ -202,6 +202,15 @@ Top-level sections:
 - `home_auto_session.control_state`
 - `home_auto_session.active_state_source`
 - `home_auto_session.reconciliation_state`
+- `home_auto_session.effective_config_source`
+- `home_auto_session.effective_config_version`
+- `home_auto_session.cloud_config_present`
+- `home_auto_session.last_fetched_config_version`
+- `home_auto_session.last_applied_config_version`
+- `home_auto_session.last_config_apply_result`
+- `home_auto_session.last_config_apply_error`
+- `home_auto_session.desired_config_enabled`
+- `home_auto_session.desired_config_mode`
 - `home_auto_session.active_session_id`
 - `home_auto_session.active_trigger_node_id`
 - `home_auto_session.pending_action`
@@ -245,6 +254,8 @@ Top-level sections:
 - Schema `3 -> 4` migration adds persisted Home Auto Session runtime state.
 - Schema `4 -> 5` migration adds Home Auto Session reconciliation defaults.
 - Schema `5 -> 6` migration adds Home Auto Session control/source defaults.
+- Schema `6 -> 7` migration adds Home Auto Session cloud-managed config source,
+  version, and apply tracking markers.
 - State schema newer than supported runtime fails startup.
 
 ### Cloud config compatibility

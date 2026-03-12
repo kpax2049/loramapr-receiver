@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -33,6 +34,16 @@ const (
 )
 
 var errLifecycleTransition = errors.New("receiver lifecycle transition")
+
+const (
+	homeAutoConfigApplyCloud             = "cloud_config_applied"
+	homeAutoConfigApplyCloudDisabled     = "cloud_config_disabled_feature"
+	homeAutoConfigApplyCloudInvalid      = "cloud_config_invalid_local_fallback"
+	homeAutoConfigApplyCloudMissing      = "cloud_config_missing_local_fallback"
+	homeAutoConfigApplyFetchFailed       = "cloud_config_fetch_failed_using_last_effective"
+	homeAutoConfigApplyLocalStartup      = "startup_local_fallback"
+	homeAutoConfigApplyLocalManualUpdate = "local_fallback_updated"
+)
 
 type CloudClient interface {
 	cloudclient.PairingClient
@@ -232,6 +243,7 @@ func New(cfg config.Config, logger *slog.Logger) (*Service, error) {
 		logger,
 		cloud,
 	)
+	svc.applyHomeAutoLocalFallbackConfig(homeAutoConfigApplyLocalStartup, "")
 	svc.container.Portal = webportal.New(cfg.Portal.BindAddress, svc, svc, logger.With("component", "webportal"))
 	svc.configureInitialReadiness(current.Pairing.Phase)
 	return svc, nil
@@ -337,11 +349,27 @@ func (s *Service) UpdateHomeAutoSessionConfig(_ context.Context, hasCfg config.H
 		next.LoadedFromConfig = path
 	}
 	s.container.Config = next
-	if s.container.HomeAutoSession != nil {
-		if err := s.container.HomeAutoSession.ApplyConfig(next.HomeAutoSession); err != nil {
-			return err
-		}
+	if s.container.HomeAutoSession == nil {
+		return nil
 	}
+
+	current := s.container.State.Snapshot().HomeAutoSession
+	if current.CloudConfigPresent && strings.TrimSpace(current.EffectiveConfigSource) == homeautosession.ConfigSourceCloudManaged {
+		s.container.HomeAutoSession.SetConfigApplyStatus(homeautosession.ConfigApplyStatus{
+			EffectiveSource:    homeautosession.ConfigSourceCloudManaged,
+			EffectiveVersion:   strings.TrimSpace(current.EffectiveConfigVersion),
+			CloudConfigPresent: true,
+			LastFetchedVersion: strings.TrimSpace(current.LastFetchedConfigVer),
+			LastAppliedVersion: strings.TrimSpace(current.LastAppliedConfigVer),
+			LastApplyResult:    "local_fallback_saved_cloud_managed_active",
+			LastApplyError:     "",
+			DesiredEnabled:     next.HomeAutoSession.Enabled,
+			DesiredMode:        string(next.HomeAutoSession.Mode),
+		})
+		return nil
+	}
+
+	s.applyHomeAutoLocalFallbackConfig(homeAutoConfigApplyLocalManualUpdate, "")
 	return nil
 }
 
@@ -645,6 +673,11 @@ func (s *Service) sendHeartbeat(ctx context.Context, snapshot state.Data, meshSn
 			"operationalSummary":     ops.Summary,
 			"homeAutoSessionEnabled": updateSnap.HomeAutoSession.Enabled,
 			"homeAutoSessionMode":    updateSnap.HomeAutoSession.Mode,
+			"homeAutoConfigSource":   updateSnap.HomeAutoSession.EffectiveConfigSource,
+			"homeAutoConfigVersion":  updateSnap.HomeAutoSession.EffectiveConfigVer,
+			"homeAutoCloudConfig":    updateSnap.HomeAutoSession.CloudConfigPresent,
+			"homeAutoConfigResult":   updateSnap.HomeAutoSession.LastConfigApplyResult,
+			"homeAutoConfigError":    updateSnap.HomeAutoSession.LastConfigApplyError,
 			"homeAutoSessionState":   updateSnap.HomeAutoSession.State,
 			"homeAutoControlState":   updateSnap.HomeAutoSession.ControlState,
 			"homeAutoActiveSource":   updateSnap.HomeAutoSession.ActiveStateSource,
@@ -668,6 +701,7 @@ func (s *Service) sendHeartbeat(ctx context.Context, snapshot state.Data, meshSn
 			}
 			return errLifecycleTransition
 		}
+		s.markHomeAutoCloudConfigFetchFailed(snapshot, err)
 		s.steady.cloudReachable = false
 		s.container.Status.SetLastError(coarseCloudError(err))
 		return err
@@ -736,8 +770,235 @@ func (s *Service) sendHeartbeat(ctx context.Context, snapshot state.Data, meshSn
 		latest.Cloud.SiteLabel,
 		latest.Cloud.GroupLabel,
 	)
+	s.applyHomeAutoCloudConfigFromAck(ack)
 	s.steady.cloudReachable = true
 	return nil
+}
+
+func (s *Service) applyHomeAutoCloudConfigFromAck(ack cloudclient.ReceiverHeartbeatAck) {
+	if s.container.HomeAutoSession == nil {
+		return
+	}
+	if ack.HomeAutoSessionConfig == nil {
+		s.applyHomeAutoLocalFallbackConfig(homeAutoConfigApplyCloudMissing, "")
+		return
+	}
+
+	fallbackCfg := s.container.Config.HomeAutoSession
+	candidate, fetchedVersion, mapErr := mapManagedHomeAutoConfig(fallbackCfg, ack.HomeAutoSessionConfig)
+	if fetchedVersion == "" {
+		fetchedVersion = "cloud-unversioned"
+	}
+	if mapErr != nil {
+		s.applyHomeAutoLocalFallbackConfigWithStatus(homeautosession.ConfigApplyStatus{
+			EffectiveSource:    homeautosession.ConfigSourceLocalFallback,
+			EffectiveVersion:   localHomeAutoConfigVersion(fallbackCfg),
+			CloudConfigPresent: true,
+			LastFetchedVersion: fetchedVersion,
+			LastAppliedVersion: localHomeAutoConfigVersion(fallbackCfg),
+			LastApplyResult:    homeAutoConfigApplyCloudInvalid,
+			LastApplyError:     mapErr.Error(),
+			DesiredEnabled:     candidate.Enabled,
+			DesiredMode:        string(candidate.Mode),
+		})
+		return
+	}
+	if err := s.container.HomeAutoSession.ApplyConfig(candidate); err != nil {
+		s.applyHomeAutoLocalFallbackConfigWithStatus(homeautosession.ConfigApplyStatus{
+			EffectiveSource:    homeautosession.ConfigSourceLocalFallback,
+			EffectiveVersion:   localHomeAutoConfigVersion(fallbackCfg),
+			CloudConfigPresent: true,
+			LastFetchedVersion: fetchedVersion,
+			LastAppliedVersion: localHomeAutoConfigVersion(fallbackCfg),
+			LastApplyResult:    homeAutoConfigApplyCloudInvalid,
+			LastApplyError:     err.Error(),
+			DesiredEnabled:     candidate.Enabled,
+			DesiredMode:        string(candidate.Mode),
+		})
+		return
+	}
+
+	applyResult := homeAutoConfigApplyCloud
+	if !candidate.Enabled || candidate.Mode == config.HomeAutoSessionModeOff {
+		applyResult = homeAutoConfigApplyCloudDisabled
+	}
+	s.container.HomeAutoSession.SetConfigApplyStatus(homeautosession.ConfigApplyStatus{
+		EffectiveSource:    homeautosession.ConfigSourceCloudManaged,
+		EffectiveVersion:   fetchedVersion,
+		CloudConfigPresent: true,
+		LastFetchedVersion: fetchedVersion,
+		LastAppliedVersion: fetchedVersion,
+		LastApplyResult:    applyResult,
+		LastApplyError:     "",
+		DesiredEnabled:     candidate.Enabled,
+		DesiredMode:        string(candidate.Mode),
+	})
+}
+
+func (s *Service) markHomeAutoCloudConfigFetchFailed(snapshot state.Data, err error) {
+	if s.container.HomeAutoSession == nil {
+		return
+	}
+	home := snapshot.HomeAutoSession
+	effectiveSource := strings.TrimSpace(home.EffectiveConfigSource)
+	if effectiveSource == "" {
+		effectiveSource = homeautosession.ConfigSourceLocalFallback
+	}
+	effectiveVersion := strings.TrimSpace(home.EffectiveConfigVersion)
+	if effectiveVersion == "" && effectiveSource == homeautosession.ConfigSourceLocalFallback {
+		effectiveVersion = localHomeAutoConfigVersion(s.container.Config.HomeAutoSession)
+	}
+	lastApplied := strings.TrimSpace(home.LastAppliedConfigVer)
+	if lastApplied == "" {
+		lastApplied = effectiveVersion
+	}
+	desiredEnabled := s.container.Config.HomeAutoSession.Enabled
+	if home.DesiredConfigEnabled != nil {
+		desiredEnabled = *home.DesiredConfigEnabled
+	}
+	desiredMode := strings.TrimSpace(home.DesiredConfigMode)
+	if desiredMode == "" {
+		desiredMode = string(s.container.Config.HomeAutoSession.Mode)
+	}
+	s.container.HomeAutoSession.SetConfigApplyStatus(homeautosession.ConfigApplyStatus{
+		EffectiveSource:    effectiveSource,
+		EffectiveVersion:   effectiveVersion,
+		CloudConfigPresent: home.CloudConfigPresent,
+		LastFetchedVersion: strings.TrimSpace(home.LastFetchedConfigVer),
+		LastAppliedVersion: lastApplied,
+		LastApplyResult:    homeAutoConfigApplyFetchFailed,
+		LastApplyError:     coarseCloudError(err),
+		DesiredEnabled:     desiredEnabled,
+		DesiredMode:        desiredMode,
+	})
+}
+
+func (s *Service) applyHomeAutoLocalFallbackConfig(resultCode string, applyErr string) {
+	cfg := s.container.Config.HomeAutoSession
+	status := homeautosession.ConfigApplyStatus{
+		EffectiveSource:    homeautosession.ConfigSourceLocalFallback,
+		EffectiveVersion:   localHomeAutoConfigVersion(cfg),
+		CloudConfigPresent: false,
+		LastFetchedVersion: "",
+		LastAppliedVersion: localHomeAutoConfigVersion(cfg),
+		LastApplyResult:    resultCode,
+		LastApplyError:     strings.TrimSpace(applyErr),
+		DesiredEnabled:     cfg.Enabled,
+		DesiredMode:        string(cfg.Mode),
+	}
+	s.applyHomeAutoLocalFallbackConfigWithStatus(status)
+}
+
+func (s *Service) applyHomeAutoLocalFallbackConfigWithStatus(statusPayload homeautosession.ConfigApplyStatus) {
+	if s.container.HomeAutoSession == nil {
+		return
+	}
+	if err := s.container.HomeAutoSession.ApplyConfig(s.container.Config.HomeAutoSession); err != nil {
+		statusPayload.LastApplyError = err.Error()
+		if strings.TrimSpace(statusPayload.LastApplyResult) == "" {
+			statusPayload.LastApplyResult = homeAutoConfigApplyCloudInvalid
+		}
+	}
+	if strings.TrimSpace(statusPayload.LastApplyResult) == "" {
+		statusPayload.LastApplyResult = homeAutoConfigApplyLocalManualUpdate
+	}
+	s.container.HomeAutoSession.SetConfigApplyStatus(statusPayload)
+}
+
+func mapManagedHomeAutoConfig(base config.HomeAutoSessionConfig, managed *cloudclient.HomeAutoSessionManagedConfig) (config.HomeAutoSessionConfig, string, error) {
+	if managed == nil {
+		return base, "", errors.New("cloud config payload is missing")
+	}
+
+	cfg := base
+	version := strings.TrimSpace(managed.Version)
+	if managed.Enabled != nil {
+		cfg.Enabled = *managed.Enabled
+	}
+	if mode := strings.TrimSpace(managed.Mode); mode != "" {
+		cfg.Mode = config.HomeAutoSessionMode(strings.ToLower(mode))
+	}
+	if !cfg.Enabled {
+		cfg.Mode = config.HomeAutoSessionModeOff
+	}
+
+	cfg.Home = config.HomeGeofenceConfig{
+		Lat:     managed.Home.Lat,
+		Lon:     managed.Home.Lon,
+		RadiusM: managed.Home.RadiusM,
+	}
+	cfg.TrackedNodeIDs = append([]string(nil), managed.TrackedNodeIDs...)
+
+	if value := strings.TrimSpace(managed.StartDebounce); value != "" {
+		parsed, err := time.ParseDuration(value)
+		if err != nil {
+			return cfg, version, fmt.Errorf("cloud home_auto_session.start_debounce is invalid: %w", err)
+		}
+		cfg.StartDebounce = config.Duration(parsed)
+	}
+	if value := strings.TrimSpace(managed.StopDebounce); value != "" {
+		parsed, err := time.ParseDuration(value)
+		if err != nil {
+			return cfg, version, fmt.Errorf("cloud home_auto_session.stop_debounce is invalid: %w", err)
+		}
+		cfg.StopDebounce = config.Duration(parsed)
+	}
+	if value := strings.TrimSpace(managed.IdleStopTimeout); value != "" {
+		parsed, err := time.ParseDuration(value)
+		if err != nil {
+			return cfg, version, fmt.Errorf("cloud home_auto_session.idle_stop_timeout is invalid: %w", err)
+		}
+		cfg.IdleStopTimeout = config.Duration(parsed)
+	}
+	if managed.StartupReconcile != nil {
+		cfg.StartupReconcile = *managed.StartupReconcile
+	}
+	if value := strings.TrimSpace(managed.SessionNameTemplate); value != "" {
+		cfg.SessionNameTemplate = value
+	}
+	if value := strings.TrimSpace(managed.SessionNotesTemplate); value != "" {
+		cfg.SessionNotesTemplate = value
+	}
+	if value := strings.TrimSpace(managed.Cloud.StartEndpoint); value != "" {
+		cfg.Cloud.StartEndpoint = value
+	}
+	if value := strings.TrimSpace(managed.Cloud.StopEndpoint); value != "" {
+		cfg.Cloud.StopEndpoint = value
+	}
+
+	validator := config.Default()
+	validator.HomeAutoSession = cfg
+	if err := validator.Validate(); err != nil {
+		return cfg, version, fmt.Errorf("cloud home_auto_session config rejected: %w", err)
+	}
+	return cfg, version, nil
+}
+
+func localHomeAutoConfigVersion(cfg config.HomeAutoSessionConfig) string {
+	normalized := strings.TrimSpace(string(cfg.Mode))
+	if normalized == "" {
+		normalized = "off"
+	}
+	payload := map[string]any{
+		"enabled":              cfg.Enabled,
+		"mode":                 normalized,
+		"home":                 cfg.Home,
+		"trackedNodeIDs":       cfg.TrackedNodeIDs,
+		"startDebounce":        cfg.StartDebounce.Std().String(),
+		"stopDebounce":         cfg.StopDebounce.Std().String(),
+		"idleStopTimeout":      cfg.IdleStopTimeout.Std().String(),
+		"startupReconcile":     cfg.StartupReconcile,
+		"sessionNameTemplate":  cfg.SessionNameTemplate,
+		"sessionNotesTemplate": cfg.SessionNotesTemplate,
+		"cloudStartEndpoint":   cfg.Cloud.StartEndpoint,
+		"cloudStopEndpoint":    cfg.Cloud.StopEndpoint,
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return "local-default"
+	}
+	sum := sha256.Sum256(data)
+	return "local-" + hex.EncodeToString(sum[:8])
 }
 
 func (s *Service) drainIngestQueue(ctx context.Context, snapshot state.Data) error {

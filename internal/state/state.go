@@ -16,7 +16,7 @@ import (
 type PairingPhase string
 
 const (
-	CurrentSchemaVersion = 6
+	CurrentSchemaVersion = 7
 
 	PairingUnpaired           PairingPhase = "unpaired"
 	PairingCodeEntered        PairingPhase = "pairing_code_entered"
@@ -99,6 +99,15 @@ type HomeAutoSessionState struct {
 	ControlState           string     `json:"control_state,omitempty"`
 	ActiveStateSource      string     `json:"active_state_source,omitempty"`
 	ReconciliationState    string     `json:"reconciliation_state,omitempty"`
+	EffectiveConfigSource  string     `json:"effective_config_source,omitempty"`
+	EffectiveConfigVersion string     `json:"effective_config_version,omitempty"`
+	CloudConfigPresent     bool       `json:"cloud_config_present,omitempty"`
+	LastFetchedConfigVer   string     `json:"last_fetched_config_version,omitempty"`
+	LastAppliedConfigVer   string     `json:"last_applied_config_version,omitempty"`
+	LastConfigApplyResult  string     `json:"last_config_apply_result,omitempty"`
+	LastConfigApplyError   string     `json:"last_config_apply_error,omitempty"`
+	DesiredConfigEnabled   *bool      `json:"desired_config_enabled,omitempty"`
+	DesiredConfigMode      string     `json:"desired_config_mode,omitempty"`
 	ActiveSessionID        string     `json:"active_session_id,omitempty"`
 	ActiveTriggerNode      string     `json:"active_trigger_node_id,omitempty"`
 	PendingAction          string     `json:"pending_action,omitempty"`
@@ -274,6 +283,31 @@ func (s *Store) ensureDefaults() (bool, error) {
 		s.data.HomeAutoSession.ReconciliationState = "clean_idle"
 		changed = true
 	}
+	if strings.TrimSpace(s.data.HomeAutoSession.EffectiveConfigSource) == "" {
+		s.data.HomeAutoSession.EffectiveConfigSource = "local_fallback"
+		changed = true
+	}
+	if strings.TrimSpace(s.data.HomeAutoSession.EffectiveConfigVersion) == "" {
+		s.data.HomeAutoSession.EffectiveConfigVersion = "local-default"
+		changed = true
+	}
+	if strings.TrimSpace(s.data.HomeAutoSession.LastAppliedConfigVer) == "" {
+		s.data.HomeAutoSession.LastAppliedConfigVer = s.data.HomeAutoSession.EffectiveConfigVersion
+		changed = true
+	}
+	if strings.TrimSpace(s.data.HomeAutoSession.LastConfigApplyResult) == "" {
+		s.data.HomeAutoSession.LastConfigApplyResult = "local_config_applied"
+		changed = true
+	}
+	if s.data.HomeAutoSession.DesiredConfigEnabled == nil {
+		defaultValue := false
+		s.data.HomeAutoSession.DesiredConfigEnabled = &defaultValue
+		changed = true
+	}
+	if strings.TrimSpace(s.data.HomeAutoSession.DesiredConfigMode) == "" {
+		s.data.HomeAutoSession.DesiredConfigMode = "off"
+		changed = true
+	}
 	return changed, nil
 }
 
@@ -345,6 +379,35 @@ func (s *Store) migrate() (bool, error) {
 			changed = true
 		}
 		version = 6
+		changed = true
+	}
+	if version <= 6 {
+		if strings.TrimSpace(s.data.HomeAutoSession.EffectiveConfigSource) == "" {
+			s.data.HomeAutoSession.EffectiveConfigSource = "local_fallback"
+			changed = true
+		}
+		if strings.TrimSpace(s.data.HomeAutoSession.EffectiveConfigVersion) == "" {
+			s.data.HomeAutoSession.EffectiveConfigVersion = "local-default"
+			changed = true
+		}
+		if strings.TrimSpace(s.data.HomeAutoSession.LastAppliedConfigVer) == "" {
+			s.data.HomeAutoSession.LastAppliedConfigVer = s.data.HomeAutoSession.EffectiveConfigVersion
+			changed = true
+		}
+		if strings.TrimSpace(s.data.HomeAutoSession.LastConfigApplyResult) == "" {
+			s.data.HomeAutoSession.LastConfigApplyResult = "local_config_applied"
+			changed = true
+		}
+		if s.data.HomeAutoSession.DesiredConfigEnabled == nil {
+			defaultValue := false
+			s.data.HomeAutoSession.DesiredConfigEnabled = &defaultValue
+			changed = true
+		}
+		if strings.TrimSpace(s.data.HomeAutoSession.DesiredConfigMode) == "" {
+			s.data.HomeAutoSession.DesiredConfigMode = "off"
+			changed = true
+		}
+		version = 7
 		changed = true
 	}
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -32,6 +33,23 @@ const (
 	StateCooldown      ModuleState = "cooldown"
 	StateDegraded      ModuleState = "degraded"
 )
+
+const (
+	ConfigSourceLocalFallback = "local_fallback"
+	ConfigSourceCloudManaged  = "cloud_managed"
+)
+
+type ConfigApplyStatus struct {
+	EffectiveSource    string
+	EffectiveVersion   string
+	CloudConfigPresent bool
+	LastFetchedVersion string
+	LastAppliedVersion string
+	LastApplyResult    string
+	LastApplyError     string
+	DesiredEnabled     bool
+	DesiredMode        string
+}
 
 type pendingActionKind string
 
@@ -108,6 +126,7 @@ type Module struct {
 
 	mu             sync.RWMutex
 	cfg            config.HomeAutoSessionConfig
+	configHash     string
 	trackedByLower map[string]string
 	state          ModuleState
 	summary        string
@@ -117,6 +136,16 @@ type Module struct {
 	trackedNodeState    string
 	reconciliationState string
 	blockedReason       string
+
+	effectiveConfigSource  string
+	effectiveConfigVersion string
+	cloudConfigPresent     bool
+	lastFetchedConfigVer   string
+	lastAppliedConfigVer   string
+	lastConfigApplyResult  string
+	lastConfigApplyError   string
+	desiredConfigEnabled   bool
+	desiredConfigMode      string
 
 	activeSessionID   string
 	activeTriggerNode string
@@ -185,24 +214,33 @@ func New(cfg config.HomeAutoSessionConfig, store *state.Store, statusModel *stat
 		logger = slog.Default()
 	}
 	m := &Module{
-		logger:              logger.With("component", "home_auto_session"),
-		store:               store,
-		status:              statusModel,
-		client:              client,
-		events:              make(chan meshtastic.Event, observationQueueDepth),
-		reevaluate:          make(chan struct{}, 1),
-		nodeFacts:           make(map[string]nodeFact),
-		trackedByLower:      make(map[string]string),
-		state:               StateDisabled,
-		summary:             "module disabled",
-		controlState:        controlStateDisabled,
-		activeStateSource:   activeStateSourceNone,
-		trackedNodeState:    "no tracked node data observed yet",
-		reconciliationState: reconciliationCleanIdle,
-		gpsStatus:           gpsStatusMissing,
-		gpsReason:           "waiting for tracked-node position updates",
+		logger:                 logger.With("component", "home_auto_session"),
+		store:                  store,
+		status:                 statusModel,
+		client:                 client,
+		events:                 make(chan meshtastic.Event, observationQueueDepth),
+		reevaluate:             make(chan struct{}, 1),
+		nodeFacts:              make(map[string]nodeFact),
+		trackedByLower:         make(map[string]string),
+		state:                  StateDisabled,
+		summary:                "module disabled",
+		controlState:           controlStateDisabled,
+		activeStateSource:      activeStateSourceNone,
+		trackedNodeState:       "no tracked node data observed yet",
+		reconciliationState:    reconciliationCleanIdle,
+		gpsStatus:              gpsStatusMissing,
+		gpsReason:              "waiting for tracked-node position updates",
+		effectiveConfigSource:  ConfigSourceLocalFallback,
+		effectiveConfigVersion: "local-default",
+		lastAppliedConfigVer:   "local-default",
+		lastConfigApplyResult:  "local_config_applied",
+		desiredConfigEnabled:   cfg.Enabled,
+		desiredConfigMode:      string(normalizeMode(cfg.Mode)),
 	}
-	_ = m.ApplyConfig(cfg)
+	if err := m.ApplyConfig(cfg); err != nil {
+		m.lastConfigApplyError = err.Error()
+		m.lastConfigApplyResult = "local_config_invalid"
+	}
 	return m
 }
 
@@ -235,21 +273,42 @@ func (m *Module) ObserveEvent(event meshtastic.Event) {
 
 func (m *Module) ApplyConfig(cfg config.HomeAutoSessionConfig) error {
 	normalized := normalizeConfig(cfg)
+	if err := validateConfig(normalized); err != nil {
+		return err
+	}
+	hash := configHash(normalized)
 	m.mu.Lock()
+	if hash == m.configHash {
+		m.mu.Unlock()
+		return nil
+	}
 	m.cfg = normalized
+	m.configHash = hash
 	m.trackedByLower = make(map[string]string, len(normalized.TrackedNodeIDs))
 	for _, id := range normalized.TrackedNodeIDs {
 		m.trackedByLower[strings.ToLower(strings.TrimSpace(id))] = id
 	}
+	m.desiredConfigEnabled = normalized.Enabled
+	m.desiredConfigMode = string(normalizeMode(normalized.Mode))
 	m.publishLocked()
 	m.mu.Unlock()
-	return validateConfig(normalized)
+	return nil
 }
 
 func (m *Module) CurrentConfig() config.HomeAutoSessionConfig {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.cfg
+}
+
+func (m *Module) SetConfigApplyStatus(status ConfigApplyStatus) {
+	m.mu.Lock()
+	changed := m.setConfigApplyStatusLocked(status)
+	if changed {
+		m.publishLocked()
+		m.persistLocked()
+	}
+	m.mu.Unlock()
 }
 
 func (m *Module) Reevaluate() {
@@ -355,6 +414,32 @@ func (m *Module) bootstrapFromStateLocked() {
 	m.gpsUpdatedAt = cloneTimePtr(snap.GPSUpdatedAt)
 	m.gpsDistanceM = cloneFloat64Ptr(snap.GPSDistanceM)
 	m.reconciliationState = strings.TrimSpace(snap.ReconciliationState)
+	m.effectiveConfigSource = strings.TrimSpace(snap.EffectiveConfigSource)
+	if m.effectiveConfigSource == "" {
+		m.effectiveConfigSource = ConfigSourceLocalFallback
+	}
+	m.effectiveConfigVersion = strings.TrimSpace(snap.EffectiveConfigVersion)
+	if m.effectiveConfigVersion == "" {
+		m.effectiveConfigVersion = "local-default"
+	}
+	m.cloudConfigPresent = snap.CloudConfigPresent
+	m.lastFetchedConfigVer = strings.TrimSpace(snap.LastFetchedConfigVer)
+	m.lastAppliedConfigVer = strings.TrimSpace(snap.LastAppliedConfigVer)
+	if m.lastAppliedConfigVer == "" {
+		m.lastAppliedConfigVer = m.effectiveConfigVersion
+	}
+	m.lastConfigApplyResult = strings.TrimSpace(snap.LastConfigApplyResult)
+	if m.lastConfigApplyResult == "" {
+		m.lastConfigApplyResult = "local_config_applied"
+	}
+	m.lastConfigApplyError = strings.TrimSpace(snap.LastConfigApplyError)
+	if snap.DesiredConfigEnabled != nil {
+		m.desiredConfigEnabled = *snap.DesiredConfigEnabled
+	}
+	m.desiredConfigMode = strings.TrimSpace(snap.DesiredConfigMode)
+	if m.desiredConfigMode == "" {
+		m.desiredConfigMode = string(normalizeMode(m.cfg.Mode))
+	}
 
 	if strings.TrimSpace(snap.ModuleState) != "" {
 		m.state = ModuleState(strings.TrimSpace(snap.ModuleState))
@@ -990,6 +1075,76 @@ func (m *Module) setPendingActionLocked(action pendingActionKind, candidate tran
 	}
 }
 
+func (m *Module) setConfigApplyStatusLocked(next ConfigApplyStatus) bool {
+	source := strings.TrimSpace(next.EffectiveSource)
+	switch source {
+	case ConfigSourceCloudManaged, ConfigSourceLocalFallback:
+	default:
+		source = ConfigSourceLocalFallback
+	}
+
+	effectiveVersion := strings.TrimSpace(next.EffectiveVersion)
+	if effectiveVersion == "" && source == ConfigSourceLocalFallback {
+		effectiveVersion = "local-default"
+	}
+	lastFetched := strings.TrimSpace(next.LastFetchedVersion)
+	lastApplied := strings.TrimSpace(next.LastAppliedVersion)
+	if lastApplied == "" {
+		lastApplied = effectiveVersion
+	}
+	lastResult := strings.TrimSpace(next.LastApplyResult)
+	if lastResult == "" {
+		lastResult = "config_apply_unknown"
+	}
+	lastErr := strings.TrimSpace(next.LastApplyError)
+	desiredMode := strings.TrimSpace(next.DesiredMode)
+	if desiredMode == "" {
+		desiredMode = string(normalizeMode(m.cfg.Mode))
+	} else {
+		desiredMode = string(normalizeMode(config.HomeAutoSessionMode(desiredMode)))
+	}
+	desiredEnabled := next.DesiredEnabled
+
+	changed := false
+	if m.effectiveConfigSource != source {
+		m.effectiveConfigSource = source
+		changed = true
+	}
+	if m.effectiveConfigVersion != effectiveVersion {
+		m.effectiveConfigVersion = effectiveVersion
+		changed = true
+	}
+	if m.cloudConfigPresent != next.CloudConfigPresent {
+		m.cloudConfigPresent = next.CloudConfigPresent
+		changed = true
+	}
+	if m.lastFetchedConfigVer != lastFetched {
+		m.lastFetchedConfigVer = lastFetched
+		changed = true
+	}
+	if m.lastAppliedConfigVer != lastApplied {
+		m.lastAppliedConfigVer = lastApplied
+		changed = true
+	}
+	if m.lastConfigApplyResult != lastResult {
+		m.lastConfigApplyResult = lastResult
+		changed = true
+	}
+	if m.lastConfigApplyError != lastErr {
+		m.lastConfigApplyError = lastErr
+		changed = true
+	}
+	if m.desiredConfigEnabled != desiredEnabled {
+		m.desiredConfigEnabled = desiredEnabled
+		changed = true
+	}
+	if m.desiredConfigMode != desiredMode {
+		m.desiredConfigMode = desiredMode
+		changed = true
+	}
+	return changed
+}
+
 func (m *Module) resolveControlAuthLocked(cfg config.HomeAutoSessionConfig, action pendingActionKind) (string, string, bool) {
 	if m.store == nil {
 		return "", "", false
@@ -1176,6 +1331,30 @@ func (m *Module) persistLocked() {
 	if reconciliation == "" {
 		reconciliation = reconciliationCleanIdle
 	}
+	effectiveConfigSource := strings.TrimSpace(m.effectiveConfigSource)
+	if effectiveConfigSource == "" {
+		effectiveConfigSource = ConfigSourceLocalFallback
+	}
+	effectiveConfigVersion := strings.TrimSpace(m.effectiveConfigVersion)
+	if effectiveConfigVersion == "" && effectiveConfigSource == ConfigSourceLocalFallback {
+		effectiveConfigVersion = "local-default"
+	}
+	cloudConfigPresent := m.cloudConfigPresent
+	lastFetchedConfigVer := strings.TrimSpace(m.lastFetchedConfigVer)
+	lastAppliedConfigVer := strings.TrimSpace(m.lastAppliedConfigVer)
+	if lastAppliedConfigVer == "" {
+		lastAppliedConfigVer = effectiveConfigVersion
+	}
+	lastConfigApplyResult := strings.TrimSpace(m.lastConfigApplyResult)
+	if lastConfigApplyResult == "" {
+		lastConfigApplyResult = "config_apply_unknown"
+	}
+	lastConfigApplyError := strings.TrimSpace(m.lastConfigApplyError)
+	desiredConfigEnabled := m.desiredConfigEnabled
+	desiredConfigMode := strings.TrimSpace(m.desiredConfigMode)
+	if desiredConfigMode == "" {
+		desiredConfigMode = string(normalizeMode(m.cfg.Mode))
+	}
 	lastEventAt := cloneTimePtr(m.lastEventAt)
 	gpsStatus := strings.TrimSpace(m.gpsStatus)
 	gpsReason := strings.TrimSpace(m.gpsReason)
@@ -1203,6 +1382,15 @@ func (m *Module) persistLocked() {
 		data.HomeAutoSession.ControlState = controlState
 		data.HomeAutoSession.ActiveStateSource = activeStateSource
 		data.HomeAutoSession.ReconciliationState = reconciliation
+		data.HomeAutoSession.EffectiveConfigSource = effectiveConfigSource
+		data.HomeAutoSession.EffectiveConfigVersion = effectiveConfigVersion
+		data.HomeAutoSession.CloudConfigPresent = cloudConfigPresent
+		data.HomeAutoSession.LastFetchedConfigVer = lastFetchedConfigVer
+		data.HomeAutoSession.LastAppliedConfigVer = lastAppliedConfigVer
+		data.HomeAutoSession.LastConfigApplyResult = lastConfigApplyResult
+		data.HomeAutoSession.LastConfigApplyError = lastConfigApplyError
+		data.HomeAutoSession.DesiredConfigEnabled = &desiredConfigEnabled
+		data.HomeAutoSession.DesiredConfigMode = desiredConfigMode
 		data.HomeAutoSession.ActiveSessionID = activeID
 		data.HomeAutoSession.ActiveTriggerNode = activeNode
 		data.HomeAutoSession.PendingAction = pendingActionCode
@@ -1262,6 +1450,26 @@ func (m *Module) publishLocked() {
 	if activeSource == "" {
 		activeSource = activeStateSourceNone
 	}
+	effectiveConfigSource := strings.TrimSpace(m.effectiveConfigSource)
+	if effectiveConfigSource == "" {
+		effectiveConfigSource = ConfigSourceLocalFallback
+	}
+	effectiveConfigVersion := strings.TrimSpace(m.effectiveConfigVersion)
+	if effectiveConfigVersion == "" && effectiveConfigSource == ConfigSourceLocalFallback {
+		effectiveConfigVersion = "local-default"
+	}
+	lastAppliedConfigVer := strings.TrimSpace(m.lastAppliedConfigVer)
+	if lastAppliedConfigVer == "" {
+		lastAppliedConfigVer = effectiveConfigVersion
+	}
+	lastConfigApplyResult := strings.TrimSpace(m.lastConfigApplyResult)
+	if lastConfigApplyResult == "" {
+		lastConfigApplyResult = "config_apply_unknown"
+	}
+	desiredConfigMode := strings.TrimSpace(m.desiredConfigMode)
+	if desiredConfigMode == "" {
+		desiredConfigMode = string(normalizeMode(m.cfg.Mode))
+	}
 	trackedNodeState := strings.TrimSpace(m.trackedNodeState)
 	if trackedNodeState == "" {
 		trackedNodeState = "no tracked node data observed yet"
@@ -1270,6 +1478,15 @@ func (m *Module) publishLocked() {
 	m.status.SetHomeAutoSession(status.HomeAutoSessionSnapshot{
 		Enabled:               m.cfg.Enabled,
 		Mode:                  string(normalizeMode(m.cfg.Mode)),
+		EffectiveConfigSource: effectiveConfigSource,
+		EffectiveConfigVer:    effectiveConfigVersion,
+		CloudConfigPresent:    m.cloudConfigPresent,
+		LastFetchedConfigVer:  strings.TrimSpace(m.lastFetchedConfigVer),
+		LastAppliedConfigVer:  lastAppliedConfigVer,
+		LastConfigApplyResult: lastConfigApplyResult,
+		LastConfigApplyError:  strings.TrimSpace(m.lastConfigApplyError),
+		DesiredConfigEnabled:  m.desiredConfigEnabled,
+		DesiredConfigMode:     desiredConfigMode,
 		State:                 string(m.state),
 		ControlState:          controlState,
 		ActiveStateSource:     activeSource,
@@ -1326,6 +1543,15 @@ func normalizeConfig(cfg config.HomeAutoSessionConfig) config.HomeAutoSessionCon
 	cfg.Cloud.StartEndpoint = strings.TrimSpace(cfg.Cloud.StartEndpoint)
 	cfg.Cloud.StopEndpoint = strings.TrimSpace(cfg.Cloud.StopEndpoint)
 	return cfg
+}
+
+func configHash(cfg config.HomeAutoSessionConfig) string {
+	payload, err := json.Marshal(cfg)
+	if err != nil {
+		return ""
+	}
+	sum := sha256.Sum256(payload)
+	return hex.EncodeToString(sum[:12])
 }
 
 func normalizeMode(mode config.HomeAutoSessionMode) config.HomeAutoSessionMode {

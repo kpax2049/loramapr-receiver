@@ -20,7 +20,8 @@ Bind address is configured by `portal.bind_address`.
 1. **Welcome**: confirm current setup/attention state and next action
 2. **Pairing**: enter pairing code from LoRaMapr Cloud
 3. **Progress**: confirm cloud reachability, node connection, and forwarding
-4. **Home Auto Session**: optional local geofence-based session automation config
+4. **Home Auto Session**: optional embedded session automation with cloud-managed
+   policy visibility and local fallback config
 5. **Troubleshooting**: resolve common issues and run reset/re-pair when needed
 6. **Advanced**: build/install/identity metadata for support and diagnostics
 
@@ -101,6 +102,18 @@ Home Auto Session production control details now include:
 - last action and last action result
 - GPS validity state (`missing|invalid|stale|boundary_uncertain|valid`)
 - blocked reason for degraded mode
+- effective config source/version
+- cloud-config present state
+- last config apply result/error
+- desired config enabled/mode hints
+
+Cloud-managed config wording in portal covers:
+
+- using cloud-managed config
+- no cloud config available (local fallback active)
+- cloud config invalid and not applied
+- cloud config disables module
+- desired config differs from runtime due to blocked/degraded state
 
 Typical plain-language hints:
 

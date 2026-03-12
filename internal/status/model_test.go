@@ -225,6 +225,14 @@ func TestHomeAutoSessionStatus(t *testing.T) {
 	model.SetHomeAutoSession(HomeAutoSessionSnapshot{
 		Enabled:               true,
 		Mode:                  "observe",
+		EffectiveConfigSource: "cloud_managed",
+		EffectiveConfigVer:    "has-v1",
+		CloudConfigPresent:    true,
+		LastFetchedConfigVer:  "has-v1",
+		LastAppliedConfigVer:  "has-v1",
+		LastConfigApplyResult: "cloud_config_applied",
+		DesiredConfigEnabled:  true,
+		DesiredConfigMode:     "observe",
 		State:                 "start_pending",
 		ControlState:          "pending_start",
 		ActiveStateSource:     "local_recovered_unverified",
@@ -263,6 +271,15 @@ func TestHomeAutoSessionStatus(t *testing.T) {
 	}
 	if snap.HomeAutoSession.Mode != "observe" {
 		t.Fatalf("unexpected home_auto_session mode: %q", snap.HomeAutoSession.Mode)
+	}
+	if snap.HomeAutoSession.EffectiveConfigSource != "cloud_managed" {
+		t.Fatalf("unexpected home_auto_session effective config source: %q", snap.HomeAutoSession.EffectiveConfigSource)
+	}
+	if snap.HomeAutoSession.EffectiveConfigVer != "has-v1" {
+		t.Fatalf("unexpected home_auto_session effective config version: %q", snap.HomeAutoSession.EffectiveConfigVer)
+	}
+	if snap.HomeAutoSession.LastConfigApplyResult != "cloud_config_applied" {
+		t.Fatalf("unexpected home_auto_session config apply result: %q", snap.HomeAutoSession.LastConfigApplyResult)
 	}
 	if snap.HomeAutoSession.State != "start_pending" {
 		t.Fatalf("unexpected home_auto_session state: %q", snap.HomeAutoSession.State)

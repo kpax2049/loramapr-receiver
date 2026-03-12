@@ -222,7 +222,17 @@ func TestSendReceiverHeartbeat(t *testing.T) {
 				"groupLabel":"Outdoor",
 				"configVersion":"v1.3",
 				"lastHeartbeatAt":"2026-03-10T22:00:00Z",
-				"nodeCount":2
+				"nodeCount":2,
+				"homeAutoSessionConfig":{
+					"version":"has-v2",
+					"enabled":true,
+					"mode":"control",
+					"home":{"lat":37.3349,"lon":-122.0090,"radiusM":150},
+					"trackedNodeIds":["!node-1"],
+					"startDebounce":"30s",
+					"stopDebounce":"30s",
+					"idleStopTimeout":"15m"
+				}
 			}`), nil
 		})},
 	}
@@ -249,6 +259,15 @@ func TestSendReceiverHeartbeat(t *testing.T) {
 	}
 	if ack.ReceiverLabel != "Garage Receiver" || ack.SiteLabel != "Home" || ack.GroupLabel != "Outdoor" {
 		t.Fatalf("unexpected receiver/site/group labels: %q/%q/%q", ack.ReceiverLabel, ack.SiteLabel, ack.GroupLabel)
+	}
+	if ack.HomeAutoSessionConfig == nil {
+		t.Fatal("expected heartbeat ack homeAutoSessionConfig")
+	}
+	if ack.HomeAutoSessionConfig.Version != "has-v2" {
+		t.Fatalf("unexpected heartbeat ack home auto config version: %q", ack.HomeAutoSessionConfig.Version)
+	}
+	if ack.HomeAutoSessionConfig.Mode != "control" {
+		t.Fatalf("unexpected heartbeat ack home auto mode: %q", ack.HomeAutoSessionConfig.Mode)
 	}
 }
 

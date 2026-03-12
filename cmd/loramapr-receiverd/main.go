@@ -267,25 +267,34 @@ func doctorCommand(args []string) {
 			"recommended": snapshot.Update.RecommendedVersion,
 		},
 		"home_auto_session": map[string]any{
-			"enabled":                cfg.HomeAutoSession.Enabled,
-			"mode":                   cfg.HomeAutoSession.Mode,
-			"state":                  snapshot.HomeAutoSession.ModuleState,
-			"control_state":          snapshot.HomeAutoSession.ControlState,
-			"active_state_source":    snapshot.HomeAutoSession.ActiveStateSource,
-			"reconciliation_state":   snapshot.HomeAutoSession.ReconciliationState,
-			"pending_action":         snapshot.HomeAutoSession.PendingAction,
-			"active_session_id":      snapshot.HomeAutoSession.ActiveSessionID,
-			"active_trigger_node":    snapshot.HomeAutoSession.ActiveTriggerNode,
-			"last_decision":          snapshot.HomeAutoSession.LastDecisionReason,
-			"last_action":            snapshot.HomeAutoSession.LastAction,
-			"last_action_result":     snapshot.HomeAutoSession.LastActionResult,
-			"last_action_at":         snapshot.HomeAutoSession.LastActionAt,
-			"last_error":             snapshot.HomeAutoSession.LastError,
-			"last_successful_action": snapshot.HomeAutoSession.LastSuccessfulAction,
-			"blocked_reason":         snapshot.HomeAutoSession.BlockedReason,
-			"consecutive_failures":   snapshot.HomeAutoSession.ConsecutiveFailures,
-			"gps_status":             snapshot.HomeAutoSession.GPSStatus,
-			"gps_reason":             snapshot.HomeAutoSession.GPSReason,
+			"enabled":                     cfg.HomeAutoSession.Enabled,
+			"mode":                        cfg.HomeAutoSession.Mode,
+			"effective_config_source":     snapshot.HomeAutoSession.EffectiveConfigSource,
+			"effective_config_version":    snapshot.HomeAutoSession.EffectiveConfigVersion,
+			"cloud_config_present":        snapshot.HomeAutoSession.CloudConfigPresent,
+			"last_fetched_config_version": snapshot.HomeAutoSession.LastFetchedConfigVer,
+			"last_applied_config_version": snapshot.HomeAutoSession.LastAppliedConfigVer,
+			"last_config_apply_result":    snapshot.HomeAutoSession.LastConfigApplyResult,
+			"last_config_apply_error":     snapshot.HomeAutoSession.LastConfigApplyError,
+			"desired_config_enabled":      snapshot.HomeAutoSession.DesiredConfigEnabled,
+			"desired_config_mode":         snapshot.HomeAutoSession.DesiredConfigMode,
+			"state":                       snapshot.HomeAutoSession.ModuleState,
+			"control_state":               snapshot.HomeAutoSession.ControlState,
+			"active_state_source":         snapshot.HomeAutoSession.ActiveStateSource,
+			"reconciliation_state":        snapshot.HomeAutoSession.ReconciliationState,
+			"pending_action":              snapshot.HomeAutoSession.PendingAction,
+			"active_session_id":           snapshot.HomeAutoSession.ActiveSessionID,
+			"active_trigger_node":         snapshot.HomeAutoSession.ActiveTriggerNode,
+			"last_decision":               snapshot.HomeAutoSession.LastDecisionReason,
+			"last_action":                 snapshot.HomeAutoSession.LastAction,
+			"last_action_result":          snapshot.HomeAutoSession.LastActionResult,
+			"last_action_at":              snapshot.HomeAutoSession.LastActionAt,
+			"last_error":                  snapshot.HomeAutoSession.LastError,
+			"last_successful_action":      snapshot.HomeAutoSession.LastSuccessfulAction,
+			"blocked_reason":              snapshot.HomeAutoSession.BlockedReason,
+			"consecutive_failures":        snapshot.HomeAutoSession.ConsecutiveFailures,
+			"gps_status":                  snapshot.HomeAutoSession.GPSStatus,
+			"gps_reason":                  snapshot.HomeAutoSession.GPSReason,
 		},
 		"meshtastic_transport": cfg.Meshtastic.Transport,
 		"meshtastic_probe":     deviceProbe,
@@ -341,9 +350,11 @@ func doctorCommand(args []string) {
 		)
 	}
 	fmt.Printf(
-		"[INFO] home auto session: enabled=%t mode=%s state=%s control=%s source=%s reconcile=%s pending=%s active_session=%s\n",
+		"[INFO] home auto session: enabled=%t mode=%s config_source=%s config_version=%s state=%s control=%s source=%s reconcile=%s pending=%s active_session=%s\n",
 		cfg.HomeAutoSession.Enabled,
 		cfg.HomeAutoSession.Mode,
+		emptyFallback(snapshot.HomeAutoSession.EffectiveConfigSource, "local_fallback"),
+		emptyFallback(snapshot.HomeAutoSession.EffectiveConfigVersion, "local-default"),
 		emptyFallback(snapshot.HomeAutoSession.ModuleState, "unknown"),
 		emptyFallback(snapshot.HomeAutoSession.ControlState, "unknown"),
 		emptyFallback(snapshot.HomeAutoSession.ActiveStateSource, "none"),
@@ -351,6 +362,16 @@ func doctorCommand(args []string) {
 		emptyFallback(snapshot.HomeAutoSession.PendingAction, "none"),
 		emptyFallback(snapshot.HomeAutoSession.ActiveSessionID, "none"),
 	)
+	fmt.Printf(
+		"[INFO] home auto config apply: cloud_present=%t last_fetched=%s last_applied=%s result=%s\n",
+		snapshot.HomeAutoSession.CloudConfigPresent,
+		emptyFallback(snapshot.HomeAutoSession.LastFetchedConfigVer, "none"),
+		emptyFallback(snapshot.HomeAutoSession.LastAppliedConfigVer, "none"),
+		emptyFallback(snapshot.HomeAutoSession.LastConfigApplyResult, "none"),
+	)
+	if strings.TrimSpace(snapshot.HomeAutoSession.LastConfigApplyError) != "" {
+		fmt.Printf("[INFO] home auto config apply error: %s\n", snapshot.HomeAutoSession.LastConfigApplyError)
+	}
 	if strings.TrimSpace(snapshot.HomeAutoSession.LastDecisionReason) != "" {
 		fmt.Printf("[INFO] home auto decision: %s\n", snapshot.HomeAutoSession.LastDecisionReason)
 	}

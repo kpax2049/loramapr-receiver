@@ -90,7 +90,7 @@ These states are surfaced in portal, diagnostics outputs, and runtime status.
 ### Local State
 
 - `state.schema_version` is explicit.
-- Current supported state schema: `6`.
+- Current supported state schema: `7`.
 - Older state is migrated in-process.
 - Newer state schema than runtime support fails fast (downgrade protection).
 

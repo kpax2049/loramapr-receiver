@@ -13,7 +13,7 @@
 - [Service and Install Model](./service-install.md)
 - [Debian Package Lifecycle Behavior](./linux-package-lifecycle.md)
 - [Pairing and Bootstrap Lifecycle](./pairing-lifecycle.md)
-- [Embedded Home Auto Session (Milestone 3)](./home-auto-session.md)
+- [Embedded Home Auto Session (Milestone 4)](./home-auto-session.md)
 - [Multi-Receiver Identity and Guidance](./multi-receiver-identity.md)
 - [Receiver Lifecycle Management](./receiver-lifecycle.md)
 - [Steady-State Cloud Loop](./steady-state.md)
@@ -25,6 +25,7 @@
 - [Release Artifact Mapping](./release-artifacts.md)
 - [Publish Guide](./publish-guide.md)
 - [Release Notes Index](./release-notes.md)
+- [Release Notes v2.12.0](./release-notes-v2.12.0.md)
 - [Release Notes v2.11.0](./release-notes-v2.11.0.md)
 - [Release Notes v2.10.0](./release-notes-v2.10.0.md)
 - [Release Notes v2.9.0](./release-notes-v2.9.0.md)
@@ -41,6 +42,7 @@
 ## Architecture and Milestone Specs
 
 - [ADR 0001: Standalone Runtime](./adr/0001-standalone-receiver-runtime.md)
+- [v2.12.0 Plan: Embedded Home Auto Session (Milestone 4)](./ga-v2.12.0-home-auto-session-m4-cloud-managed-config.md)
 - [v2.11.0 Plan: Embedded Home Auto Session (Milestone 3)](./ga-v2.11.0-home-auto-session-m3-production-control.md)
 - [v2.10.0 Plan: Embedded Home Auto Session (Milestone 2)](./ga-v2.10.0-home-auto-session-m2-correctness-recovery.md)
 - [v2.9.0 Plan: Embedded Home Auto Session (Milestone 1)](./ga-v2.9.0-home-auto-session-m1.md)

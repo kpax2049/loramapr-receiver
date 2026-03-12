@@ -32,6 +32,15 @@ type FailureEvent struct {
 type HomeAutoSessionSnapshot struct {
 	Enabled               bool       `json:"enabled"`
 	Mode                  string     `json:"mode,omitempty"`
+	EffectiveConfigSource string     `json:"effective_config_source,omitempty"`
+	EffectiveConfigVer    string     `json:"effective_config_version,omitempty"`
+	CloudConfigPresent    bool       `json:"cloud_config_present,omitempty"`
+	LastFetchedConfigVer  string     `json:"last_fetched_config_version,omitempty"`
+	LastAppliedConfigVer  string     `json:"last_applied_config_version,omitempty"`
+	LastConfigApplyResult string     `json:"last_config_apply_result,omitempty"`
+	LastConfigApplyError  string     `json:"last_config_apply_error,omitempty"`
+	DesiredConfigEnabled  bool       `json:"desired_config_enabled"`
+	DesiredConfigMode     string     `json:"desired_config_mode,omitempty"`
 	State                 string     `json:"state,omitempty"`
 	ControlState          string     `json:"control_state,omitempty"`
 	ActiveStateSource     string     `json:"active_state_source,omitempty"`
@@ -353,6 +362,15 @@ func (m *Model) SetHomeAutoSession(module HomeAutoSessionSnapshot) {
 		s.HomeAutoSession = HomeAutoSessionSnapshot{
 			Enabled:               module.Enabled,
 			Mode:                  normalize(module.Mode),
+			EffectiveConfigSource: normalize(module.EffectiveConfigSource),
+			EffectiveConfigVer:    normalize(module.EffectiveConfigVer),
+			CloudConfigPresent:    module.CloudConfigPresent,
+			LastFetchedConfigVer:  normalize(module.LastFetchedConfigVer),
+			LastAppliedConfigVer:  normalize(module.LastAppliedConfigVer),
+			LastConfigApplyResult: normalize(module.LastConfigApplyResult),
+			LastConfigApplyError:  normalize(module.LastConfigApplyError),
+			DesiredConfigEnabled:  module.DesiredConfigEnabled,
+			DesiredConfigMode:     normalize(module.DesiredConfigMode),
 			State:                 normalize(module.State),
 			ControlState:          normalize(module.ControlState),
 			ActiveStateSource:     normalize(module.ActiveStateSource),

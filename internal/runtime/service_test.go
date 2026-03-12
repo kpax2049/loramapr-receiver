@@ -11,6 +11,7 @@ import (
 
 	"github.com/loramapr/loramapr-receiver/internal/cloudclient"
 	"github.com/loramapr/loramapr-receiver/internal/config"
+	"github.com/loramapr/loramapr-receiver/internal/homeautosession"
 	"github.com/loramapr/loramapr-receiver/internal/meshtastic"
 	"github.com/loramapr/loramapr-receiver/internal/pairing"
 	"github.com/loramapr/loramapr-receiver/internal/state"
@@ -140,6 +141,7 @@ type mockCloudClient struct {
 	heartbeatCalls int
 	lastHeartbeat  cloudclient.ReceiverHeartbeat
 	ackConfigVer   string
+	ackHomeAutoCfg *cloudclient.HomeAutoSessionManagedConfig
 
 	startHomeAutoCalls int
 	stopHomeAutoCalls  int
@@ -182,11 +184,12 @@ func (m *mockCloudClient) SendReceiverHeartbeat(
 		return cloudclient.ReceiverHeartbeatAck{}, m.heartbeatErr
 	}
 	return cloudclient.ReceiverHeartbeatAck{
-		ReceiverAgentID: "agent-1",
-		OwnerID:         "owner-1",
-		ConfigVersion:   m.ackConfigVer,
-		LastHeartbeatAt: time.Now().UTC(),
-		NodeCount:       len(heartbeat.ObservedNodeIDs),
+		ReceiverAgentID:       "agent-1",
+		OwnerID:               "owner-1",
+		ConfigVersion:         m.ackConfigVer,
+		LastHeartbeatAt:       time.Now().UTC(),
+		NodeCount:             len(heartbeat.ObservedNodeIDs),
+		HomeAutoSessionConfig: m.ackHomeAutoCfg,
 	}, nil
 }
 
@@ -215,6 +218,10 @@ func (m *mockCloudClient) StopHomeAutoSession(
 		StoppedAt: time.Now().UTC(),
 		Status:    "stopped",
 	}, nil
+}
+
+func boolPtr(v bool) *bool {
+	return &v
 }
 
 func TestShapeIngestPayload(t *testing.T) {
@@ -390,6 +397,15 @@ func TestSendHeartbeatPayloadShaping(t *testing.T) {
 	if _, ok := mockCloud.lastHeartbeat.Status["homeAutoControlState"]; !ok {
 		t.Fatalf("expected homeAutoControlState in heartbeat status payload")
 	}
+	if _, ok := mockCloud.lastHeartbeat.Status["homeAutoConfigSource"]; !ok {
+		t.Fatalf("expected homeAutoConfigSource in heartbeat status payload")
+	}
+	if _, ok := mockCloud.lastHeartbeat.Status["homeAutoConfigVersion"]; !ok {
+		t.Fatalf("expected homeAutoConfigVersion in heartbeat status payload")
+	}
+	if _, ok := mockCloud.lastHeartbeat.Status["homeAutoConfigResult"]; !ok {
+		t.Fatalf("expected homeAutoConfigResult in heartbeat status payload")
+	}
 	if _, ok := mockCloud.lastHeartbeat.Status["homeAutoActiveSource"]; !ok {
 		t.Fatalf("expected homeAutoActiveSource in heartbeat status payload")
 	}
@@ -401,6 +417,183 @@ func TestSendHeartbeatPayloadShaping(t *testing.T) {
 	}
 	if got := mockCloud.lastHeartbeat.Status["receiverLabel"]; got != "Garage Receiver" {
 		t.Fatalf("expected receiverLabel in heartbeat payload, got %#v", got)
+	}
+}
+
+func TestSendHeartbeatAppliesCloudManagedHomeAutoConfig(t *testing.T) {
+	t.Parallel()
+
+	cfg := config.Default()
+	statePath := filepath.Join(t.TempDir(), "receiver-state.json")
+	cfg.Paths.StateFile = statePath
+	store, err := state.Open(statePath)
+	if err != nil {
+		t.Fatalf("open state: %v", err)
+	}
+	if err := store.Update(func(data *state.Data) {
+		data.Pairing.Phase = state.PairingSteadyState
+		data.Cloud.IngestAPIKey = "secret"
+		data.Cloud.HeartbeatEndpoint = "/api/receiver/heartbeat"
+	}); err != nil {
+		t.Fatalf("seed state: %v", err)
+	}
+
+	statusModel := status.New()
+	mockCloud := &mockCloudClient{
+		ackHomeAutoCfg: &cloudclient.HomeAutoSessionManagedConfig{
+			Version:          "has-v1",
+			Enabled:          boolPtr(true),
+			Mode:             "observe",
+			Home:             cloudclient.HomeAutoSessionManagedGeofence{Lat: 37.3349, Lon: -122.0090, RadiusM: 150},
+			TrackedNodeIDs:   []string{"!nodeA"},
+			StartDebounce:    "30s",
+			StopDebounce:     "30s",
+			IdleStopTimeout:  "15m",
+			StartupReconcile: boolPtr(true),
+		},
+	}
+	module := homeautosession.New(cfg.HomeAutoSession, store, statusModel, slog.Default(), mockCloud)
+	svc := &Service{
+		container: &Container{
+			Config:          cfg,
+			Logger:          slog.Default(),
+			State:           store,
+			Status:          statusModel,
+			Cloud:           mockCloud,
+			HomeAutoSession: module,
+		},
+		mode: config.ModeService,
+	}
+
+	err = svc.sendHeartbeat(context.Background(), store.Snapshot(), meshtastic.Snapshot{State: meshtastic.StateConnected})
+	if err != nil {
+		t.Fatalf("sendHeartbeat returned error: %v", err)
+	}
+
+	snap := store.Snapshot()
+	if snap.HomeAutoSession.EffectiveConfigSource != homeautosession.ConfigSourceCloudManaged {
+		t.Fatalf("expected cloud managed config source, got %q", snap.HomeAutoSession.EffectiveConfigSource)
+	}
+	if snap.HomeAutoSession.EffectiveConfigVersion != "has-v1" {
+		t.Fatalf("expected effective config version has-v1, got %q", snap.HomeAutoSession.EffectiveConfigVersion)
+	}
+	if snap.HomeAutoSession.LastConfigApplyResult != homeAutoConfigApplyCloud {
+		t.Fatalf("expected config apply result %q, got %q", homeAutoConfigApplyCloud, snap.HomeAutoSession.LastConfigApplyResult)
+	}
+}
+
+func TestSendHeartbeatInvalidCloudManagedConfigFallsBackToLocal(t *testing.T) {
+	t.Parallel()
+
+	cfg := config.Default()
+	statePath := filepath.Join(t.TempDir(), "receiver-state.json")
+	cfg.Paths.StateFile = statePath
+	store, err := state.Open(statePath)
+	if err != nil {
+		t.Fatalf("open state: %v", err)
+	}
+	if err := store.Update(func(data *state.Data) {
+		data.Pairing.Phase = state.PairingSteadyState
+		data.Cloud.IngestAPIKey = "secret"
+		data.Cloud.HeartbeatEndpoint = "/api/receiver/heartbeat"
+	}); err != nil {
+		t.Fatalf("seed state: %v", err)
+	}
+
+	statusModel := status.New()
+	mockCloud := &mockCloudClient{
+		ackHomeAutoCfg: &cloudclient.HomeAutoSessionManagedConfig{
+			Version:         "has-v2",
+			Enabled:         boolPtr(true),
+			Mode:            "control",
+			Home:            cloudclient.HomeAutoSessionManagedGeofence{Lat: 37.3349, Lon: -122.0090, RadiusM: 150},
+			TrackedNodeIDs:  []string{"!nodeA"},
+			StartDebounce:   "not-a-duration",
+			StopDebounce:    "30s",
+			IdleStopTimeout: "15m",
+		},
+	}
+	module := homeautosession.New(cfg.HomeAutoSession, store, statusModel, slog.Default(), mockCloud)
+	svc := &Service{
+		container: &Container{
+			Config:          cfg,
+			Logger:          slog.Default(),
+			State:           store,
+			Status:          statusModel,
+			Cloud:           mockCloud,
+			HomeAutoSession: module,
+		},
+		mode: config.ModeService,
+	}
+
+	err = svc.sendHeartbeat(context.Background(), store.Snapshot(), meshtastic.Snapshot{State: meshtastic.StateConnected})
+	if err != nil {
+		t.Fatalf("sendHeartbeat returned error: %v", err)
+	}
+
+	snap := store.Snapshot()
+	if snap.HomeAutoSession.EffectiveConfigSource != homeautosession.ConfigSourceLocalFallback {
+		t.Fatalf("expected local fallback config source, got %q", snap.HomeAutoSession.EffectiveConfigSource)
+	}
+	if snap.HomeAutoSession.LastConfigApplyResult != homeAutoConfigApplyCloudInvalid {
+		t.Fatalf("expected config apply result %q, got %q", homeAutoConfigApplyCloudInvalid, snap.HomeAutoSession.LastConfigApplyResult)
+	}
+	if strings.TrimSpace(snap.HomeAutoSession.LastConfigApplyError) == "" {
+		t.Fatal("expected cloud config apply error to be persisted")
+	}
+}
+
+func TestSendHeartbeatCloudManagedConfigCanDisableModule(t *testing.T) {
+	t.Parallel()
+
+	cfg := config.Default()
+	statePath := filepath.Join(t.TempDir(), "receiver-state.json")
+	cfg.Paths.StateFile = statePath
+	store, err := state.Open(statePath)
+	if err != nil {
+		t.Fatalf("open state: %v", err)
+	}
+	if err := store.Update(func(data *state.Data) {
+		data.Pairing.Phase = state.PairingSteadyState
+		data.Cloud.IngestAPIKey = "secret"
+		data.Cloud.HeartbeatEndpoint = "/api/receiver/heartbeat"
+	}); err != nil {
+		t.Fatalf("seed state: %v", err)
+	}
+
+	statusModel := status.New()
+	mockCloud := &mockCloudClient{
+		ackHomeAutoCfg: &cloudclient.HomeAutoSessionManagedConfig{
+			Version: "has-v3",
+			Enabled: boolPtr(false),
+			Mode:    "off",
+			Home:    cloudclient.HomeAutoSessionManagedGeofence{Lat: 0, Lon: 0, RadiusM: 100},
+		},
+	}
+	module := homeautosession.New(cfg.HomeAutoSession, store, statusModel, slog.Default(), mockCloud)
+	svc := &Service{
+		container: &Container{
+			Config:          cfg,
+			Logger:          slog.Default(),
+			State:           store,
+			Status:          statusModel,
+			Cloud:           mockCloud,
+			HomeAutoSession: module,
+		},
+		mode: config.ModeService,
+	}
+
+	err = svc.sendHeartbeat(context.Background(), store.Snapshot(), meshtastic.Snapshot{State: meshtastic.StateConnected})
+	if err != nil {
+		t.Fatalf("sendHeartbeat returned error: %v", err)
+	}
+
+	snap := store.Snapshot()
+	if snap.HomeAutoSession.LastConfigApplyResult != homeAutoConfigApplyCloudDisabled {
+		t.Fatalf("expected config apply result %q, got %q", homeAutoConfigApplyCloudDisabled, snap.HomeAutoSession.LastConfigApplyResult)
+	}
+	if snap.HomeAutoSession.DesiredConfigEnabled == nil || *snap.HomeAutoSession.DesiredConfigEnabled {
+		t.Fatal("expected desired config enabled=false after cloud disable")
 	}
 }
 

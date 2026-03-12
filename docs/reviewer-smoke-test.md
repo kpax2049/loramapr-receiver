@@ -1,8 +1,8 @@
-# Reviewer Smoke Test Guide (v2.11.0 Home Auto Session M3)
+# Reviewer Smoke Test Guide (v2.12.0 Home Auto Session M4)
 
 This guide verifies both supported install paths, portal/diagnostics behavior,
-multi-receiver identity/coexistence guidance, and Home Auto Session Milestone 3
-production-control behavior.
+multi-receiver identity/coexistence guidance, and Home Auto Session Milestone 4
+cloud-managed config behavior.
 
 ## 1. Build and Baseline Tests
 
@@ -110,7 +110,7 @@ validate on at least one paired receiver:
 4. Verify paired-but-node-missing guidance includes multi-receiver attachment
    checks (node may be attached to another receiver).
 
-## 9. Home Auto Session Milestone 3
+## 9. Home Auto Session Milestone 4
 
 Use [Embedded Home Auto Session](./home-auto-session.md) and validate:
 
@@ -146,4 +146,15 @@ Use [Embedded Home Auto Session](./home-auto-session.md) and validate:
    - `status`
    - `support-snapshot`
    including: `control_state`, `active_state_source`, `last_action`,
-   `last_action_result`.
+   `last_action_result`, `effective_config_source`,
+   `effective_config_version`, and `last_config_apply_result`.
+
+12. Validate cloud-managed config visibility and fallback:
+    - no cloud config returned -> `local_fallback` with
+      `cloud_config_missing_local_fallback`
+    - valid cloud config returned -> `cloud_managed` with expected version
+    - cloud config disables module -> module shows disabled via cloud policy
+    - invalid cloud config returned -> local fallback stays active with
+      explicit config-apply error
+    - temporary cloud outage -> last effective config remains active with
+      `cloud_config_fetch_failed_using_last_effective`

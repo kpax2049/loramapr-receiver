@@ -8,6 +8,10 @@
   <div class="status-grid">
     <div class="status-chip"><div class="label">Enabled</div><div class="value">{{if .Snapshot.HomeAutoSession.Enabled}}yes{{else}}no{{end}}</div></div>
     <div class="status-chip"><div class="label">Mode</div><div class="value mono">{{if .Snapshot.HomeAutoSession.Mode}}{{.Snapshot.HomeAutoSession.Mode}}{{else}}off{{end}}</div></div>
+    <div class="status-chip"><div class="label">Config Source</div><div class="value mono">{{if .Snapshot.HomeAutoSession.EffectiveConfigSource}}{{.Snapshot.HomeAutoSession.EffectiveConfigSource}}{{else}}local_fallback{{end}}</div></div>
+    <div class="status-chip"><div class="label">Config Version</div><div class="value mono">{{if .Snapshot.HomeAutoSession.EffectiveConfigVer}}{{.Snapshot.HomeAutoSession.EffectiveConfigVer}}{{else}}local-default{{end}}</div></div>
+    <div class="status-chip"><div class="label">Cloud Config Present</div><div class="value">{{if .Snapshot.HomeAutoSession.CloudConfigPresent}}yes{{else}}no{{end}}</div></div>
+    <div class="status-chip"><div class="label">Config Apply Result</div><div class="value mono">{{if .Snapshot.HomeAutoSession.LastConfigApplyResult}}{{.Snapshot.HomeAutoSession.LastConfigApplyResult}}{{else}}unknown{{end}}</div></div>
     <div class="status-chip"><div class="label">Module State</div><div class="value mono">{{if .Snapshot.HomeAutoSession.State}}{{.Snapshot.HomeAutoSession.State}}{{else}}disabled{{end}}</div></div>
     <div class="status-chip"><div class="label">Control State</div><div class="value mono">{{if .Snapshot.HomeAutoSession.ControlState}}{{.Snapshot.HomeAutoSession.ControlState}}{{else}}disabled{{end}}</div></div>
     <div class="status-chip"><div class="label">Active State Source</div><div class="value mono">{{if .Snapshot.HomeAutoSession.ActiveStateSource}}{{.Snapshot.HomeAutoSession.ActiveStateSource}}{{else}}none{{end}}</div></div>
@@ -24,7 +28,9 @@
     <div class="status-chip"><div class="label">Observed Drops</div><div class="value">{{.Snapshot.HomeAutoSession.ObservedDropped}}</div></div>
   </div>
   <div class="hint {{if eq .Snapshot.HomeAutoSession.State "degraded"}}err{{else if eq .Snapshot.HomeAutoSession.State "misconfigured"}}warn{{else}}none{{end}}">
+    {{if .HomeAutoConfigHint}}<strong>Config:</strong> {{.HomeAutoConfigHint}}<br>{{end}}
     {{.HomeAutoStateHint}}
+    {{if .Snapshot.HomeAutoSession.LastConfigApplyError}}<br><strong>Config apply error:</strong> {{.Snapshot.HomeAutoSession.LastConfigApplyError}}{{end}}
     {{if .Snapshot.HomeAutoSession.LastActionAt}}<br><strong>Last action time:</strong> {{.Snapshot.HomeAutoSession.LastActionAt}}{{end}}
     {{if .Snapshot.HomeAutoSession.LastDecisionReason}}<br><strong>Last decision:</strong> {{.Snapshot.HomeAutoSession.LastDecisionReason}}{{end}}
     {{if .Snapshot.HomeAutoSession.GPSReason}}<br><strong>GPS reason:</strong> {{.Snapshot.HomeAutoSession.GPSReason}}{{end}}
@@ -35,6 +41,7 @@
 
 <section class="panel">
   <h2>Configuration</h2>
+  <p class="muted">This form edits local fallback configuration. If config source is <code>cloud_managed</code>, cloud policy remains authoritative until cloud removes or changes it.</p>
   <form method="post" action="/home-auto-session">
     <label>
       <input type="checkbox" name="enabled" value="1" {{if .HomeAutoConfig.Enabled}}checked{{end}}>

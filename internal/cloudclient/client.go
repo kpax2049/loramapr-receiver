@@ -65,15 +65,42 @@ type ReceiverHeartbeat struct {
 	Status          map[string]any
 }
 
+type HomeAutoSessionManagedGeofence struct {
+	Lat     float64 `json:"lat"`
+	Lon     float64 `json:"lon"`
+	RadiusM float64 `json:"radiusM"`
+}
+
+type HomeAutoSessionManagedCloudEndpoints struct {
+	StartEndpoint string `json:"startEndpoint,omitempty"`
+	StopEndpoint  string `json:"stopEndpoint,omitempty"`
+}
+
+type HomeAutoSessionManagedConfig struct {
+	Version              string                               `json:"version,omitempty"`
+	Enabled              *bool                                `json:"enabled,omitempty"`
+	Mode                 string                               `json:"mode,omitempty"`
+	Home                 HomeAutoSessionManagedGeofence       `json:"home"`
+	TrackedNodeIDs       []string                             `json:"trackedNodeIds,omitempty"`
+	StartDebounce        string                               `json:"startDebounce,omitempty"`
+	StopDebounce         string                               `json:"stopDebounce,omitempty"`
+	IdleStopTimeout      string                               `json:"idleStopTimeout,omitempty"`
+	StartupReconcile     *bool                                `json:"startupReconcile,omitempty"`
+	SessionNameTemplate  string                               `json:"sessionNameTemplate,omitempty"`
+	SessionNotesTemplate string                               `json:"sessionNotesTemplate,omitempty"`
+	Cloud                HomeAutoSessionManagedCloudEndpoints `json:"cloud,omitempty"`
+}
+
 type ReceiverHeartbeatAck struct {
-	ReceiverAgentID string
-	OwnerID         string
-	ReceiverLabel   string
-	SiteLabel       string
-	GroupLabel      string
-	ConfigVersion   string
-	LastHeartbeatAt time.Time
-	NodeCount       int
+	ReceiverAgentID       string
+	OwnerID               string
+	ReceiverLabel         string
+	SiteLabel             string
+	GroupLabel            string
+	ConfigVersion         string
+	LastHeartbeatAt       time.Time
+	NodeCount             int
+	HomeAutoSessionConfig *HomeAutoSessionManagedConfig
 }
 
 type HomeAutoSessionStartRequest struct {
@@ -324,14 +351,15 @@ func (c *HTTPClient) SendReceiverHeartbeat(
 	}
 
 	var response struct {
-		ReceiverAgentID string `json:"receiverAgentId"`
-		OwnerID         string `json:"ownerId"`
-		ReceiverLabel   string `json:"receiverLabel"`
-		SiteLabel       string `json:"siteLabel"`
-		GroupLabel      string `json:"groupLabel"`
-		ConfigVersion   string `json:"configVersion"`
-		LastHeartbeatAt string `json:"lastHeartbeatAt"`
-		NodeCount       int    `json:"nodeCount"`
+		ReceiverAgentID       string                        `json:"receiverAgentId"`
+		OwnerID               string                        `json:"ownerId"`
+		ReceiverLabel         string                        `json:"receiverLabel"`
+		SiteLabel             string                        `json:"siteLabel"`
+		GroupLabel            string                        `json:"groupLabel"`
+		ConfigVersion         string                        `json:"configVersion"`
+		LastHeartbeatAt       string                        `json:"lastHeartbeatAt"`
+		NodeCount             int                           `json:"nodeCount"`
+		HomeAutoSessionConfig *HomeAutoSessionManagedConfig `json:"homeAutoSessionConfig"`
 	}
 	err := c.postJSON(ctx, heartbeatEndpoint, request, map[string]string{
 		"x-api-key": trimmedKey,
@@ -346,14 +374,15 @@ func (c *HTTPClient) SendReceiverHeartbeat(
 	}
 
 	return ReceiverHeartbeatAck{
-		ReceiverAgentID: response.ReceiverAgentID,
-		OwnerID:         response.OwnerID,
-		ReceiverLabel:   strings.TrimSpace(response.ReceiverLabel),
-		SiteLabel:       strings.TrimSpace(response.SiteLabel),
-		GroupLabel:      strings.TrimSpace(response.GroupLabel),
-		ConfigVersion:   strings.TrimSpace(response.ConfigVersion),
-		LastHeartbeatAt: lastHeartbeatAt,
-		NodeCount:       response.NodeCount,
+		ReceiverAgentID:       response.ReceiverAgentID,
+		OwnerID:               response.OwnerID,
+		ReceiverLabel:         strings.TrimSpace(response.ReceiverLabel),
+		SiteLabel:             strings.TrimSpace(response.SiteLabel),
+		GroupLabel:            strings.TrimSpace(response.GroupLabel),
+		ConfigVersion:         strings.TrimSpace(response.ConfigVersion),
+		LastHeartbeatAt:       lastHeartbeatAt,
+		NodeCount:             response.NodeCount,
+		HomeAutoSessionConfig: response.HomeAutoSessionConfig,
 	}, nil
 }
 

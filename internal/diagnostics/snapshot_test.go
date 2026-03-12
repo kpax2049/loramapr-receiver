@@ -46,6 +46,15 @@ func TestSupportSnapshotRedactsSecrets(t *testing.T) {
 	data.HomeAutoSession.GPSReason = "position sample older than threshold"
 	data.HomeAutoSession.BlockedReason = "cloud session endpoint unavailable"
 	data.HomeAutoSession.ConsecutiveFailures = 2
+	data.HomeAutoSession.EffectiveConfigSource = "cloud_managed"
+	data.HomeAutoSession.EffectiveConfigVersion = "has-v1"
+	data.HomeAutoSession.CloudConfigPresent = true
+	data.HomeAutoSession.LastFetchedConfigVer = "has-v1"
+	data.HomeAutoSession.LastAppliedConfigVer = "has-v1"
+	data.HomeAutoSession.LastConfigApplyResult = "cloud_config_applied"
+	desiredEnabled := true
+	data.HomeAutoSession.DesiredConfigEnabled = &desiredEnabled
+	data.HomeAutoSession.DesiredConfigMode = "observe"
 
 	snapshot := CollectSupportSnapshot(cfg, data, Finding{Code: FailureActivationFailed}, CollectOptions{
 		Now: func() time.Time { return now },
@@ -131,6 +140,12 @@ func TestSupportSnapshotRedactsSecrets(t *testing.T) {
 	}
 	if snapshot.HomeAutoSession.GPSStatus == "" {
 		t.Fatal("expected home auto gps status in support snapshot")
+	}
+	if snapshot.HomeAutoSession.EffectiveConfigSource != "cloud_managed" {
+		t.Fatalf("expected home auto effective config source, got %q", snapshot.HomeAutoSession.EffectiveConfigSource)
+	}
+	if snapshot.HomeAutoSession.LastConfigApplyResult != "cloud_config_applied" {
+		t.Fatalf("expected home auto config apply result, got %q", snapshot.HomeAutoSession.LastConfigApplyResult)
 	}
 	if snapshot.Attention.State == AttentionNone {
 		t.Fatal("expected attention state in support snapshot")

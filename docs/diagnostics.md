@@ -108,6 +108,11 @@ Overall state:
   - cloud receiver/site/group labels (when present)
 - Home Auto Session context:
   - enabled/mode
+  - effective config source/version
+  - cloud-config present
+  - last fetched/applied config versions
+  - last config apply result/error
+  - desired config enabled/mode
   - module + control + reconciliation state
   - active state source
   - pending action state (if recovering/retrying)

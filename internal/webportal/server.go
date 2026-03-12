@@ -79,6 +79,7 @@ type pageData struct {
 	HomeAutoStopDeb      string
 	HomeAutoIdleTimeout  string
 	HomeAutoStateHint    string
+	HomeAutoConfigHint   string
 }
 
 func New(addr string, statusProvider StatusProvider, pairing PairingCodeSubmitter, logger *slog.Logger) *Server {
@@ -432,6 +433,7 @@ func (s *Server) renderHomeAutoSession(w http.ResponseWriter, flash, flashClass 
 		data.HomeAutoIdleTimeout = ""
 	}
 	data.HomeAutoStateHint = homeAutoStateHint(snap)
+	data.HomeAutoConfigHint = homeAutoConfigHint(snap)
 	s.renderHTML(w, http.StatusOK, "home_auto_session", data)
 }
 
@@ -812,6 +814,18 @@ func troubleshootingHints(snap status.Snapshot) []string {
 	homeState := strings.TrimSpace(snap.HomeAutoSession.State)
 	homeControl := strings.TrimSpace(snap.HomeAutoSession.ControlState)
 	if homeState != "" && homeState != "disabled" {
+		if source := strings.TrimSpace(snap.HomeAutoSession.EffectiveConfigSource); source != "" {
+			hints = append(hints, "Home Auto config source: "+source)
+		}
+		if ver := strings.TrimSpace(snap.HomeAutoSession.EffectiveConfigVer); ver != "" {
+			hints = append(hints, "Home Auto config version: "+ver)
+		}
+		if result := strings.TrimSpace(snap.HomeAutoSession.LastConfigApplyResult); result != "" {
+			hints = append(hints, "Home Auto config apply result: "+result)
+		}
+		if applyErr := strings.TrimSpace(snap.HomeAutoSession.LastConfigApplyError); applyErr != "" {
+			hints = append(hints, "Home Auto config apply error: "+applyErr)
+		}
 		hints = append(hints, "Home Auto Session state: "+homeState)
 		if homeControl != "" {
 			hints = append(hints, "Home Auto control state: "+homeControl)
@@ -1037,6 +1051,9 @@ func homeAutoStateHint(snap status.Snapshot) string {
 		}
 		return "Home Auto Session control is lifecycle-blocked. Reset pairing and link this receiver again."
 	}
+	if module.DesiredConfigEnabled && (control == "lifecycle_blocked" || control == "conflict_blocked" || state == "degraded") {
+		return "Configured policy wants Home Auto Session active, but runtime is blocked/degraded. Resolve blocked reason before expected behavior resumes."
+	}
 	if control == "conflict_blocked" {
 		if reason := strings.TrimSpace(module.BlockedReason); reason != "" {
 			return "Home Auto Session is blocked by a cloud/local conflict: " + reason
@@ -1092,6 +1109,39 @@ func homeAutoStateHint(snap status.Snapshot) string {
 			}
 		}
 		return "Home Auto Session status is initializing."
+	}
+}
+
+func homeAutoConfigHint(snap status.Snapshot) string {
+	module := snap.HomeAutoSession
+	source := strings.TrimSpace(module.EffectiveConfigSource)
+	version := strings.TrimSpace(module.EffectiveConfigVer)
+	applyResult := strings.TrimSpace(module.LastConfigApplyResult)
+
+	switch source {
+	case "cloud_managed":
+		if !module.DesiredConfigEnabled || strings.TrimSpace(module.DesiredConfigMode) == "off" {
+			return "Cloud-managed config is active and currently disables Home Auto Session."
+		}
+		if version == "" {
+			return "Using cloud-managed Home Auto Session config."
+		}
+		return "Using cloud-managed Home Auto Session config version " + version + "."
+	default:
+		switch applyResult {
+		case "cloud_config_invalid_local_fallback":
+			return "Cloud config was invalid and was not applied. Receiver is using local fallback config."
+		case "cloud_config_fetch_failed_using_last_effective":
+			return "Cloud config fetch failed. Receiver is keeping the last effective local/cloud config safely."
+		case "cloud_config_missing_local_fallback":
+			return "No cloud-managed config is available. Receiver is using local fallback config."
+		case "startup_local_fallback":
+			return "Receiver started with local fallback config while awaiting cloud-managed config."
+		}
+		if version == "" {
+			return "Using local fallback Home Auto Session config."
+		}
+		return "Using local fallback Home Auto Session config version " + version + "."
 	}
 }
 

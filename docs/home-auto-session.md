@@ -1,21 +1,21 @@
-# Embedded Home Auto Session (Milestone 3: Production Control Model)
+# Embedded Home Auto Session (Milestone 4: Cloud-Managed Config)
 
 Home Auto Session is an optional embedded module inside `loramapr-receiverd`.
-It is never a separate service and never blocks packet forwarding.
+It is never a separate daemon and never blocks packet forwarding.
 
 ## Default-Off and Enablement
 
 - Module is included in all supported Linux/Pi receiver builds.
-- Default is always off:
+- Default remains off:
   - `home_auto_session.enabled = false`
   - `home_auto_session.mode = off`
-- User must explicitly enable it in local config or local portal.
+- User must explicitly opt in.
 
 Modes:
 
-- `off`: module disabled
-- `observe`: evaluate decisions but never call session start/stop APIs
-- `control`: evaluate decisions and call session start/stop APIs
+- `off`
+- `observe`
+- `control`
 
 ## Policy Scope (Intentionally Narrow)
 
@@ -25,11 +25,47 @@ Modes:
 - start on `inside -> outside` transition after debounce
 - stop on `outside -> inside` transition or idle timeout
 
-Milestone 3 does not add advanced policy features.
+Milestone 4 adds cloud-managed config application, not policy expansion.
 
-## Production Control States
+## Cloud-Managed Config Model
 
-Module state:
+Receiver can consume optional cloud-managed Home Auto Session policy from the
+receiver-authenticated heartbeat contract.
+
+Precedence is deterministic:
+
+1. valid cloud-managed config (if present)
+2. otherwise local fallback config
+
+No deep merge is used in M4. One effective config is active at a time.
+
+### Effective Config Tracking
+
+Receiver persists and exposes:
+
+- `effective_config_source` (`cloud_managed` or `local_fallback`)
+- `effective_config_version`
+- `cloud_config_present`
+- `last_fetched_config_version`
+- `last_applied_config_version`
+- `last_config_apply_result`
+- `last_config_apply_error`
+- `desired_config_enabled`
+- `desired_config_mode`
+
+These fields are visible in portal, `status`, `doctor`, and `support-snapshot`.
+
+### Safe Fallback Behavior
+
+- no cloud config present: apply local fallback
+- valid cloud config present: apply cloud config
+- cloud config disables module: effective config disables module
+- invalid cloud config: reject and keep/apply local fallback
+- cloud unavailable: keep last effective config and report fetch/apply failure
+
+## Runtime and Control States
+
+Module states:
 
 - `disabled`
 - `misconfigured`
@@ -41,7 +77,7 @@ Module state:
 - `cooldown`
 - `degraded`
 
-Control state (operator-facing control semantics):
+Control states:
 
 - `disabled`
 - `misconfigured`
@@ -54,98 +90,33 @@ Control state (operator-facing control semantics):
 - `lifecycle_blocked`
 - `degraded`
 
-Active state source:
+## Portal and Diagnostics
 
-- `none`
-- `cloud_acknowledged`
-- `local_recovered_unverified`
-- `conflict_unresolved`
-
-## Reconciliation and Conflict Handling
-
-Startup reconciliation outcomes:
-
-- `clean_idle`
-- `startup_reconcile_disabled`
-- `active_recovered_unverified`
-- `pending_start_recovering`
-- `pending_stop_recovering`
-- `pending_start_resolved`
-- `pending_stop_resolved`
-- `inconsistent_degraded`
-
-Production conflict/lifecycle outcomes:
-
-- `conflict_already_active`
-- `conflict_state_mismatch`
-- `lifecycle_revoked`
-- `lifecycle_disabled`
-- `lifecycle_replaced`
-
-Behavior:
-
-- already-active start conflicts block churn and move to conflict-blocked state
-- already-closed stop conflicts resolve as safe stop completion
-- revoked/disabled/replaced lifecycle responses block control actions
-- unresolved cloud/local mismatch remains explicit until operator intervention
-
-## Action and Diagnostics Fields
-
-Support-safe action metadata:
-
-- `last_action`
-- `last_action_result`
-- `last_action_at`
-- `last_successful_action`
-- `last_successful_action_at`
-
-Other support fields:
-
-- `tracked_node_state`
-- `reconciliation_state`
-- `active_state_source`
-- `blocked_reason`
-- `last_error`
-- `gps_status` and `gps_reason`
-
-These are surfaced consistently in portal, `doctor`, `status`, and
-`support-snapshot`.
-
-## Configuration
-
-`home_auto_session` config keys:
-
-- `enabled`
-- `mode`
-- `home.lat`, `home.lon`, `home.radius_m`
-- `tracked_node_ids`
-- `start_debounce`
-- `stop_debounce`
-- `idle_stop_timeout`
-- `startup_reconcile`
-- `session_name_template`, `session_notes_template`
-- optional cloud endpoint overrides:
-  - `cloud.start_endpoint`
-  - `cloud.stop_endpoint`
-
-Portal path:
+Portal route:
 
 - `GET /home-auto-session`
 
+Portal now shows:
+
+- effective config source/version
+- cloud-config present state
+- last config fetch/apply result
+- last config apply error
+- desired config vs runtime blocked/degraded conditions
+
+Diagnostics (`doctor`, `status`, `support-snapshot`) expose the same
+support-safe config-source/version/apply model.
+
 ## Supported Install Paths
 
-Same embedded module behavior on both supported paths:
+Same embedded behavior on both supported paths:
 
 - [Linux/Pi Existing-OS Install Path](./linux-pi-distribution.md)
 - [Raspberry Pi Appliance Path](./raspberry-pi-appliance.md)
 
-Feature remains optional/off-by-default in both paths.
+## Milestone 4 Limitations
 
-## Troubleshooting Basics
-
-- `misconfigured`: fix geofence/tracked-node config
-- `cooldown`: retry window after retryable cloud/session API failure
-- `conflict_blocked`: cloud/local state disagreement requires intervention
-- `lifecycle_blocked`: receiver revoked/disabled/replaced; reset/re-pair required
-- `degraded`: non-retryable control path issue; inspect `blocked_reason`
-- GPS `missing|invalid|stale|boundary_uncertain`: no control action until usable position data
+- no advanced cloud policy builder
+- no remote execution
+- no autonomous remediation agent
+- local portal remains visibility + fallback config surface

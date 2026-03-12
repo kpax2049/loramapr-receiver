@@ -40,6 +40,21 @@ func TestOpenInitializesDefaults(t *testing.T) {
 	if snapshot.HomeAutoSession.ActiveStateSource != "none" {
 		t.Fatalf("expected default home_auto_session active_state_source none, got %q", snapshot.HomeAutoSession.ActiveStateSource)
 	}
+	if snapshot.HomeAutoSession.EffectiveConfigSource != "local_fallback" {
+		t.Fatalf("expected default home_auto_session effective_config_source local_fallback, got %q", snapshot.HomeAutoSession.EffectiveConfigSource)
+	}
+	if snapshot.HomeAutoSession.EffectiveConfigVersion == "" {
+		t.Fatal("expected default home_auto_session effective_config_version")
+	}
+	if snapshot.HomeAutoSession.LastConfigApplyResult == "" {
+		t.Fatal("expected default home_auto_session last_config_apply_result")
+	}
+	if snapshot.HomeAutoSession.DesiredConfigEnabled == nil {
+		t.Fatal("expected default home_auto_session desired_config_enabled")
+	}
+	if snapshot.HomeAutoSession.DesiredConfigMode == "" {
+		t.Fatal("expected default home_auto_session desired_config_mode")
+	}
 }
 
 func TestUpdatePersistsAcrossRestart(t *testing.T) {
@@ -167,6 +182,12 @@ func TestOpenMigratesSchemaV2ToCurrent(t *testing.T) {
 	if snapshot.HomeAutoSession.ActiveStateSource != "none" {
 		t.Fatalf("expected home_auto_session active_state_source none, got %q", snapshot.HomeAutoSession.ActiveStateSource)
 	}
+	if snapshot.HomeAutoSession.EffectiveConfigSource != "local_fallback" {
+		t.Fatalf("expected home_auto_session effective_config_source local_fallback, got %q", snapshot.HomeAutoSession.EffectiveConfigSource)
+	}
+	if snapshot.HomeAutoSession.LastConfigApplyResult == "" {
+		t.Fatal("expected home_auto_session last_config_apply_result")
+	}
 }
 
 func TestOpenMigratesSchemaV3ToCurrent(t *testing.T) {
@@ -205,5 +226,54 @@ func TestOpenMigratesSchemaV3ToCurrent(t *testing.T) {
 	}
 	if snapshot.HomeAutoSession.ActiveStateSource != "none" {
 		t.Fatalf("expected home_auto_session active_state_source none, got %q", snapshot.HomeAutoSession.ActiveStateSource)
+	}
+	if snapshot.HomeAutoSession.EffectiveConfigSource != "local_fallback" {
+		t.Fatalf("expected home_auto_session effective_config_source local_fallback, got %q", snapshot.HomeAutoSession.EffectiveConfigSource)
+	}
+	if snapshot.HomeAutoSession.LastConfigApplyResult == "" {
+		t.Fatal("expected home_auto_session last_config_apply_result")
+	}
+}
+
+func TestOpenMigratesSchemaV6ToCurrent(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "receiver-state.json")
+	legacy := `{
+  "schema_version": 6,
+  "installation": {"id":"legacy-install","created_at":"2026-03-11T00:00:00Z","last_started_at":"2026-03-11T00:00:00Z"},
+  "pairing": {"phase":"steady_state"},
+  "cloud": {"endpoint_url":"https://api.example.com"},
+  "runtime": {"profile":"linux-service","mode":"service","install_type":"linux-package"},
+  "update": {"status":"unknown"},
+  "home_auto_session": {"module_state":"disabled","control_state":"disabled","active_state_source":"none","reconciliation_state":"clean_idle"},
+  "metadata": {}
+}`
+	if err := os.WriteFile(path, []byte(legacy), 0o600); err != nil {
+		t.Fatalf("write legacy state: %v", err)
+	}
+
+	store, err := Open(path)
+	if err != nil {
+		t.Fatalf("open migrated state: %v", err)
+	}
+	snapshot := store.Snapshot()
+	if snapshot.SchemaVersion != CurrentSchemaVersion {
+		t.Fatalf("expected schema version %d, got %d", CurrentSchemaVersion, snapshot.SchemaVersion)
+	}
+	if snapshot.HomeAutoSession.EffectiveConfigSource != "local_fallback" {
+		t.Fatalf("expected migrated effective_config_source local_fallback, got %q", snapshot.HomeAutoSession.EffectiveConfigSource)
+	}
+	if snapshot.HomeAutoSession.LastAppliedConfigVer == "" {
+		t.Fatal("expected migrated last_applied_config_version")
+	}
+	if snapshot.HomeAutoSession.LastConfigApplyResult == "" {
+		t.Fatal("expected migrated last_config_apply_result")
+	}
+	if snapshot.HomeAutoSession.DesiredConfigEnabled == nil {
+		t.Fatal("expected migrated desired_config_enabled")
+	}
+	if snapshot.HomeAutoSession.DesiredConfigMode == "" {
+		t.Fatal("expected migrated desired_config_mode")
 	}
 }

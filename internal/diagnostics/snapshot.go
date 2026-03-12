@@ -98,34 +98,43 @@ type SupportSnapshot struct {
 		ConfiguredMin      string     `json:"configured_min_supported_version,omitempty"`
 	} `json:"update"`
 	HomeAutoSession struct {
-		Enabled              bool       `json:"enabled"`
-		Mode                 string     `json:"mode,omitempty"`
-		State                string     `json:"state,omitempty"`
-		ControlState         string     `json:"control_state,omitempty"`
-		ActiveStateSource    string     `json:"active_state_source,omitempty"`
-		Summary              string     `json:"summary,omitempty"`
-		HomeSummary          string     `json:"home_summary,omitempty"`
-		TrackedNodeIDs       []string   `json:"tracked_node_ids,omitempty"`
-		TrackedNodeState     string     `json:"tracked_node_state,omitempty"`
-		ReconciliationState  string     `json:"reconciliation_state,omitempty"`
-		PendingAction        string     `json:"pending_action,omitempty"`
-		ActiveSessionID      string     `json:"active_session_id,omitempty"`
-		ActiveTriggerNode    string     `json:"active_trigger_node_id,omitempty"`
-		LastDecisionReason   string     `json:"last_decision_reason,omitempty"`
-		LastError            string     `json:"last_error,omitempty"`
-		LastAction           string     `json:"last_action,omitempty"`
-		LastActionResult     string     `json:"last_action_result,omitempty"`
-		LastActionAt         *time.Time `json:"last_action_at,omitempty"`
-		LastSuccessfulAction string     `json:"last_successful_action,omitempty"`
-		LastSuccessfulAt     *time.Time `json:"last_successful_at,omitempty"`
-		BlockedReason        string     `json:"blocked_reason,omitempty"`
-		ConsecutiveFailures  int        `json:"consecutive_failures,omitempty"`
-		CooldownUntil        *time.Time `json:"cooldown_until,omitempty"`
-		GPSStatus            string     `json:"gps_status,omitempty"`
-		GPSReason            string     `json:"gps_reason,omitempty"`
-		GPSNodeID            string     `json:"gps_node_id,omitempty"`
-		GPSUpdatedAt         *time.Time `json:"gps_updated_at,omitempty"`
-		LastDecisionAt       *time.Time `json:"last_decision_at,omitempty"`
+		Enabled               bool       `json:"enabled"`
+		Mode                  string     `json:"mode,omitempty"`
+		EffectiveConfigSource string     `json:"effective_config_source,omitempty"`
+		EffectiveConfigVer    string     `json:"effective_config_version,omitempty"`
+		CloudConfigPresent    bool       `json:"cloud_config_present,omitempty"`
+		LastFetchedConfigVer  string     `json:"last_fetched_config_version,omitempty"`
+		LastAppliedConfigVer  string     `json:"last_applied_config_version,omitempty"`
+		LastConfigApplyResult string     `json:"last_config_apply_result,omitempty"`
+		LastConfigApplyError  string     `json:"last_config_apply_error,omitempty"`
+		DesiredConfigEnabled  *bool      `json:"desired_config_enabled,omitempty"`
+		DesiredConfigMode     string     `json:"desired_config_mode,omitempty"`
+		State                 string     `json:"state,omitempty"`
+		ControlState          string     `json:"control_state,omitempty"`
+		ActiveStateSource     string     `json:"active_state_source,omitempty"`
+		Summary               string     `json:"summary,omitempty"`
+		HomeSummary           string     `json:"home_summary,omitempty"`
+		TrackedNodeIDs        []string   `json:"tracked_node_ids,omitempty"`
+		TrackedNodeState      string     `json:"tracked_node_state,omitempty"`
+		ReconciliationState   string     `json:"reconciliation_state,omitempty"`
+		PendingAction         string     `json:"pending_action,omitempty"`
+		ActiveSessionID       string     `json:"active_session_id,omitempty"`
+		ActiveTriggerNode     string     `json:"active_trigger_node_id,omitempty"`
+		LastDecisionReason    string     `json:"last_decision_reason,omitempty"`
+		LastError             string     `json:"last_error,omitempty"`
+		LastAction            string     `json:"last_action,omitempty"`
+		LastActionResult      string     `json:"last_action_result,omitempty"`
+		LastActionAt          *time.Time `json:"last_action_at,omitempty"`
+		LastSuccessfulAction  string     `json:"last_successful_action,omitempty"`
+		LastSuccessfulAt      *time.Time `json:"last_successful_at,omitempty"`
+		BlockedReason         string     `json:"blocked_reason,omitempty"`
+		ConsecutiveFailures   int        `json:"consecutive_failures,omitempty"`
+		CooldownUntil         *time.Time `json:"cooldown_until,omitempty"`
+		GPSStatus             string     `json:"gps_status,omitempty"`
+		GPSReason             string     `json:"gps_reason,omitempty"`
+		GPSNodeID             string     `json:"gps_node_id,omitempty"`
+		GPSUpdatedAt          *time.Time `json:"gps_updated_at,omitempty"`
+		LastDecisionAt        *time.Time `json:"last_decision_at,omitempty"`
 	} `json:"home_auto_session"`
 	Operations struct {
 		Overall string             `json:"overall"`
@@ -276,7 +285,25 @@ func CollectSupportSnapshot(cfg config.Config, data state.Data, finding Finding,
 	out.Update.LastCheckedAt = cloneTimePtr(data.Update.LastCheckedAt)
 	out.Update.ConfiguredMin = strings.TrimSpace(cfg.Update.MinSupportedVersion)
 	out.HomeAutoSession.Enabled = cfg.HomeAutoSession.Enabled
+	if data.HomeAutoSession.DesiredConfigEnabled != nil {
+		out.HomeAutoSession.Enabled = *data.HomeAutoSession.DesiredConfigEnabled
+	}
 	out.HomeAutoSession.Mode = strings.TrimSpace(string(cfg.HomeAutoSession.Mode))
+	if value := strings.TrimSpace(data.HomeAutoSession.DesiredConfigMode); value != "" {
+		out.HomeAutoSession.Mode = value
+	}
+	out.HomeAutoSession.EffectiveConfigSource = strings.TrimSpace(data.HomeAutoSession.EffectiveConfigSource)
+	out.HomeAutoSession.EffectiveConfigVer = strings.TrimSpace(data.HomeAutoSession.EffectiveConfigVersion)
+	out.HomeAutoSession.CloudConfigPresent = data.HomeAutoSession.CloudConfigPresent
+	out.HomeAutoSession.LastFetchedConfigVer = strings.TrimSpace(data.HomeAutoSession.LastFetchedConfigVer)
+	out.HomeAutoSession.LastAppliedConfigVer = strings.TrimSpace(data.HomeAutoSession.LastAppliedConfigVer)
+	out.HomeAutoSession.LastConfigApplyResult = strings.TrimSpace(data.HomeAutoSession.LastConfigApplyResult)
+	out.HomeAutoSession.LastConfigApplyError = strings.TrimSpace(data.HomeAutoSession.LastConfigApplyError)
+	if data.HomeAutoSession.DesiredConfigEnabled != nil {
+		value := *data.HomeAutoSession.DesiredConfigEnabled
+		out.HomeAutoSession.DesiredConfigEnabled = &value
+	}
+	out.HomeAutoSession.DesiredConfigMode = strings.TrimSpace(data.HomeAutoSession.DesiredConfigMode)
 	out.HomeAutoSession.HomeSummary = formatHomeSummary(cfg.HomeAutoSession.Home)
 	out.HomeAutoSession.TrackedNodeIDs = append([]string(nil), cfg.HomeAutoSession.TrackedNodeIDs...)
 	out.HomeAutoSession.State = strings.TrimSpace(data.HomeAutoSession.ModuleState)
