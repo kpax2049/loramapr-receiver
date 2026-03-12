@@ -144,3 +144,40 @@ func TestUpdateStatus(t *testing.T) {
 		t.Fatal("expected update_checked_at to be set")
 	}
 }
+
+func TestAttentionStatus(t *testing.T) {
+	t.Parallel()
+
+	model := New()
+	model.SetAttention(
+		"urgent",
+		"lifecycle",
+		"receiver_credential_revoked",
+		"Receiver credential was revoked",
+		"Reset and re-pair this receiver.",
+		true,
+	)
+	snap := model.Snapshot()
+
+	if snap.AttentionState != "urgent" {
+		t.Fatalf("unexpected attention_state: %q", snap.AttentionState)
+	}
+	if snap.AttentionCategory != "lifecycle" {
+		t.Fatalf("unexpected attention_category: %q", snap.AttentionCategory)
+	}
+	if !snap.AttentionActionRequired {
+		t.Fatal("expected attention_action_required=true")
+	}
+	if snap.AttentionUpdatedAt == nil {
+		t.Fatal("expected attention_updated_at to be set")
+	}
+
+	model.SetAttention("none", "", "", "", "", false)
+	snap = model.Snapshot()
+	if snap.AttentionState != "none" {
+		t.Fatalf("expected attention_state none, got %q", snap.AttentionState)
+	}
+	if snap.AttentionUpdatedAt != nil {
+		t.Fatal("expected attention_updated_at to clear for none state")
+	}
+}

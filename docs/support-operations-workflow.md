@@ -1,7 +1,7 @@
 # Support and Operations Workflow (Field Guide)
 
 This runbook focuses on common receiver field issues using local portal and CLI
-tools only.
+tools only, aligned with the v2.6 attention/remediation model.
 
 ## Standard Data Capture
 
@@ -12,12 +12,19 @@ tools only.
 3. Capture:
    - portal `/progress` screenshot
    - portal `/troubleshooting` screenshot
+4. Record attention fields from portal/CLI:
+   - `attention_state`
+   - `attention_code`
+   - `attention_hint`
 
 ## Case: Receiver Offline in Cloud
 
 Typical local indicators:
 
 - failure code: `cloud_unreachable`
+- attention:
+  - `state = action_required`
+  - `category = connectivity`
 - operational checks:
   - `cloud_reachability = fail`
   - `service_health = ok|warn`
@@ -34,6 +41,9 @@ Actions:
 Typical local indicators:
 
 - failure code: `no_serial_device_detected` or `node_detected_not_connected`
+- attention:
+  - `state = action_required`
+  - `category = node`
 - operational check:
   - `node_connection = fail|warn`
 
@@ -48,6 +58,9 @@ Actions:
 Typical local indicators:
 
 - failure code: `events_not_forwarding`
+- attention:
+  - `state = action_required`
+  - `category = forwarding`
 - operational checks:
   - `pairing_authorized = ok`
   - `forwarding_activity = fail|warn`
@@ -67,6 +80,9 @@ Typical local indicators:
   - `receiver_credential_revoked`
   - `receiver_disabled`
   - `receiver_replaced`
+- attention:
+  - `state = urgent`
+  - `category = lifecycle`
 
 Actions:
 
@@ -81,6 +97,9 @@ Actions:
 Typical local indicators:
 
 - failure code: `local_schema_incompatible`
+- attention:
+  - `state = urgent`
+  - `category = compatibility`
 - CLI hint indicates runtime/config/state schema mismatch
 
 Actions:

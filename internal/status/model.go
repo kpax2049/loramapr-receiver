@@ -61,6 +61,13 @@ type Snapshot struct {
 	FailureHint              string                     `json:"failure_hint,omitempty"`
 	FailureSince             *time.Time                 `json:"failure_since,omitempty"`
 	RecentFailures           []FailureEvent             `json:"recent_failures,omitempty"`
+	AttentionState           string                     `json:"attention_state,omitempty"`
+	AttentionCategory        string                     `json:"attention_category,omitempty"`
+	AttentionCode            string                     `json:"attention_code,omitempty"`
+	AttentionSummary         string                     `json:"attention_summary,omitempty"`
+	AttentionHint            string                     `json:"attention_hint,omitempty"`
+	AttentionActionRequired  bool                       `json:"attention_action_required,omitempty"`
+	AttentionUpdatedAt       *time.Time                 `json:"attention_updated_at,omitempty"`
 	UpdateStatus             string                     `json:"update_status,omitempty"`
 	UpdateSummary            string                     `json:"update_summary,omitempty"`
 	UpdateHint               string                     `json:"update_hint,omitempty"`
@@ -104,6 +111,7 @@ func (m *Model) Snapshot() Snapshot {
 	}
 	out.RecentFailures = append([]FailureEvent(nil), m.snap.RecentFailures...)
 	out.FailureSince = cloneTimePtr(m.snap.FailureSince)
+	out.AttentionUpdatedAt = cloneTimePtr(m.snap.AttentionUpdatedAt)
 	out.UpdateCheckedAt = cloneTimePtr(m.snap.UpdateCheckedAt)
 	return out
 }
@@ -258,6 +266,23 @@ func (m *Model) SetUpdateStatus(statusCode, summary, hint, manifestVersion, mani
 		s.UpdateManifestChannel = normalize(manifestChannel)
 		s.UpdateRecommendedVersion = normalize(recommendedVersion)
 		s.UpdateCheckedAt = cloneTimePtr(checkedAt)
+	})
+}
+
+func (m *Model) SetAttention(state, category, code, summary, hint string, actionRequired bool) {
+	m.Update(func(s *Snapshot) {
+		s.AttentionState = normalize(state)
+		s.AttentionCategory = normalize(category)
+		s.AttentionCode = normalize(code)
+		s.AttentionSummary = normalize(summary)
+		s.AttentionHint = normalize(hint)
+		s.AttentionActionRequired = actionRequired
+		if s.AttentionState == "" || s.AttentionState == "none" {
+			s.AttentionUpdatedAt = nil
+			return
+		}
+		updatedAt := m.now().UTC()
+		s.AttentionUpdatedAt = &updatedAt
 	})
 }
 

@@ -1,5 +1,8 @@
 # LoRaMapr Receiver Release Notes
 
+For Operational Automation and Notifications notes targeting `v2.6.0`, see
+`docs/release-notes-v2.6.0.md`.
+
 For Support and Operations Maturity notes targeting `v2.5.0`, see
 `docs/release-notes-v2.5.0.md`.
 

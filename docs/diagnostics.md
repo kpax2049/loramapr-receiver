@@ -1,7 +1,7 @@
-# Receiver Diagnostics, Support Bundle, and Ops Taxonomy
+# Receiver Diagnostics, Attention, and Ops Taxonomy
 
-This document defines receiver-side diagnostics behavior for v2.5.0 support and
-operations maturity.
+This document defines receiver-side diagnostics behavior for v2.6.0 operational
+automation and notifications alignment.
 
 ## Commands and Surfaces
 
@@ -34,6 +34,43 @@ Stable receiver-side failure codes:
 - `no_serial_device_detected`
 - `node_detected_not_connected`
 - `events_not_forwarding`
+
+## Attention Model
+
+Attention is derived from failure taxonomy plus operational checks and is
+exposed consistently through portal, CLI, support bundle, and cloud heartbeat
+status payloads.
+
+Attention states:
+
+- `none`
+- `info`
+- `action_required`
+- `urgent`
+
+Attention categories:
+
+- `pairing`
+- `connectivity`
+- `authorization`
+- `lifecycle`
+- `node`
+- `forwarding`
+- `version`
+- `compatibility`
+- `service`
+
+Representative mappings:
+
+- `pairing_not_completed`, `pairing_code_invalid`, `pairing_code_expired`, `activation_failed` -> `pairing` / `action_required`
+- `cloud_unreachable`, `network_unavailable`, `portal_unavailable` -> `connectivity` / `action_required`
+- `receiver_auth_invalid` -> `authorization` / `urgent`
+- `receiver_credential_revoked`, `receiver_disabled`, `receiver_replaced` -> `lifecycle` / `urgent`
+- `no_serial_device_detected`, `node_detected_not_connected` -> `node` / `action_required`
+- `events_not_forwarding` -> `forwarding` / `action_required`
+- `receiver_outdated` -> `version` / `action_required`
+- `receiver_version_unsupported` -> `version` / `urgent`
+- `local_schema_incompatible`, `cloud_config_incompatible` -> `compatibility` / `urgent`
 
 ## Operational Checks Model
 
@@ -77,6 +114,7 @@ Bundle includes:
 - meshtastic detection/connection summary
 - update status and recommendation summary
 - diagnostics failure code/summary/hint
+- attention state/category/code/summary/hint
 - operational checks and overall state
 - recent coarse errors
 
@@ -97,10 +135,11 @@ Only support-safe booleans/metadata are included.
 ## Field Triage Workflow
 
 1. Run `doctor` (human or JSON) and capture failure code + operational checks.
-2. Export `support-snapshot`.
-3. Compare portal Troubleshooting and `/api/ops` with CLI output.
-4. For lifecycle invalidation (`revoked`, `disabled`, `replaced`), reset/re-pair.
-5. For supportability failures (`receiver_version_unsupported`), upgrade receiver.
+2. Capture attention fields (`attention_state`, `attention_code`, `attention_hint`).
+3. Export `support-snapshot`.
+4. Compare portal Troubleshooting and `/api/ops` with CLI output.
+5. For lifecycle invalidation (`revoked`, `disabled`, `replaced`), reset/re-pair.
+6. For supportability failures (`receiver_version_unsupported`), upgrade receiver.
 
 Detailed scenario runbook is in:
 

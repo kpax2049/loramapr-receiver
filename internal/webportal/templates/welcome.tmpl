@@ -8,9 +8,28 @@
     <div class="status-chip"><div class="label">Service</div><div class="value">{{.Snapshot.Lifecycle}}</div></div>
     <div class="status-chip"><div class="label">Ready</div><div class="value">{{if .Snapshot.Ready}}yes{{else}}no{{end}}</div></div>
     <div class="status-chip"><div class="label">Failure</div><div class="value mono">{{if .Snapshot.FailureCode}}{{.Snapshot.FailureCode}}{{else}}none{{end}}</div></div>
+    <div class="status-chip">
+      <div class="label">Attention</div>
+      <div class="value">
+        {{if and .Attention.State (ne .Attention.State "none")}}
+          <span class="badge {{.Attention.State}}">{{.Attention.State}}</span>
+          {{if .Attention.Code}} <span class="mono">{{.Attention.Code}}</span>{{end}}
+        {{else}}
+          none
+        {{end}}
+      </div>
+    </div>
   </div>
   {{if .SummaryHint}}
   <div class="hint {{.SummaryHintClass}}">{{.SummaryHint}}</div>
+  {{end}}
+  {{if ne .Attention.State "none"}}
+  {{if .Attention.Summary}}
+  <div class="hint {{if eq .Attention.State "urgent"}}err{{else if eq .Attention.State "action_required"}}warn{{else}}none{{end}}">
+    <strong>{{if .Attention.Category}}{{.Attention.Category}}{{else}}attention{{end}}</strong>: {{.Attention.Summary}}
+    {{if .Attention.Hint}}<br>{{.Attention.Hint}}{{end}}
+  </div>
+  {{end}}
   {{end}}
 </section>
 <section class="panel">

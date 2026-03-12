@@ -1,7 +1,7 @@
-# Reviewer Smoke Test Guide (v2.5.0)
+# Reviewer Smoke Test Guide (v2.6.0)
 
-This guide validates support-bundle export, redaction, coarse ops checks, and
-field troubleshooting guidance.
+This guide validates automation-aligned attention/remediation signals, local
+attention visibility, support bundle export/redaction, and operator guidance.
 
 ## 1. Build and Tests
 
@@ -27,6 +27,7 @@ GOCACHE=/tmp/go-build-cache GOTMPDIR=/tmp go test ./internal/webportal -run Ops
 Verify outputs include:
 
 - `failure_code`/`failure_summary`/`failure_hint`
+- `attention_state`/`attention_category`/`attention_code`/`attention_hint`
 - `local_runtime_probe`
 - `operational_status`/`operational_summary`
 - `operational_checks[]`
@@ -44,6 +45,7 @@ Verify snapshot includes:
 - runtime metadata (version/channel/build/platform/install type)
 - config/state markers
 - lifecycle/update/cloud/node summaries
+- attention summary (state/category/code/hint)
 - operational checks
 
 Verify snapshot excludes secret values:
@@ -52,7 +54,7 @@ Verify snapshot excludes secret values:
 - activation token
 - ingest API secret
 
-## 4. Portal Ops Visibility
+## 4. Portal Local Attention Visibility
 
 Start runtime and open:
 
@@ -60,9 +62,13 @@ Start runtime and open:
 - `/troubleshooting`
 - `/api/ops`
 
-Verify operational checks and overall state are visible and actionable.
+Verify:
 
-## 5. Field Workflow Scenarios
+- attention state/category/code/hint are visible in portal pages
+- operational checks and overall state remain visible/actionable
+- `/api/ops` returns both operational checks and attention payload
+
+## 5. Field Workflow Scenarios (Automation-Aligned)
 
 Using docs and local tools, verify runbook paths for:
 
@@ -70,6 +76,7 @@ Using docs and local tools, verify runbook paths for:
 - receiver online but node missing
 - paired but no packets forwarding
 - receiver revoked/replaced/disabled
+- outdated/unsupported receiver state
 
 Reference:
 

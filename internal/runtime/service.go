@@ -133,6 +133,8 @@ func New(cfg config.Config, logger *slog.Logger) (*Service, error) {
 	statusModel.SetComponent("network", "unknown", "network status not probed yet")
 	statusModel.SetComponent("update", "unknown", "update status not evaluated yet")
 	statusModel.SetComponent("cloud_config", "unknown", "cloud config version not reported yet")
+	statusModel.SetComponent("operations", "unknown", "operational checks not evaluated yet")
+	statusModel.SetComponent("attention", "none", "no local attention required")
 	statusModel.SetUpdateStatus(
 		current.Update.Status,
 		current.Update.Summary,
@@ -504,6 +506,7 @@ func (s *Service) sendHeartbeat(ctx context.Context, snapshot state.Data, meshSn
 		coarseFailure = "queue_backlog"
 	}
 	updateSnap := s.container.Status.Snapshot()
+	ops := s.deriveOperational(updateSnap, snapshot, meshSnap)
 
 	ack, err := s.container.Cloud.SendReceiverHeartbeat(ctx, endpoint, apiKey, cloudclient.ReceiverHeartbeat{
 		RuntimeVersion:  s.build.Version,
@@ -524,6 +527,17 @@ func (s *Service) sendHeartbeat(ctx context.Context, snapshot state.Data, meshSn
 			"installType":         snapshot.Runtime.InstallType,
 			"updateStatus":        updateSnap.UpdateStatus,
 			"updateVersion":       updateSnap.UpdateRecommendedVersion,
+			"failureCode":         updateSnap.FailureCode,
+			"failureSummary":      updateSnap.FailureSummary,
+			"failureHint":         updateSnap.FailureHint,
+			"attentionState":      updateSnap.AttentionState,
+			"attentionCategory":   updateSnap.AttentionCategory,
+			"attentionCode":       updateSnap.AttentionCode,
+			"attentionSummary":    updateSnap.AttentionSummary,
+			"attentionHint":       updateSnap.AttentionHint,
+			"attentionRequired":   updateSnap.AttentionActionRequired,
+			"operationalStatus":   ops.Overall,
+			"operationalSummary":  ops.Summary,
 		},
 	})
 	if err != nil {
@@ -906,12 +920,42 @@ func (s *Service) updateFailureState(snapshot state.Data, meshSnap meshtastic.Sn
 		LastPacketAck:         s.steady.lastPacketAck,
 		Now:                   now,
 	})
+	ops := s.deriveOperational(current, snapshot, meshSnap)
+	s.container.Status.SetComponent("operations", ops.Overall, ops.Summary)
+	attention := diagnostics.DeriveAttention(finding, ops)
+	s.container.Status.SetAttention(
+		string(attention.State),
+		string(attention.Category),
+		attention.Code,
+		attention.Summary,
+		attention.Hint,
+		attention.ActionRequired,
+	)
+	s.container.Status.SetComponent("attention", string(attention.State), attention.Summary)
 
 	if finding.Code == diagnostics.FailureNone {
 		s.container.Status.SetFailure("", "", "")
 		return
 	}
 	s.container.Status.SetFailure(string(finding.Code), finding.Summary, finding.Hint)
+}
+
+func (s *Service) deriveOperational(current status.Snapshot, snapshot state.Data, meshSnap meshtastic.Snapshot) diagnostics.OperationalSummary {
+	return diagnostics.EvaluateOperational(diagnostics.OperationalInput{
+		Now:                 time.Now().UTC(),
+		Lifecycle:           string(current.Lifecycle),
+		Ready:               current.Ready,
+		ReadyReason:         current.ReadyReason,
+		PairingPhase:        string(snapshot.Pairing.Phase),
+		HasIngestCredential: credentialsReady(snapshot),
+		CloudReachable:      s.steady.cloudReachable,
+		CloudProbeStatus:    current.CloudStatus,
+		MeshtasticState:     string(meshSnap.State),
+		IngestQueueDepth:    len(s.steady.ingestQueue),
+		LastPacketQueued:    s.steady.lastPacketQueued,
+		LastPacketAck:       s.steady.lastPacketAck,
+		UpdateStatus:        current.UpdateStatus,
+	})
 }
 
 func coarseCloudError(err error) string {

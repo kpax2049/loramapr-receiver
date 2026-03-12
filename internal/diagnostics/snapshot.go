@@ -92,6 +92,14 @@ type SupportSnapshot struct {
 		Summary string             `json:"summary"`
 		Checks  []OperationalCheck `json:"checks"`
 	} `json:"operations"`
+	Attention struct {
+		State          AttentionState    `json:"state"`
+		Category       AttentionCategory `json:"category,omitempty"`
+		Code           string            `json:"code,omitempty"`
+		Summary        string            `json:"summary,omitempty"`
+		Hint           string            `json:"hint,omitempty"`
+		ActionRequired bool              `json:"action_required"`
+	} `json:"attention"`
 	Diagnostics struct {
 		FailureCode    FailureCode `json:"failure_code,omitempty"`
 		FailureSummary string      `json:"failure_summary,omitempty"`
@@ -247,6 +255,13 @@ func CollectSupportSnapshot(cfg config.Config, data state.Data, finding Finding,
 	out.Operations.Overall = ops.Overall
 	out.Operations.Summary = ops.Summary
 	out.Operations.Checks = append([]OperationalCheck(nil), ops.Checks...)
+	attention := DeriveAttention(finding, ops)
+	out.Attention.State = attention.State
+	out.Attention.Category = attention.Category
+	out.Attention.Code = attention.Code
+	out.Attention.Summary = attention.Summary
+	out.Attention.Hint = attention.Hint
+	out.Attention.ActionRequired = attention.ActionRequired
 
 	out.Diagnostics.FailureCode = finding.Code
 	out.Diagnostics.FailureSummary = strings.TrimSpace(finding.Summary)

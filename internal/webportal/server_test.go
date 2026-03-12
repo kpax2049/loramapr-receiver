@@ -120,6 +120,9 @@ func TestOpsAPI(t *testing.T) {
 	if !strings.Contains(body, "\"overall\"") {
 		t.Fatalf("expected operational summary payload")
 	}
+	if !strings.Contains(body, "\"attention\"") {
+		t.Fatalf("expected attention payload")
+	}
 	if !strings.Contains(body, "pairing_authorized") {
 		t.Fatalf("expected operational checks list")
 	}
@@ -211,6 +214,58 @@ func TestProgressPageShowsUpdateStatus(t *testing.T) {
 	body := rec.Body.String()
 	if !strings.Contains(body, "outdated") {
 		t.Fatalf("expected update status on progress page")
+	}
+}
+
+func TestWelcomePageShowsDerivedAttention(t *testing.T) {
+	t.Parallel()
+
+	snap := sampleSnapshot()
+	snap.FailureCode = "cloud_unreachable"
+	snap.FailureSummary = "Cloud endpoint is currently unreachable"
+	snap.FailureHint = "Check internet connectivity."
+
+	srv := New("127.0.0.1:0", staticStatusProvider{snapshot: snap}, &recordingPairingSubmitter{}, nil)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	srv.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "action_required") {
+		t.Fatalf("expected derived attention state in welcome page")
+	}
+	if !strings.Contains(body, "cloud_unreachable") {
+		t.Fatalf("expected failure/attention code in welcome page")
+	}
+}
+
+func TestProgressPageShowsAttentionFields(t *testing.T) {
+	t.Parallel()
+
+	snap := sampleSnapshot()
+	snap.AttentionState = "urgent"
+	snap.AttentionCategory = "lifecycle"
+	snap.AttentionCode = "receiver_replaced"
+	snap.AttentionSummary = "Receiver identity was replaced."
+	snap.AttentionHint = "Reset pairing and link this installation again."
+
+	srv := New("127.0.0.1:0", staticStatusProvider{snapshot: snap}, &recordingPairingSubmitter{}, nil)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/progress", nil)
+	srv.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "receiver_replaced") {
+		t.Fatalf("expected explicit attention code")
+	}
+	if !strings.Contains(body, "Receiver identity was replaced.") {
+		t.Fatalf("expected explicit attention summary")
 	}
 }
 

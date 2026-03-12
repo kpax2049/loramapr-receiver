@@ -9,6 +9,7 @@ Portal is the normal operator interface for:
 
 - pairing/bootstrap progress
 - service/cloud/node status
+- local attention state and remediation hints
 - lifecycle recovery guidance
 - update-supportability visibility
 - coarse operational checks
@@ -34,6 +35,11 @@ API:
 - `POST /api/pairing/code`
 - `POST /api/lifecycle/reset`
 
+`GET /api/ops` includes:
+
+- operational checks summary
+- derived `attention` object (state/category/code/summary/hint)
+
 ## Operational Checks in Portal
 
 Progress/Troubleshooting surfaces include check results for:
@@ -58,6 +64,27 @@ Overall operational state:
 - `degraded`
 - `blocked`
 
+## Local Attention Visibility
+
+Portal Welcome/Progress/Troubleshooting surfaces prioritize local attention
+state so nearby operators can triage before opening cloud consoles.
+
+Attention states shown in UI:
+
+- `none`
+- `info`
+- `action_required`
+- `urgent`
+
+Common attention scenarios highlighted locally:
+
+- not paired (`pairing_not_completed`)
+- cloud/network unreachable
+- node missing or not connected
+- forwarding backlog/stall
+- outdated or unsupported receiver build
+- revoked/disabled/replaced lifecycle state
+
 ## Security Model
 
 Portal intentionally omits secrets from rendered content and `/api/status`:
@@ -77,6 +104,9 @@ Portal guidance aligns to stable receiver taxonomy:
 - connectivity/runtime: `cloud_unreachable`, `network_unavailable`, `portal_unavailable`, `cloud_config_incompatible`, `local_schema_incompatible`
 - node/forwarding: `no_serial_device_detected`, `node_detected_not_connected`, `events_not_forwarding`
 - release supportability: `receiver_outdated`, `receiver_version_unsupported`
+
+Guidance language is intentionally coarse and support-safe so it can align with
+cloud-side attention categories.
 
 ## Binding and Discovery
 

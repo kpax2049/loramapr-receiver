@@ -8,6 +8,13 @@
     {{if .Snapshot.FailureHint}}<br>{{.Snapshot.FailureHint}}{{end}}
   </div>
   {{end}}
+  {{if and .Attention.State (ne .Attention.State "none")}}
+  <div class="hint {{if eq .Attention.State "urgent"}}err{{else if eq .Attention.State "action_required"}}warn{{else}}none{{end}}">
+    <strong>Attention {{.Attention.State}}</strong>{{if .Attention.Code}} ({{.Attention.Code}}){{end}}
+    {{if .Attention.Summary}}: {{.Attention.Summary}}{{end}}
+    {{if .Attention.Hint}}<br>{{.Attention.Hint}}{{end}}
+  </div>
+  {{end}}
   <ul>
     {{range .TroubleshootingHints}}
     <li>{{.}}</li>

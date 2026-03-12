@@ -12,7 +12,24 @@
     <div class="status-chip"><div class="label">Meshtastic Status</div><div class="value">{{.MeshtasticState}}</div></div>
     <div class="status-chip"><div class="label">Update Status</div><div class="value mono">{{if .Snapshot.UpdateStatus}}{{.Snapshot.UpdateStatus}}{{else}}unknown{{end}}</div></div>
     <div class="status-chip"><div class="label">Failure State</div><div class="value mono">{{if .Snapshot.FailureCode}}{{.Snapshot.FailureCode}}{{else}}none{{end}}</div></div>
+    <div class="status-chip">
+      <div class="label">Attention</div>
+      <div class="value">
+        {{if and .Attention.State (ne .Attention.State "none")}}
+          <span class="badge {{.Attention.State}}">{{.Attention.State}}</span>
+          {{if .Attention.Code}} <span class="mono">{{.Attention.Code}}</span>{{end}}
+        {{else}}
+          none
+        {{end}}
+      </div>
+    </div>
   </div>
+  {{if and .Attention.State (ne .Attention.State "none")}}
+  <div class="hint {{if eq .Attention.State "urgent"}}err{{else if eq .Attention.State "action_required"}}warn{{else}}none{{end}}">
+    <strong>{{if .Attention.Category}}{{.Attention.Category}}{{else}}attention{{end}}</strong>: {{.Attention.Summary}}
+    {{if .Attention.Hint}}<br>{{.Attention.Hint}}{{end}}
+  </div>
+  {{end}}
 </section>
 <section class="panel">
   <h2>Operational Checks</h2>
@@ -45,6 +62,10 @@
     <tr><th>Runtime Profile</th><td class="mono">{{.Snapshot.RuntimeProfile}}</td></tr>
     <tr><th>Failure Summary</th><td>{{if .Snapshot.FailureSummary}}{{.Snapshot.FailureSummary}}{{else}}none{{end}}</td></tr>
     <tr><th>Failure Guidance</th><td>{{if .Snapshot.FailureHint}}{{.Snapshot.FailureHint}}{{else}}none{{end}}</td></tr>
+    <tr><th>Attention State</th><td class="mono">{{if .Attention.State}}{{.Attention.State}}{{else}}none{{end}}</td></tr>
+    <tr><th>Attention Category</th><td class="mono">{{if .Attention.Category}}{{.Attention.Category}}{{else}}none{{end}}</td></tr>
+    <tr><th>Attention Summary</th><td>{{if .Attention.Summary}}{{.Attention.Summary}}{{else}}none{{end}}</td></tr>
+    <tr><th>Attention Guidance</th><td>{{if .Attention.Hint}}{{.Attention.Hint}}{{else}}none{{end}}</td></tr>
     <tr><th>Update Summary</th><td>{{if .Snapshot.UpdateSummary}}{{.Snapshot.UpdateSummary}}{{else}}none{{end}}</td></tr>
     <tr><th>Update Guidance</th><td>{{if .Snapshot.UpdateHint}}{{.Snapshot.UpdateHint}}{{else}}none{{end}}</td></tr>
     <tr><th>Recommended Version</th><td class="mono">{{if .Snapshot.UpdateRecommendedVersion}}{{.Snapshot.UpdateRecommendedVersion}}{{else}}unknown{{end}}</td></tr>

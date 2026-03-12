@@ -76,4 +76,10 @@ func TestSupportSnapshotRedactsSecrets(t *testing.T) {
 	if len(snapshot.Operations.Checks) == 0 {
 		t.Fatal("expected operational checks in support snapshot")
 	}
+	if snapshot.Attention.State == AttentionNone {
+		t.Fatal("expected attention state in support snapshot")
+	}
+	if snapshot.Attention.Code == "" {
+		t.Fatal("expected attention code in support snapshot")
+	}
 }

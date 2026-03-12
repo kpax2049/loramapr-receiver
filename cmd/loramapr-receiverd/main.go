@@ -226,6 +226,7 @@ func doctorCommand(args []string) {
 		LastPacketAck:       localProbeLastPacketAck(localProbe),
 		UpdateStatus:        localProbeUpdateStatus(localProbe, snapshot.Update.Status),
 	})
+	attention := diagnostics.DeriveAttention(finding, ops)
 
 	build := buildinfo.Current()
 	report := map[string]any{
@@ -263,6 +264,12 @@ func doctorCommand(args []string) {
 		"failure_code":         finding.Code,
 		"failure_summary":      finding.Summary,
 		"failure_hint":         finding.Hint,
+		"attention_state":      attention.State,
+		"attention_category":   attention.Category,
+		"attention_code":       attention.Code,
+		"attention_summary":    attention.Summary,
+		"attention_hint":       attention.Hint,
+		"attention_required":   attention.ActionRequired,
 		"operational_status":   ops.Overall,
 		"operational_summary":  ops.Summary,
 		"operational_checks":   ops.Checks,
@@ -321,6 +328,12 @@ func doctorCommand(args []string) {
 		fmt.Println()
 	}
 	fmt.Printf("[INFO] operational status: %s (%s)\n", ops.Overall, ops.Summary)
+	if attention.State != diagnostics.AttentionNone {
+		fmt.Printf("[ATTN] %s [%s] - %s\n", attention.State, attention.Code, attention.Summary)
+		if attention.Hint != "" {
+			fmt.Printf("[HINT] %s\n", attention.Hint)
+		}
+	}
 	for _, check := range ops.Checks {
 		fmt.Printf("[CHECK] %s: %s - %s\n", check.Level, check.ID, check.Summary)
 		if check.Hint != "" {
@@ -387,6 +400,7 @@ func statusCommand(args []string) {
 		LastPacketAck:       localProbeLastPacketAck(localProbe),
 		UpdateStatus:        localProbeUpdateStatus(localProbe, snapshot.Update.Status),
 	})
+	attention := diagnostics.DeriveAttention(finding, ops)
 
 	build := buildinfo.Current()
 	output := map[string]any{
@@ -425,6 +439,12 @@ func statusCommand(args []string) {
 		"failure_code":        finding.Code,
 		"failure_summary":     finding.Summary,
 		"failure_hint":        finding.Hint,
+		"attention_state":     attention.State,
+		"attention_category":  attention.Category,
+		"attention_code":      attention.Code,
+		"attention_summary":   attention.Summary,
+		"attention_hint":      attention.Hint,
+		"attention_required":  attention.ActionRequired,
 		"cloud_probe":         cloudProbe.Status,
 		"network_probe":       networkProbe,
 		"operational_status":  ops.Overall,
@@ -642,6 +662,12 @@ func printDoctorLoadFailure(jsonOutput bool, configPath string, statePath string
 		"failure_code":          diagnostics.FailureLocalSchemaIncompat,
 		"failure_summary":       "Local config or state schema is incompatible with this runtime",
 		"failure_hint":          upgradeCompatibilityHint(err),
+		"attention_state":       diagnostics.AttentionUrgent,
+		"attention_category":    diagnostics.AttentionCategoryCompatibility,
+		"attention_code":        diagnostics.FailureLocalSchemaIncompat,
+		"attention_summary":     "Local compatibility issue requires operator action",
+		"attention_hint":        upgradeCompatibilityHint(err),
+		"attention_required":    true,
 		"error":                 strings.TrimSpace(err.Error()),
 	}
 	encoder := json.NewEncoder(os.Stdout)

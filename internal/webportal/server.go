@@ -42,6 +42,7 @@ type Server struct {
 type pageData struct {
 	Title                string
 	Snapshot             status.Snapshot
+	Attention            diagnostics.Attention
 	Flash                string
 	FlashClass           string
 	SummaryHint          string
@@ -172,8 +173,15 @@ func (s *Server) handleOps(w http.ResponseWriter, _ *http.Request) {
 		http.Error(w, "status unavailable", http.StatusServiceUnavailable)
 		return
 	}
-	ops := evaluateOperationalFromSnapshot(s.status.CurrentStatus())
-	payload, err := json.Marshal(ops)
+	snap := s.status.CurrentStatus()
+	ops := evaluateOperationalFromSnapshot(snap)
+	payload, err := json.Marshal(struct {
+		diagnostics.OperationalSummary
+		Attention diagnostics.Attention `json:"attention"`
+	}{
+		OperationalSummary: ops,
+		Attention:          deriveAttentionFromSnapshot(snap),
+	})
 	if err != nil {
 		s.logger.Error("ops encoding failed", "err", err)
 		http.Error(w, "ops encoding failed", http.StatusInternalServerError)
@@ -404,6 +412,7 @@ func (s *Server) basePageData(title string, snap status.Snapshot) pageData {
 	return pageData{
 		Title:          title,
 		Snapshot:       snap,
+		Attention:      deriveAttentionFromSnapshot(snap),
 		RuntimeVersion: version,
 		ReleaseChannel: channel,
 		BuildCommit:    commit,
@@ -462,6 +471,36 @@ func componentState(snap status.Snapshot, component string) string {
 }
 
 func summaryHint(snap status.Snapshot) (string, string) {
+	attention := deriveAttentionFromSnapshot(snap)
+	switch attention.State {
+	case diagnostics.AttentionUrgent:
+		summary := strings.TrimSpace(attention.Summary)
+		if summary == "" {
+			summary = "Receiver requires immediate operator attention."
+		}
+		if hint := strings.TrimSpace(attention.Hint); hint != "" {
+			summary += " " + hint
+		}
+		return summary, "err"
+	case diagnostics.AttentionActionRequired:
+		summary := strings.TrimSpace(attention.Summary)
+		if summary == "" {
+			summary = "Receiver requires action to recover normal operation."
+		}
+		if hint := strings.TrimSpace(attention.Hint); hint != "" {
+			summary += " " + hint
+		}
+		return summary, "warn"
+	case diagnostics.AttentionInfo:
+		summary := strings.TrimSpace(attention.Summary)
+		if summary != "" {
+			if hint := strings.TrimSpace(attention.Hint); hint != "" {
+				summary += " " + hint
+			}
+			return summary, "warn"
+		}
+	}
+
 	if strings.TrimSpace(snap.FailureCode) != "" {
 		summary := strings.TrimSpace(snap.FailureSummary)
 		if summary == "" {
@@ -490,7 +529,31 @@ func summaryHint(snap status.Snapshot) (string, string) {
 }
 
 func nextAction(snap status.Snapshot) string {
+	attention := deriveAttentionFromSnapshot(snap)
 	isAppliance := strings.EqualFold(strings.TrimSpace(snap.RuntimeProfile), "appliance-pi")
+	switch attention.Code {
+	case "operational_blocked":
+		return "Open Troubleshooting and resolve blocking checks before expecting cloud forwarding."
+	case "operational_degraded":
+		return "Review Progress operational checks and resolve warnings before they become service issues."
+	}
+	switch attention.Category {
+	case diagnostics.AttentionCategoryLifecycle:
+		return "Reset and re-pair this receiver to restore an active cloud identity."
+	case diagnostics.AttentionCategoryAuthorization:
+		return "Receiver authorization is invalid. Re-pair to issue fresh durable credentials."
+	case diagnostics.AttentionCategoryCompatibility:
+		return "Resolve runtime/config compatibility first, then restart receiver and confirm ready state."
+	case diagnostics.AttentionCategoryVersion:
+		return "Upgrade receiver to the recommended supported version/channel."
+	case diagnostics.AttentionCategoryConnectivity:
+		return "Restore local network/cloud connectivity, then confirm heartbeat and forwarding recover."
+	case diagnostics.AttentionCategoryNode:
+		return "Connect a Meshtastic node and verify the adapter reaches connected state."
+	case diagnostics.AttentionCategoryForwarding:
+		return "Verify cloud reachability and auth, then confirm queued packets are acknowledged."
+	}
+
 	switch strings.TrimSpace(snap.FailureCode) {
 	case "receiver_credential_revoked", "receiver_disabled", "receiver_replaced":
 		return "Use reset/re-pair to relink this receiver with LoRaMapr Cloud."
@@ -513,6 +576,20 @@ func nextAction(snap status.Snapshot) string {
 func troubleshootingHints(snap status.Snapshot) []string {
 	hints := []string{}
 	isAppliance := strings.EqualFold(strings.TrimSpace(snap.RuntimeProfile), "appliance-pi")
+	attention := deriveAttentionFromSnapshot(snap)
+	if attention.State != diagnostics.AttentionNone {
+		stateLabel := strings.TrimSpace(string(attention.State))
+		if stateLabel == "" {
+			stateLabel = "attention"
+		}
+		summary := strings.TrimSpace(attention.Summary)
+		if summary != "" {
+			hints = append(hints, "Attention state ("+stateLabel+"): "+summary)
+		}
+		if hint := strings.TrimSpace(attention.Hint); hint != "" {
+			hints = append(hints, "Recommended next step: "+hint)
+		}
+	}
 	if strings.TrimSpace(snap.FailureCode) != "" {
 		summary := strings.TrimSpace(snap.FailureSummary)
 		if summary == "" {
@@ -602,6 +679,33 @@ func evaluateOperationalFromSnapshot(snap status.Snapshot) diagnostics.Operation
 		LastPacketAck:       snap.LastPacketAck,
 		UpdateStatus:        snap.UpdateStatus,
 	})
+}
+
+func deriveAttentionFromSnapshot(snap status.Snapshot) diagnostics.Attention {
+	explicitState := diagnostics.AttentionState(strings.TrimSpace(snap.AttentionState))
+	if explicitState != "" {
+		attention := diagnostics.Attention{
+			State:          explicitState,
+			Category:       diagnostics.AttentionCategory(strings.TrimSpace(snap.AttentionCategory)),
+			Code:           strings.TrimSpace(snap.AttentionCode),
+			Summary:        strings.TrimSpace(snap.AttentionSummary),
+			Hint:           strings.TrimSpace(snap.AttentionHint),
+			ActionRequired: snap.AttentionActionRequired,
+		}
+		if attention.State == diagnostics.AttentionNone {
+			return diagnostics.Attention{State: diagnostics.AttentionNone}
+		}
+		if attention.Summary != "" || attention.Code != "" {
+			return attention
+		}
+	}
+
+	finding := diagnostics.Finding{
+		Code:    diagnostics.FailureCode(strings.TrimSpace(snap.FailureCode)),
+		Summary: strings.TrimSpace(snap.FailureSummary),
+		Hint:    strings.TrimSpace(snap.FailureHint),
+	}
+	return diagnostics.DeriveAttention(finding, evaluateOperationalFromSnapshot(snap))
 }
 
 func parseDeauthorizeValue(raw string, defaultValue bool) bool {

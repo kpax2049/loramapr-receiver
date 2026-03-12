@@ -6,7 +6,8 @@ Standalone runtime for deploying a **LoRaMapr Receiver** appliance that pairs wi
 Current scope includes pairing/bootstrap lifecycle, embedded local portal,
 Meshtastic adapter integration, steady-state ingest/heartbeat loops,
 Linux/Pi GA packaging paths, lifecycle management, and update/upgrade safety
-reporting, plus support-bundle export and coarse operational diagnostics.
+reporting, plus support-bundle export, coarse operational diagnostics, and
+automation-aligned attention/remediation signaling.
 
 ## Product Direction
 
@@ -97,6 +98,7 @@ This repository currently contains:
 - [v2.3.0 Plan: Receiver Lifecycle Management](./docs/ga-v2.3.0-receiver-lifecycle-management.md)
 - [v2.4.0 Plan: Update Channels and Upgrade Safety](./docs/ga-v2.4.0-update-channels-upgrade-safety.md)
 - [v2.5.0 Plan: Support and Operations Maturity](./docs/ga-v2.5.0-support-operations-maturity.md)
+- [v2.6.0 Plan: Operational Automation and Notifications](./docs/ga-v2.6.0-operational-automation-notifications.md)
 - [Config and State Layout](./docs/runtime-config-state.md)
 - [Pairing and Bootstrap Lifecycle](./docs/pairing-lifecycle.md)
 - [Receiver Lifecycle Management](./docs/receiver-lifecycle.md)
@@ -113,8 +115,9 @@ This repository currently contains:
 - [Raspberry Pi Appliance Path](./docs/raspberry-pi-appliance.md)
 - [Publish Guide](./docs/publish-guide.md)
 - [Release Notes](./docs/release-notes.md)
-- [Release Notes v2.4.0](./docs/release-notes-v2.4.0.md)
+- [Release Notes v2.6.0](./docs/release-notes-v2.6.0.md)
 - [Release Notes v2.5.0](./docs/release-notes-v2.5.0.md)
+- [Release Notes v2.4.0](./docs/release-notes-v2.4.0.md)
 - [Release Notes v2.3.0](./docs/release-notes-v2.3.0.md)
 - [Release Notes v2.2.0](./docs/release-notes-v2.2.0.md)
 - [Release Notes v2.1.0](./docs/release-notes-v2.1.0.md)

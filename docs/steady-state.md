@@ -40,6 +40,9 @@ Heartbeat is sent on runtime tick interval (`service.heartbeat`) and includes:
   - meshtastic state
   - ingest queue depth
   - coarse failure reason
+  - failure taxonomy fields (`failureCode`, `failureSummary`, `failureHint`)
+  - attention fields (`attentionState`, `attentionCategory`, `attentionCode`, `attentionHint`)
+  - operational summary (`operationalStatus`, `operationalSummary`)
 
 ## Runtime Status Fields
 
@@ -59,6 +62,13 @@ Heartbeat is sent on runtime tick interval (`service.heartbeat`) and includes:
 - `failure_code`
 - `failure_summary`
 - `failure_hint`
+- `attention_state`
+- `attention_category`
+- `attention_code`
+- `attention_summary`
+- `attention_hint`
+- `operational_status`
+- `operational_summary`
 
 These are used by the local portal progress screen.
 

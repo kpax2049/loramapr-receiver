@@ -304,6 +304,18 @@ func TestSendHeartbeatPayloadShaping(t *testing.T) {
 	if _, ok := mockCloud.lastHeartbeat.Status["updateStatus"]; !ok {
 		t.Fatalf("expected updateStatus in heartbeat status payload")
 	}
+	if _, ok := mockCloud.lastHeartbeat.Status["failureCode"]; !ok {
+		t.Fatalf("expected failureCode in heartbeat status payload")
+	}
+	if _, ok := mockCloud.lastHeartbeat.Status["attentionState"]; !ok {
+		t.Fatalf("expected attentionState in heartbeat status payload")
+	}
+	if _, ok := mockCloud.lastHeartbeat.Status["attentionHint"]; !ok {
+		t.Fatalf("expected attentionHint in heartbeat status payload")
+	}
+	if _, ok := mockCloud.lastHeartbeat.Status["operationalStatus"]; !ok {
+		t.Fatalf("expected operationalStatus in heartbeat status payload")
+	}
 }
 
 func TestLifecycleChangeFromCloudError(t *testing.T) {
