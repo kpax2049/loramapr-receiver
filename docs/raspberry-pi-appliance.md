@@ -1,141 +1,102 @@
 # Raspberry Pi Appliance Path
 
-This document defines the Raspberry Pi appliance/image path for LoRaMapr Receiver.
+This is the recommended install path for most first-time LoRaMapr Receiver
+users.
 
-## Recommended User Flow
+You flash a prebuilt image, boot the Pi, open the local portal, and pair.
+
+For install on an existing Linux host instead, use:
+
+- [Linux/Pi Existing-OS Install Path](./linux-pi-distribution.md)
+
+## Who Should Choose This Path
+
+Choose Raspberry Pi Appliance when you want:
+
+- minimal Linux administration
+- a dedicated always-on receiver host
+- setup from a phone/laptop browser without SSH
+
+## First-Time Setup (Normal Path)
 
 1. Flash the LoRaMapr Receiver Raspberry Pi image to an SD card.
-2. Boot the Pi on the same LAN where setup will be performed.
-3. Attach the Meshtastic device (USB serial) to the Pi.
-4. From another device on the LAN, open the local portal at:
-   - `http://loramapr-receiver.local:8080` (mDNS available)
-   - or `http://<pi-lan-ip>:8080` (router/DHCP fallback)
-5. Enter the pairing code from LoRaMapr Cloud onboarding.
-6. Wait for pairing to move to `activated` then `steady_state`.
-7. Confirm node detection and packet forwarding on the portal status page.
+2. (Optional but recommended) Use Raspberry Pi Imager advanced settings to
+   preconfigure Wi-Fi/country/hostname.
+3. Boot the Pi on the same LAN used for setup.
+4. Connect your Meshtastic device by USB.
+5. Open the local portal from another device:
+   - `http://loramapr-receiver.local:8080` (preferred)
+   - `http://<pi-lan-ip>:8080` (fallback)
+6. Enter pairing code from LoRaMapr Cloud onboarding.
+7. Wait until portal shows paired/steady status and verify forwarding.
 
-This normal path is explicitly SSH-optional; setup should complete from the
-portal without shell access.
+Expected boot behavior:
+
+- receiver service starts automatically at boot
+- unpaired installs stay in setup mode with portal available
+- paired installs continue forwarding on restart without re-pair
 
 ## Appliance Defaults
 
-The appliance image uses the same `loramapr-receiverd` runtime and portal, with
-configuration defaults tuned for headless LAN operation:
+Appliance image uses the same `loramapr-receiverd` runtime with headless defaults:
 
 - `runtime.profile = appliance-pi`
-- `service.mode = auto` (unpaired boot starts in setup path)
+- `service.mode = auto`
 - `portal.bind_address = 0.0.0.0:8080`
-- hostname: `loramapr-receiver`
+- hostname default: `loramapr-receiver`
 - state path: `/var/lib/loramapr/receiver-state.json`
 - systemd service enabled at boot
 - Avahi/mDNS enabled for `.local` discovery
 
-Reference config: `packaging/pi/receiver.appliance.json`
+Reference config:
 
-## First-Boot Behavior
+- `packaging/pi/receiver.appliance.json`
 
-- `loramapr-receiverd` starts from systemd during boot.
-- If no durable receiver credentials exist, runtime remains in setup lifecycle and
-  serves the local portal for pairing.
-- Once paired, runtime transitions to steady-state forwarding and heartbeat loops
-  without switching binaries or runtime forks.
+## If You Cannot Find the Portal
 
-Expected first-boot diagnostics surfaces:
+1. Wait 2-3 minutes after first boot and refresh.
+2. Check router DHCP table and open `http://<pi-lan-ip>:8080`.
+3. Confirm Pi and setup device are on the same LAN.
+4. If still blocked, use local diagnostics from shell/console:
+   - `systemctl status loramapr-receiverd`
+   - `loramapr-receiverd doctor -config /etc/loramapr/receiver.json`
 
-- portal Troubleshooting page
-- `GET /api/status`
-- `loramapr-receiverd doctor` (advanced/fallback)
+## Lifecycle Recovery (No SSH Normal Path)
 
-Appliance-specific failure visibility includes:
+If portal shows revoked/disabled/replaced state:
 
-- `network_unavailable`
-- `pairing_not_completed`
-- `portal_unavailable`
-- `node_detected_not_connected`
-- `no_serial_device_detected`
-- `receiver_credential_revoked`
-- `receiver_disabled`
-- `receiver_replaced`
+1. Open **Troubleshooting**.
+2. Click **Reset And Re-pair**.
+3. Submit a fresh pairing code.
 
-Lifecycle recovery on appliance (no SSH normal path):
+## Image Artifacts and Verification
 
-- use portal Troubleshooting action "Reset And Re-pair"
-- re-enter a fresh pairing code in portal
-
-## Image Build Scaffolding
-
-Image build automation is provided in `packaging/pi/image/`.
-
-Inputs:
-
-- Linux arm64 systemd layout artifact:
-  `loramapr-receiver_<version>_linux_arm64_systemd.tar.gz`
-- Raspberry Pi OS image builder (`pi-gen`) workspace
-
-Entry points:
-
-- direct image build:
-  - `packaging/pi/image/build-image.sh <version> [channel]`
-- release-integrated image build:
-  - `PI_GEN_DIR=/path/to/pi-gen ENABLE_PI_IMAGE=1 packaging/release/build-artifacts.sh <version> <channel>`
-
-The build flow prepares `stage-loramapr` for `pi-gen`, runs image generation,
-and emits:
+Pi appliance release artifacts include:
 
 - `loramapr-receiver_<version>_pi_arm64.img.xz`
 - `loramapr-receiver_<version>_pi_arm64.image-metadata.json`
-
-Image contents include:
-
-- receiver binary + config + service unit
-- appliance config defaults
-- boot-time systemd enablement
-
-## Artifact Verification and Publication
-
-Pi appliance releases publish the image artifact alongside standard release
-checksums:
-
-- `loramapr-receiver_<version>_pi_arm64.img.xz`
 - `SHA256SUMS`
 - optional detached signatures (`*.asc`) when signing is enabled
 
-Verify downloaded image before flashing:
+Verify before flashing:
 
 ```bash
 sha256sum -c SHA256SUMS --ignore-missing
 ```
 
-Maintainer publish verification (including Pi image validation):
+## Build/Publication References (Maintainers)
 
-```bash
-PI_IMAGE_REQUIRED=1 packaging/distribution/verify.sh <version> <channel>
-```
+- direct image build:
+  - `packaging/pi/image/build-image.sh <version> [channel]`
+- release-integrated image build:
+  - `PI_GEN_DIR=/path/to/pi-gen ENABLE_PI_IMAGE=1 packaging/release/build-artifacts.sh <version> <channel>`
+- publication verification:
+  - `PI_IMAGE_REQUIRED=1 packaging/distribution/verify.sh <version> <channel>`
 
-## Cloud Onboarding Host-Choice Mapping
+## Cloud Onboarding Mapping
 
-Cloud onboarding host-choice UI should expose a first-class
-"Raspberry Pi Appliance" option that maps to receiver artifacts with:
+Cloud host-choice should expose a first-class Raspberry Pi option mapped to:
 
 - `platform = raspberry_pi`
-- `arch = arm64` (primary)
-- `channel = stable|beta`
-
-The host-choice option should direct users to the Pi image artifact path rather
-than advanced Linux package/manual service instructions.
-
-## Scope and Limits (v1)
-
-- Linux arm64 is the primary appliance image target.
-- Wi-Fi provisioning is expected through Raspberry Pi Imager first-boot settings
-  (SSID/password/country), not an SSH-first setup flow.
-- Image signing and secure-boot are future hardening work.
-
-## Difference vs Existing-OS Path
-
-- Appliance image path:
-  - flash image, boot Pi, open local portal, pair
-  - optimized for novice setup with minimal host administration
-- Existing-OS package path (`docs/linux-pi-distribution.md`):
-  - apt install on a pre-existing Debian-family OS
-  - preferred when user manages their own OS lifecycle and package updates
+- `arch = arm64`
+- `kind = appliance_image`

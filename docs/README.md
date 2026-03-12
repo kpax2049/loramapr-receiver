@@ -1,30 +1,29 @@
-# Docs
+# LoRaMapr Receiver Docs
 
-Architecture decisions and product runtime specifications for LoRaMapr Receiver.
+## Start Here
 
-- [ADR 0001: Standalone LoRaMapr Receiver Runtime](./adr/0001-standalone-receiver-runtime.md)
-- [v2.1.0 GA Plan: Linux/Pi Existing-OS](./ga-v2.1.0-linux-pi-existing-os.md)
-- [v2.2.0 GA Plan: Raspberry Pi Appliance](./ga-v2.2.0-raspberry-pi-appliance.md)
-- [v2.3.0 Plan: Receiver Lifecycle Management](./ga-v2.3.0-receiver-lifecycle-management.md)
-- [v2.4.0 Plan: Update Channels and Upgrade Safety](./ga-v2.4.0-update-channels-upgrade-safety.md)
-- [v2.5.0 Plan: Support and Operations Maturity](./ga-v2.5.0-support-operations-maturity.md)
-- [v2.6.0 Plan: Operational Automation and Notifications](./ga-v2.6.0-operational-automation-notifications.md)
-- [Runtime Config and State Layout](./runtime-config-state.md)
-- [Pairing and Bootstrap Lifecycle](./pairing-lifecycle.md)
-- [Receiver Lifecycle Management](./receiver-lifecycle.md)
+- [Raspberry Pi Appliance Path](./raspberry-pi-appliance.md)
+- [Linux/Pi Existing-OS Distribution Path](./linux-pi-distribution.md)
 - [Embedded Local Setup Portal](./local-portal.md)
-- [Meshtastic Adapter Behavior](./meshtastic-adapter.md)
-- [Steady-State Cloud Loop](./steady-state.md)
-- [Diagnostics and Failure Taxonomy](./diagnostics.md)
 - [Support and Operations Workflow](./support-operations-workflow.md)
-- [Version, Channel, and Upgrade Safety](./version-channel-upgrades.md)
+- [Reviewer Smoke Test Guide](./reviewer-smoke-test.md)
+
+## Install and Operate
+
 - [Service and Install Model](./service-install.md)
 - [Debian Package Lifecycle Behavior](./linux-package-lifecycle.md)
+- [Pairing and Bootstrap Lifecycle](./pairing-lifecycle.md)
+- [Receiver Lifecycle Management](./receiver-lifecycle.md)
+- [Steady-State Cloud Loop](./steady-state.md)
+- [Diagnostics and Failure/Attention Taxonomy](./diagnostics.md)
+- [Version, Channel, and Upgrade Safety](./version-channel-upgrades.md)
+
+## Releases and Artifacts
+
 - [Release Artifact Mapping](./release-artifacts.md)
-- [Linux/Pi Distribution Path](./linux-pi-distribution.md)
-- [Raspberry Pi Appliance Path](./raspberry-pi-appliance.md)
 - [Publish Guide](./publish-guide.md)
-- [Release Notes](./release-notes.md)
+- [Release Notes Index](./release-notes.md)
+- [Release Notes v2.7.0](./release-notes-v2.7.0.md)
 - [Release Notes v2.6.0](./release-notes-v2.6.0.md)
 - [Release Notes v2.5.0](./release-notes-v2.5.0.md)
 - [Release Notes v2.4.0](./release-notes-v2.4.0.md)
@@ -32,4 +31,16 @@ Architecture decisions and product runtime specifications for LoRaMapr Receiver.
 - [Release Notes v2.2.0](./release-notes-v2.2.0.md)
 - [Release Notes v2.1.0](./release-notes-v2.1.0.md)
 - [Release Notes v1.1.0](./release-notes-v1.1.0.md)
-- [Reviewer Smoke Test Guide](./reviewer-smoke-test.md)
+
+## Architecture and Milestone Specs
+
+- [ADR 0001: Standalone Runtime](./adr/0001-standalone-receiver-runtime.md)
+- [v2.7.0 Plan: Public Launch Hardening](./ga-v2.7.0-public-launch-hardening.md)
+- [v2.6.0 Plan: Operational Automation and Notifications](./ga-v2.6.0-operational-automation-notifications.md)
+- [v2.5.0 Plan: Support and Operations Maturity](./ga-v2.5.0-support-operations-maturity.md)
+- [v2.4.0 Plan: Update Channels and Upgrade Safety](./ga-v2.4.0-update-channels-upgrade-safety.md)
+- [v2.3.0 Plan: Receiver Lifecycle Management](./ga-v2.3.0-receiver-lifecycle-management.md)
+- [v2.2.0 Plan: Raspberry Pi Appliance](./ga-v2.2.0-raspberry-pi-appliance.md)
+- [v2.1.0 Plan: Linux/Pi Existing-OS](./ga-v2.1.0-linux-pi-existing-os.md)
+- [Runtime Config and State Layout](./runtime-config-state.md)
+- [Meshtastic Adapter Behavior](./meshtastic-adapter.md)

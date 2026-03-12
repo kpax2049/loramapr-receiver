@@ -1,123 +1,90 @@
 # Embedded Local Setup Portal
 
-`loramapr-receiverd` serves an embedded local web portal for setup, status, and
-support-safe troubleshooting.
+`loramapr-receiverd` serves a local web portal for setup, status, and
+troubleshooting.
 
-## Purpose
+For most users, this portal is the only interface needed after install.
 
-Portal is the normal operator interface for:
+## Open the Portal
 
-- pairing/bootstrap progress
-- service/cloud/node status
-- local attention state and remediation hints
-- lifecycle recovery guidance
-- update-supportability visibility
-- coarse operational checks
+Portal address depends on install path:
+
+- Pi appliance: `http://loramapr-receiver.local:8080` (preferred)
+- fallback: `http://<device-lan-ip>:8080`
+- local desktop/dev install: `http://127.0.0.1:8080`
+
+Bind address is configured by `portal.bind_address`.
+
+## What You Do in the Portal
+
+1. **Welcome**: confirm current setup/attention state and next action
+2. **Pairing**: enter pairing code from LoRaMapr Cloud
+3. **Progress**: confirm cloud reachability, node connection, and forwarding
+4. **Troubleshooting**: resolve common issues and run reset/re-pair when needed
+5. **Advanced**: build/install metadata for support and diagnostics
 
 ## Routes
 
-UI:
+UI routes:
 
-- `GET /` welcome/summary
-- `GET /pairing` pairing code form
-- `POST /pairing` pairing submission
-- `POST /reset` local reset/deauthorize
-- `GET /progress` runtime progress + operational checks
-- `GET /troubleshooting` actionable guidance
-- `GET /advanced` build/runtime/install details
+- `GET /`
+- `GET /pairing`
+- `POST /pairing`
+- `GET /progress`
+- `GET /troubleshooting`
+- `POST /reset`
+- `GET /advanced`
 
-API:
+API routes:
 
 - `GET /healthz`
 - `GET /readyz`
 - `GET /api/status`
-- `GET /api/ops` (coarse operational checks)
+- `GET /api/ops`
 - `POST /api/pairing/code`
 - `POST /api/lifecycle/reset`
 
 `GET /api/ops` includes:
 
-- operational checks summary
-- derived `attention` object (state/category/code/summary/hint)
+- coarse operational check summary
+- derived attention object (`state/category/code/summary/hint`)
 
-## Operational Checks in Portal
+## Attention States (User Meaning)
 
-Progress/Troubleshooting surfaces include check results for:
+- `none`: receiver is healthy enough for current mode
+- `info`: keep an eye on status, no immediate intervention
+- `action_required`: local action needed to recover normal operation
+- `urgent`: blocking issue; recover now (for example revoked/replaced/unsupported)
 
-- service health/running
-- pairing authorized
-- cloud reachability
-- node connection state
-- forwarding recent activity
-- update supportability state
+Common causes you may see:
 
-Each check uses coarse levels:
+- `pairing_not_completed`
+- `cloud_unreachable`
+- `no_serial_device_detected`
+- `events_not_forwarding`
+- `receiver_credential_revoked`
+- `receiver_version_unsupported`
 
-- `ok`
-- `warn`
-- `fail`
-- `unknown`
+## Security and Privacy
 
-Overall operational state:
-
-- `ok`
-- `degraded`
-- `blocked`
-
-## Local Attention Visibility
-
-Portal Welcome/Progress/Troubleshooting surfaces prioritize local attention
-state so nearby operators can triage before opening cloud consoles.
-
-Attention states shown in UI:
-
-- `none`
-- `info`
-- `action_required`
-- `urgent`
-
-Common attention scenarios highlighted locally:
-
-- not paired (`pairing_not_completed`)
-- cloud/network unreachable
-- node missing or not connected
-- forwarding backlog/stall
-- outdated or unsupported receiver build
-- revoked/disabled/replaced lifecycle state
-
-## Security Model
-
-Portal intentionally omits secrets from rendered content and `/api/status`:
+Portal intentionally omits secret material, including:
 
 - pairing code value
 - activation token
-- ingest API secret
+- ingest API key secret
 
-Only support-safe metadata is exposed.
+Only support-safe metadata is shown.
 
-## Troubleshooting Guidance
+## If Setup Is Stuck
 
-Portal guidance aligns to stable receiver taxonomy:
+1. Open **Troubleshooting** and follow suggested actions.
+2. Run local diagnostics:
 
-- pairing/setup: `pairing_code_invalid`, `pairing_code_expired`, `activation_failed`, `pairing_not_completed`
-- lifecycle/auth: `receiver_credential_revoked`, `receiver_disabled`, `receiver_replaced`, `receiver_auth_invalid`
-- connectivity/runtime: `cloud_unreachable`, `network_unavailable`, `portal_unavailable`, `cloud_config_incompatible`, `local_schema_incompatible`
-- node/forwarding: `no_serial_device_detected`, `node_detected_not_connected`, `events_not_forwarding`
-- release supportability: `receiver_outdated`, `receiver_version_unsupported`
+```bash
+loramapr-receiverd doctor -config /etc/loramapr/receiver.json
+loramapr-receiverd support-snapshot -config /etc/loramapr/receiver.json -out /tmp/receiver-support.json
+```
 
-Guidance language is intentionally coarse and support-safe so it can align with
-cloud-side attention categories.
+3. Continue with:
 
-## Binding and Discovery
-
-Configured by `portal.bind_address`.
-
-Recommended:
-
-- desktop/local: `127.0.0.1:8080`
-- Pi appliance: `0.0.0.0:8080`
-
-Pi discovery assumptions:
-
-- preferred: `http://loramapr-receiver.local:8080`
-- fallback: `http://<lan-ip>:8080`
+- [Support and Operations Workflow](./support-operations-workflow.md)

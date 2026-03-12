@@ -1,5 +1,8 @@
 # LoRaMapr Receiver Release Notes
 
+For Public Launch Hardening and Docs Polish notes targeting `v2.7.0`, see
+`docs/release-notes-v2.7.0.md`.
+
 For Operational Automation and Notifications notes targeting `v2.6.0`, see
 `docs/release-notes-v2.6.0.md`.
 

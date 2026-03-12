@@ -587,15 +587,16 @@ func signalNotifyContext() (context.Context, context.CancelFunc) {
 func printUsage() {
 	fmt.Println("LoRaMapr Receiver")
 	fmt.Println("Usage:")
-	fmt.Println("  loramapr-receiverd run [flags]")
-	fmt.Println("  loramapr-receiverd install [flags]")
-	fmt.Println("  loramapr-receiverd uninstall [flags]")
-	fmt.Println("  loramapr-receiverd doctor [flags]")
-	fmt.Println("  loramapr-receiverd status [flags]")
-	fmt.Println("  loramapr-receiverd support-snapshot [flags]")
-	fmt.Println("  loramapr-receiverd reset-pairing [flags]")
+	fmt.Println("  loramapr-receiverd run [flags]               Start receiver service runtime")
+	fmt.Println("  loramapr-receiverd install [flags]           Install Linux/systemd layout (advanced/manual)")
+	fmt.Println("  loramapr-receiverd uninstall [flags]         Remove Linux/systemd layout (advanced/manual)")
+	fmt.Println("  loramapr-receiverd doctor [flags]            Run local diagnostics checks")
+	fmt.Println("  loramapr-receiverd status [flags]            Print structured local status")
+	fmt.Println("  loramapr-receiverd support-snapshot [flags]  Export redacted support bundle")
+	fmt.Println("  loramapr-receiverd reset-pairing [flags]     Clear local receiver credentials and pair again")
 	fmt.Println("")
 	fmt.Println("If no subcommand is provided, run mode is used.")
+	fmt.Println("For install guides, see docs/raspberry-pi-appliance.md and docs/linux-pi-distribution.md.")
 }
 
 func detectMeshtastic(cfg config.MeshtasticConfig) (map[string]string, string) {

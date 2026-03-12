@@ -1,80 +1,81 @@
-# Receiver Diagnostics, Attention, and Ops Taxonomy
+# Receiver Diagnostics and Attention States
 
-This document defines receiver-side diagnostics behavior for v2.6.0 operational
-automation and notifications alignment.
+This document explains the local diagnostics surfaces and the stable
+failure/attention language used across portal, CLI, and cloud status payloads.
 
-## Commands and Surfaces
+## Quick Diagnostics Commands
 
-- `doctor`: local diagnostics with operational checks (`-json` supported)
-- `status`: structured local status output
-- `support-snapshot`: redacted support bundle export (JSON)
-- portal/API:
+```bash
+loramapr-receiverd doctor -config /etc/loramapr/receiver.json
+loramapr-receiverd status -config /etc/loramapr/receiver.json
+loramapr-receiverd support-snapshot -config /etc/loramapr/receiver.json -out /tmp/receiver-support.json
+```
+
+## Available Surfaces
+
+- CLI:
+  - `doctor` (human-readable and `-json`)
+  - `status` (structured JSON status)
+  - `support-snapshot` (redacted export for support)
+- Portal APIs:
   - `GET /api/status`
   - `GET /api/ops`
 
-## Coarse Failure Taxonomy
+## Stable Failure Codes
 
-Stable receiver-side failure codes:
+Receiver uses stable coarse failure codes:
 
-- `pairing_code_invalid`
-- `pairing_code_expired`
-- `activation_failed`
-- `pairing_not_completed`
-- `receiver_credential_revoked`
-- `receiver_disabled`
-- `receiver_replaced`
-- `receiver_auth_invalid`
-- `receiver_outdated`
-- `receiver_version_unsupported`
-- `cloud_config_incompatible`
-- `local_schema_incompatible`
-- `cloud_unreachable`
-- `network_unavailable`
-- `portal_unavailable`
-- `no_serial_device_detected`
-- `node_detected_not_connected`
-- `events_not_forwarding`
+- pairing/setup:
+  - `pairing_code_invalid`
+  - `pairing_code_expired`
+  - `activation_failed`
+  - `pairing_not_completed`
+- lifecycle/auth:
+  - `receiver_credential_revoked`
+  - `receiver_disabled`
+  - `receiver_replaced`
+  - `receiver_auth_invalid`
+- connectivity/runtime:
+  - `cloud_unreachable`
+  - `network_unavailable`
+  - `portal_unavailable`
+  - `cloud_config_incompatible`
+  - `local_schema_incompatible`
+- node/forwarding:
+  - `no_serial_device_detected`
+  - `node_detected_not_connected`
+  - `events_not_forwarding`
+- supportability:
+  - `receiver_outdated`
+  - `receiver_version_unsupported`
 
 ## Attention Model
 
-Attention is derived from failure taxonomy plus operational checks and is
-exposed consistently through portal, CLI, support bundle, and cloud heartbeat
-status payloads.
+Attention is derived from failure code plus operational checks.
 
-Attention states:
+States:
 
 - `none`
 - `info`
 - `action_required`
 - `urgent`
 
-Attention categories:
+Categories:
 
-- `pairing`
-- `connectivity`
-- `authorization`
-- `lifecycle`
-- `node`
-- `forwarding`
-- `version`
-- `compatibility`
-- `service`
+- `pairing`, `connectivity`, `authorization`, `lifecycle`, `node`,
+  `forwarding`, `version`, `compatibility`, `service`
 
-Representative mappings:
+Typical mappings:
 
-- `pairing_not_completed`, `pairing_code_invalid`, `pairing_code_expired`, `activation_failed` -> `pairing` / `action_required`
-- `cloud_unreachable`, `network_unavailable`, `portal_unavailable` -> `connectivity` / `action_required`
-- `receiver_auth_invalid` -> `authorization` / `urgent`
-- `receiver_credential_revoked`, `receiver_disabled`, `receiver_replaced` -> `lifecycle` / `urgent`
-- `no_serial_device_detected`, `node_detected_not_connected` -> `node` / `action_required`
-- `events_not_forwarding` -> `forwarding` / `action_required`
-- `receiver_outdated` -> `version` / `action_required`
-- `receiver_version_unsupported` -> `version` / `urgent`
-- `local_schema_incompatible`, `cloud_config_incompatible` -> `compatibility` / `urgent`
+- `pairing_not_completed` -> `action_required` / `pairing`
+- `cloud_unreachable` -> `action_required` / `connectivity`
+- `receiver_credential_revoked` -> `urgent` / `lifecycle`
+- `no_serial_device_detected` -> `action_required` / `node`
+- `receiver_version_unsupported` -> `urgent` / `version`
 
-## Operational Checks Model
+## Operational Checks
 
-Support-focused checks are evaluated as:
+`/api/ops` and `doctor` include checks:
 
 - `service_health`
 - `pairing_authorized`
@@ -83,7 +84,7 @@ Support-focused checks are evaluated as:
 - `forwarding_activity`
 - `update_supportability`
 
-Each check emits level:
+Each check level:
 
 - `ok`
 - `warn`
@@ -98,49 +99,31 @@ Overall state:
 
 ## Support Snapshot Export
 
-Generate:
+`support-snapshot` includes support-safe context:
 
-```bash
-loramapr-receiverd support-snapshot -config /etc/loramapr/receiver.json -out /tmp/receiver-support.json
-```
-
-Bundle includes:
-
-- runtime metadata: version/channel/build/platform/install type
-- config/state markers: config schema, state schema, runtime profile, paths
-- pairing/lifecycle state and authorization summary
-- cloud probe + cloud config version marker
-- network probe + local runtime status probe
-- meshtastic detection/connection summary
-- update status and recommendation summary
-- diagnostics failure code/summary/hint
-- attention state/category/code/summary/hint
-- operational checks and overall state
+- runtime version/channel/build/platform/install type
+- config/state schema markers
+- pairing/lifecycle/update summaries
+- cloud/network/node probes
+- operational checks
+- failure and attention summary
 - recent coarse errors
 
-If config/state loading is incompatible, export still writes a compatibility
-snapshot with `local_schema_incompatible` diagnostics to aid support.
+Redacted by default (never exported):
 
-## Redaction Guarantees
+- ingest API secret
+- pairing code value
+- activation token
+- raw credential secret material
 
-Support snapshot never exports raw secret values:
+## Minimal Field Triage
 
-- `cloud.ingest_api_key_secret`
-- `cloud.credential_ref`
-- `pairing.pairing_code`
-- `pairing.activation_token`
-
-Only support-safe booleans/metadata are included.
-
-## Field Triage Workflow
-
-1. Run `doctor` (human or JSON) and capture failure code + operational checks.
-2. Capture attention fields (`attention_state`, `attention_code`, `attention_hint`).
+1. Check portal **Troubleshooting** and **Progress** attention state.
+2. Run `doctor` and record `failure_code` + `attention_state`.
 3. Export `support-snapshot`.
-4. Compare portal Troubleshooting and `/api/ops` with CLI output.
-5. For lifecycle invalidation (`revoked`, `disabled`, `replaced`), reset/re-pair.
-6. For supportability failures (`receiver_version_unsupported`), upgrade receiver.
+4. If lifecycle is revoked/disabled/replaced, use reset and re-pair.
+5. If version is unsupported, upgrade before further troubleshooting.
 
-Detailed scenario runbook is in:
+Detailed runbook:
 
-- `docs/support-operations-workflow.md`
+- [Support and Operations Workflow](./support-operations-workflow.md)

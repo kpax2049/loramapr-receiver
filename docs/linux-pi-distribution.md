@@ -1,14 +1,15 @@
-# Linux and Raspberry Pi Distribution Path
+# Linux/Pi Existing-OS Install Path
 
-This document defines the Linux/Pi Existing-OS distribution path for
-LoRaMapr Receiver `v2.1.x`.
+Use this path when you already run Debian, Ubuntu, or Raspberry Pi OS and want
+LoRaMapr Receiver installed as a normal package/service.
 
-For the Raspberry Pi appliance image path (`flash image` flow), see
-`docs/raspberry-pi-appliance.md`.
+For the flash-image appliance path, use:
 
-## Supported Targets
+- [Raspberry Pi Appliance Path](./raspberry-pi-appliance.md)
 
-- Debian-family operating systems only:
+## Supported Systems
+
+- Debian-family OS:
   - Debian
   - Ubuntu-family
   - Raspberry Pi OS
@@ -17,96 +18,69 @@ For the Raspberry Pi appliance image path (`flash image` flow), see
   - `arm64`
   - `armv7` (`armhf` package architecture)
 
-## Published Structure
-
-Published artifacts are expected at:
-
-- `https://downloads.loramapr.com/receiver/<channel>/<version>/...`
-
-Per-version outputs include:
-
-- `.deb` packages:
-  - `loramapr-receiver_<version>_linux_amd64.deb`
-  - `loramapr-receiver_<version>_linux_arm64.deb`
-  - `loramapr-receiver_<version>_linux_armv7.deb`
-- fallback layout archives:
-  - `loramapr-receiver_<version>_linux_amd64_systemd.tar.gz`
-  - `loramapr-receiver_<version>_linux_arm64_systemd.tar.gz`
-  - `loramapr-receiver_<version>_linux_armv7_systemd.tar.gz`
-- checksums and metadata:
-  - `SHA256SUMS`
-  - `cloud-manifest.fragment.json`
-  - `release-metadata.json`
-
-Channel metadata:
-
-- `https://downloads.loramapr.com/receiver/<channel>/channel-index.json`
-
-## Signature and Integrity Files
-
-Per-version publication includes:
-
-- `SHA256SUMS`
-- `SHA256SUMS.asc` (when signed)
-- `cloud-manifest.fragment.json`
-- `cloud-manifest.fragment.json.asc` (when signed)
-- `release-metadata.json`
-- `release-metadata.json.asc` (when signed)
-
-Channel index may also include detached signature:
-
-- `channel-index.json.asc`
-
-## Existing-OS Install Path (Primary)
-
-APT repository installation is the primary GA path. See
-`packaging/distribution/apt/README.md` for repository layout and publication.
-
-APT installation example:
+## Recommended Install (Signed APT Repository)
 
 ```bash
 CHANNEL=stable
 curl -fsSL "https://downloads.loramapr.com/apt/${CHANNEL}/loramapr-archive-keyring.asc" \
   | gpg --dearmor \
   | sudo tee /usr/share/keyrings/loramapr-archive-keyring.gpg >/dev/null
+
 echo "deb [signed-by=/usr/share/keyrings/loramapr-archive-keyring.gpg] https://downloads.loramapr.com/apt/${CHANNEL} ${CHANNEL} main" \
   | sudo tee /etc/apt/sources.list.d/loramapr-receiver.list >/dev/null
+
 sudo apt-get update
 sudo apt-get install -y loramapr-receiver
 ```
 
-Direct package install path (manual fallback):
+After install:
+
+1. Confirm service is running: `systemctl status loramapr-receiverd`
+2. Open local portal:
+   - `http://loramapr-receiver.local:8080` (if mDNS available)
+   - or `http://<host-lan-ip>:8080`
+3. Enter pairing code from LoRaMapr Cloud.
+
+## Manual `.deb` Install (Fallback)
+
+Use this only when APT repository access is not possible.
+
+`amd64` example:
 
 ```bash
-VERSION=v2.1.0
+VERSION=v2.7.0
 CHANNEL=stable
 BASE=https://downloads.loramapr.com/receiver/${CHANNEL}/${VERSION}
 
 curl -fsSLO "${BASE}/loramapr-receiver_${VERSION}_linux_amd64.deb"
 curl -fsSLO "${BASE}/SHA256SUMS"
 sha256sum -c SHA256SUMS --ignore-missing
+
 sudo apt-get update
 sudo apt-get install -y ./loramapr-receiver_${VERSION}_linux_amd64.deb
 ```
 
-On Raspberry Pi OS (64-bit):
+`arm64` example (Raspberry Pi OS 64-bit):
 
 ```bash
-VERSION=v2.1.0
+VERSION=v2.7.0
 CHANNEL=stable
 BASE=https://downloads.loramapr.com/receiver/${CHANNEL}/${VERSION}
 
 curl -fsSLO "${BASE}/loramapr-receiver_${VERSION}_linux_arm64.deb"
 curl -fsSLO "${BASE}/SHA256SUMS"
 sha256sum -c SHA256SUMS --ignore-missing
+
 sudo apt-get update
 sudo apt-get install -y ./loramapr-receiver_${VERSION}_linux_arm64.deb
 ```
 
-## Fallback / Advanced Path
+## Advanced Fallback: Systemd Layout Tarball
 
-Systemd layout tarballs remain available for advanced/manual workflows where APT
-repository usage is not possible.
+If package install is not possible, manual systemd layout archives are still
+published:
+
+- `loramapr-receiver_<version>_linux_<arch>_systemd.tar.gz`
 
 ```bash
 sudo tar -xzf "loramapr-receiver_${VERSION}_linux_amd64_systemd.tar.gz" -C /
@@ -114,47 +88,38 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now loramapr-receiverd
 ```
 
-## Package Lifecycle Expectations
+## Install/Upgrade/Remove Behavior
 
-- `apt upgrade`: preserves config/state and restarts service safely
-- `apt remove`: stops service and keeps config/state
-- `apt purge`: removes config/state and resets local receiver data
+- `apt upgrade`: keeps config/state and restarts service safely
+- `apt remove`: removes package and stops service, keeps config/state
+- `apt purge`: removes package plus config/state (full local reset)
 
-Detailed lifecycle policy: `docs/linux-package-lifecycle.md`.
+Detailed lifecycle policy:
 
-## Maintainer Publish Flow
+- [Debian-family Package Lifecycle Behavior](./linux-package-lifecycle.md)
 
-1. Build release artifacts:
+## Published Artifacts and Integrity Files
 
-```bash
-packaging/release/build-artifacts.sh <version> <channel>
-```
+Per release version/channel (`receiver/<channel>/<version>/`), published outputs
+include:
 
-2. Validate `.deb` structure:
+- `loramapr-receiver_<version>_linux_amd64.deb`
+- `loramapr-receiver_<version>_linux_arm64.deb`
+- `loramapr-receiver_<version>_linux_armv7.deb`
+- `SHA256SUMS`
+- optional detached signatures (`*.asc`) when signing is enabled
+- `cloud-manifest.fragment.json`
+- `release-metadata.json`
 
-```bash
-packaging/debian/validate-deb.sh dist/<version>/artifacts/loramapr-receiver_<version>_linux_amd64.deb
-```
+## Maintainer Publication References
 
-3. Stage signed publication tree:
+Maintainer publish/verify flow:
 
-```bash
-GPG_KEY_ID=<maintainer-key-id> SIGNING_MODE=required \
-  packaging/distribution/publish.sh <version> <channel>
-```
+- `packaging/release/build-artifacts.sh <version> <channel>`
+- `packaging/distribution/publish.sh <version> <channel>`
+- `packaging/distribution/verify.sh <version> <channel>`
+- `packaging/distribution/apt/README.md`
 
-4. Validate staged publication:
+Cloud artifact mapping:
 
-```bash
-packaging/distribution/verify.sh <version> <channel>
-```
-
-5. Publish/sync `dist/published/` to hosting.
-
-## Cloud Onboarding Alignment
-
-Cloud should reference `cloud-manifest.fragment.json` and published URLs under
-`receiver/<channel>/<version>/`.
-
-Use Raspberry Pi host-choice entries against `platform=raspberry_pi` entries
-from the manifest fragment. For existing-OS users, prefer `kind=deb_package`.
+- [Release Artifact Mapping](./release-artifacts.md)

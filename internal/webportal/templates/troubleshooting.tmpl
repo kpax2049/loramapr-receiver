@@ -1,7 +1,7 @@
 {{define "content"}}
 <section class="panel">
   <h2>Troubleshooting</h2>
-  <p>Use these checks before escalating support issues.</p>
+  <p>Use this page when pairing is stuck, cloud is offline, node is missing, or packets are not forwarding.</p>
   {{if .Snapshot.FailureCode}}
   <div class="hint err">
     <strong>{{.Snapshot.FailureCode}}</strong>: {{.Snapshot.FailureSummary}}
@@ -38,14 +38,15 @@
 </section>
 <section class="panel">
   <h2>Lifecycle Actions</h2>
-  <p>If receiver credentials were revoked, disabled, or replaced, reset local credentials and re-pair.</p>
+  <p>If this receiver was revoked, disabled, or replaced in cloud, reset local credentials and pair again.</p>
   <form method="post" action="/reset">
     <input type="hidden" name="deauthorize" value="1">
     <button type="submit">Reset And Re-pair</button>
   </form>
 </section>
 <section class="panel">
-  <h2>Health Endpoints</h2>
+  <h2>Advanced Local Endpoints</h2>
+  <p class="muted">These endpoints are mainly for local diagnostics tooling and support workflows.</p>
   <table>
     <tr><th>Liveness</th><td><span class="mono">GET /healthz</span></td></tr>
     <tr><th>Readiness</th><td><span class="mono">GET /readyz</span></td></tr>

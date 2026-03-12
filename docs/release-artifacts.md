@@ -1,98 +1,111 @@
-# Release Artifacts and Cloud Manifest Mapping
+# Release Artifacts and Download Mapping
 
-This document maps receiver release outputs to the cloud-side receiver artifact
-manifest consumed by onboarding flows.
+This document explains which LoRaMapr Receiver artifacts are published and how
+cloud onboarding should reference them.
+
+## Which Download Should I Use?
+
+For end users:
+
+1. Raspberry Pi appliance user:
+   - download `loramapr-receiver_<version>_pi_arm64.img.xz`
+   - flash image and boot
+2. Existing Debian/Ubuntu/Raspberry Pi OS user:
+   - use APT repository install (`loramapr-receiver` package)
+   - or manual `.deb` fallback for your architecture
+
+For install guides:
+
+- [Raspberry Pi Appliance Path](./raspberry-pi-appliance.md)
+- [Linux/Pi Existing-OS Install Path](./linux-pi-distribution.md)
 
 ## Artifact Generation
 
-Use:
+Build release artifacts:
 
 ```bash
 packaging/release/build-artifacts.sh <version> [channel]
 ```
 
-Enable Pi appliance image output:
+Enable Pi image output:
 
 ```bash
 PI_GEN_DIR=/path/to/pi-gen ENABLE_PI_IMAGE=1 \
   packaging/release/build-artifacts.sh <version> [channel]
 ```
 
-Artifacts are generated in `dist/<version>/artifacts/` with a shared
-`SHA256SUMS` file.
+Outputs are written to `dist/<version>/artifacts/` with `SHA256SUMS`.
 
-## Naming Rules
+## Naming Conventions
 
-Binary archives:
+General binary archives:
 
 - `loramapr-receiver_<version>_<os>_<arch>.tar.gz`
 - `loramapr-receiver_<version>_windows_amd64.zip`
 
-Linux systemd layout archives:
-
-- `loramapr-receiver_<version>_linux_<arch>_systemd.tar.gz`
-
-Linux Debian packages:
+Linux package outputs:
 
 - `loramapr-receiver_<version>_linux_amd64.deb`
 - `loramapr-receiver_<version>_linux_arm64.deb`
-- `loramapr-receiver_<version>_linux_armv7.deb` (`armhf` package architecture)
+- `loramapr-receiver_<version>_linux_armv7.deb`
 
-Raspberry Pi appliance image artifacts (when Pi image build is enabled):
+Linux advanced fallback archives:
+
+- `loramapr-receiver_<version>_linux_<arch>_systemd.tar.gz`
+
+Pi appliance image outputs:
 
 - `loramapr-receiver_<version>_pi_arm64.img.xz`
 - `loramapr-receiver_<version>_pi_arm64.image-metadata.json`
 
-Manifest and metadata outputs:
+Manifest/metadata outputs:
 
 - `cloud-manifest.fragment.json`
 - `release-metadata.json`
+- `SHA256SUMS`
 
-`release-metadata.json` includes:
+Optional signature outputs (when signing enabled):
+
+- detached `*.asc` files for artifacts and metadata
+
+## Cloud Manifest Mapping
+
+Cloud onboarding maps each artifact using:
 
 - `receiverVersion`
 - `channel`
-- `gitCommit` (if available)
-- `buildDate` (if provided)
-- `buildID` (if provided)
-- artifact counts by platform grouping
+- `platform`
+- `arch`
+- `kind`
+- `downloadUrl`
+- `checksumSha256`
+- optional `signatureUrl`
 
-Validation helper:
+`cloud-manifest.fragment.json` is the source file for this mapping.
 
-- `packaging/debian/validate-deb.sh <deb-file>`
-- `packaging/pi/image/validate-image.sh <image-artifact>`
+Typical kinds:
 
-## Cloud Manifest Fields
+- `appliance_image`
+- `deb_package`
+- `systemd_layout`
+- `binary`
 
-When publishing to `loramapr-cloud` receiver artifact catalog, map each artifact:
+## Published URL Pattern
 
-- `receiverVersion`: `<version>`
-- `channel`: `stable` or `beta`
-- `platform`: one of `raspberry_pi`, `linux`, `macos`, `windows`
-- `arch`: `amd64`, `arm64`, or `armv7`
-- `kind`: `binary`, `systemd_layout`, `deb_package`, or `appliance_image`
-- `downloadUrl`: hosted URL to artifact file
-- `checksumSha256`: sha256 from `SHA256SUMS`
-- `signatureUrl`: optional (future signing pipeline)
-- `recommended`: policy-controlled flag
-
-Cloud-ready mapping is produced directly by `cloud-manifest.fragment.json`. This
-fragment already includes platform/arch/checksum/relative URL for each artifact,
-including Raspberry Pi aliases for Linux arm64/armv7 systemd and `.deb` outputs.
-
-## Suggested URL Pattern
-
-Suggested host path convention:
+Suggested path pattern:
 
 - `https://downloads.loramapr.com/receiver/<channel>/<version>/<artifact-file>`
 
-This is compatible with existing cloud catalog patterns and keeps receiver
-versioning explicit in URL path.
+This keeps version/channel explicit and aligns with generated manifest
+`relativeUrl` values.
 
-The generated `relativeUrl` values in the manifest fragment are based on this
-path pattern (`receiver/<channel>/<version>/<artifact-file>`).
+## Validation Helpers (Maintainers)
 
-For signed Linux/Pi publication flow and channel index metadata generation, see:
+- `packaging/debian/validate-deb.sh <deb-file>`
+- `packaging/pi/image/validate-image.sh <image-artifact>`
+- `packaging/distribution/verify.sh <version> <channel>`
+
+For signed publication and APT repository details:
 
 - `packaging/distribution/README.md`
 - `docs/linux-pi-distribution.md`

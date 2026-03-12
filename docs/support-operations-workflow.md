@@ -1,118 +1,135 @@
-# Support and Operations Workflow (Field Guide)
+# Support and Troubleshooting Workflow
 
-This runbook focuses on common receiver field issues using local portal and CLI
-tools only, aligned with the v2.6 attention/remediation model.
+This is the primary field runbook for LoRaMapr Receiver support.
 
-## Standard Data Capture
+It applies to both supported install paths:
 
-1. Run:
-   - `loramapr-receiverd doctor -config /etc/loramapr/receiver.json`
-2. Export:
-   - `loramapr-receiverd support-snapshot -config /etc/loramapr/receiver.json -out /tmp/receiver-support.json`
-3. Capture:
-   - portal `/progress` screenshot
-   - portal `/troubleshooting` screenshot
-4. Record attention fields from portal/CLI:
-   - `attention_state`
-   - `attention_code`
-   - `attention_hint`
+- Raspberry Pi appliance image
+- Existing Debian-family Linux / Raspberry Pi OS package install
 
-## Case: Receiver Offline in Cloud
+## 1. Identify Install Path and Device Access
 
-Typical local indicators:
+Record which path is in use:
 
-- failure code: `cloud_unreachable`
-- attention:
-  - `state = action_required`
-  - `category = connectivity`
-- operational checks:
-  - `cloud_reachability = fail`
-  - `service_health = ok|warn`
+- `pi-appliance`
+- `linux-package`
+- `manual-systemd` (advanced fallback)
+
+Confirm operator can open local portal:
+
+- `http://loramapr-receiver.local:8080` (preferred)
+- `http://<device-lan-ip>:8080` (fallback)
+
+## 2. Collect Standard Support Data
+
+Run:
+
+```bash
+loramapr-receiverd doctor -config /etc/loramapr/receiver.json
+loramapr-receiverd support-snapshot -config /etc/loramapr/receiver.json -out /tmp/receiver-support.json
+```
+
+Capture:
+
+- portal `/progress` screenshot
+- portal `/troubleshooting` screenshot
+- attention fields:
+  - `attention_state`
+  - `attention_code`
+  - `attention_hint`
+
+## 3. Common Failure Flows
+
+### Receiver Offline in Cloud
+
+Indicators:
+
+- failure: `cloud_unreachable`
+- attention: `action_required` / `connectivity`
+- operational: `cloud_reachability = fail`
 
 Actions:
 
 1. Verify local internet/DNS/firewall.
-2. Verify `cloud.base_url` in config.
-3. Confirm system time is correct.
-4. Recheck `doctor` and `status`.
+2. Verify `cloud.base_url`.
+3. Confirm system clock is correct.
+4. Recheck portal and `doctor` output.
 
-## Case: Receiver Online but Node Missing
+### Receiver Online but Node Missing
 
-Typical local indicators:
+Indicators:
 
-- failure code: `no_serial_device_detected` or `node_detected_not_connected`
-- attention:
-  - `state = action_required`
-  - `category = node`
-- operational check:
-  - `node_connection = fail|warn`
+- failure: `no_serial_device_detected` or `node_detected_not_connected`
+- attention: `action_required` / `node`
 
 Actions:
 
-1. Check USB cable/power for Meshtastic device.
-2. Verify serial device path/permissions.
-3. Reconnect and confirm portal `/progress` node state changes.
+1. Check USB cable/power to Meshtastic device.
+2. Confirm serial device permissions/path.
+3. Refresh portal Progress for node state update.
 
-## Case: Paired but No Packets Forwarding
+### Paired but Not Forwarding
 
-Typical local indicators:
+Indicators:
 
-- failure code: `events_not_forwarding`
-- attention:
-  - `state = action_required`
-  - `category = forwarding`
-- operational checks:
-  - `pairing_authorized = ok`
-  - `forwarding_activity = fail|warn`
+- failure: `events_not_forwarding`
+- attention: `action_required` / `forwarding`
+- operational: `pairing_authorized = ok`, `forwarding_activity = fail|warn`
 
 Actions:
 
-1. Confirm cloud reachability and auth validity.
-2. Confirm node traffic exists (not silent network).
-3. Check ingest queue depth and last packet ack timestamps.
-4. Re-pair only if auth/lifecycle indicators require it.
+1. Verify cloud reachability.
+2. Confirm node is producing traffic.
+3. Check queue depth and last packet acknowledgement.
+4. Re-pair only if auth/lifecycle state requires it.
 
-## Case: Receiver Replaced/Revoked/Disabled
+### Revoked, Disabled, or Replaced
 
-Typical local indicators:
+Indicators:
 
-- failure code:
-  - `receiver_credential_revoked`
-  - `receiver_disabled`
-  - `receiver_replaced`
-- attention:
-  - `state = urgent`
-  - `category = lifecycle`
+- failure: `receiver_credential_revoked` / `receiver_disabled` / `receiver_replaced`
+- attention: `urgent` / `lifecycle`
 
 Actions:
 
-1. Use reset path:
-   - portal `Reset And Re-pair`, or
-   - `loramapr-receiverd reset-pairing -config /etc/loramapr/receiver.json`
-2. Submit new pairing code.
-3. Confirm `pairing_authorized` check becomes `ok`.
+1. Use **Reset And Re-pair** in portal Troubleshooting (preferred).
+2. Or run:
 
-## Case: Local Schema/Upgrade Issue
+```bash
+loramapr-receiverd reset-pairing -config /etc/loramapr/receiver.json
+```
 
-Typical local indicators:
+3. Submit fresh pairing code.
 
-- failure code: `local_schema_incompatible`
-- attention:
-  - `state = urgent`
-  - `category = compatibility`
-- CLI hint indicates runtime/config/state schema mismatch
+### Outdated or Unsupported Version
+
+Indicators:
+
+- failure: `receiver_outdated` or `receiver_version_unsupported`
+- attention: `action_required|urgent` / `version`
 
 Actions:
 
-1. Upgrade runtime to compatible version.
-2. Re-run `doctor` and `support-snapshot`.
-3. Avoid destructive state reset unless recovery policy requires it.
+1. Upgrade via supported release path (APT or appliance image).
+2. Recheck portal attention and operational status after restart.
 
-## Escalation Package
+## 4. Path-Specific Notes
 
-When escalating, include:
+Pi appliance:
 
-- `support-snapshot` JSON
-- key failure code and operational summary
-- install path (`linux-package`, `pi-appliance`, etc.)
-- steps already attempted
+- normal recovery should not require SSH
+- if portal unavailable, fallback to Pi LAN IP and check power/network
+
+Existing Linux/Pi OS:
+
+- verify service health with `systemctl status loramapr-receiverd`
+- confirm package lifecycle behavior (`remove` vs `purge`) before destructive actions
+
+## 5. Escalation Package
+
+Include in escalation:
+
+- `/tmp/receiver-support.json`
+- install path (`pi-appliance`, `linux-package`, or `manual-systemd`)
+- failure + attention summary
+- actions already attempted

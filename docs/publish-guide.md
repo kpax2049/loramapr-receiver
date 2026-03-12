@@ -1,8 +1,11 @@
-# Receiver Publish Guide (v2.2.0 Raspberry Pi Appliance GA)
+# Receiver Publish Guide
 
-This guide ties together artifact generation, signed Linux/Pi publication,
-APT repository publication, diagnostics support workflow, and version/channel
-reporting.
+This guide is for maintainers publishing LoRaMapr Receiver artifacts.
+
+For user install flows, use:
+
+- [Raspberry Pi Appliance Path](./raspberry-pi-appliance.md)
+- [Linux/Pi Existing-OS Install Path](./linux-pi-distribution.md)
 
 ## 1. Build Release Artifacts
 
@@ -17,15 +20,8 @@ PI_GEN_DIR=/path/to/pi-gen ENABLE_PI_IMAGE=1 \
   packaging/release/build-artifacts.sh <version> <channel>
 ```
 
-Outputs in `dist/<version>/artifacts/` include:
-
-- platform archives
-- Linux/Pi `.deb` packages
-- Linux/Pi systemd layout archives
-- optional Pi appliance image (`ENABLE_PI_IMAGE=1`)
-- `SHA256SUMS`
-- `cloud-manifest.fragment.json`
-- `release-metadata.json`
+Outputs in `dist/<version>/artifacts/` include release artifacts, checksums,
+manifest fragment, and release metadata.
 
 ## 2. Publish Signed Linux/Pi Distribution
 
@@ -41,68 +37,42 @@ Staged publication tree:
 - `dist/published/apt/<channel>/pool/...`
 - `dist/published/apt/<channel>/dists/<suite>/...`
 
-When signing is enabled:
-
-- static artifact detached `*.asc` signatures are generated
-- APT metadata is signed (`InRelease`, `Release.gpg`)
-- repository public key exports are generated (`loramapr-archive-keyring.asc/.gpg`)
-
 ## 3. Verify Publication
 
 ```bash
 packaging/distribution/verify.sh <version> <channel>
 ```
 
-This checks static file integrity and APT repository metadata/signature
-structure.
-
-If Pi image is part of the release:
+If Pi image is required in this release:
 
 ```bash
 PI_IMAGE_REQUIRED=1 packaging/distribution/verify.sh <version> <channel>
 ```
 
-## 4. Cloud Onboarding Mapping
+## 4. Cloud Artifact Mapping
 
 Cloud should consume:
 
 - `cloud-manifest.fragment.json`
-- published URL pattern `receiver/<channel>/<version>/<artifact-file>`
+- URL pattern `receiver/<channel>/<version>/<artifact-file>`
 
-Pi onboarding should use `platform=raspberry_pi` entries from the manifest and
-prefer:
+Preferred kinds for onboarding:
 
-- `kind=appliance_image` for flash-image appliance path
-- `kind=deb_package` for existing-OS package path
+- `appliance_image` for Raspberry Pi appliance path
+- `deb_package` for existing-OS package path
 
-## 5. Runtime Diagnostics and Support
+## 5. Diagnostics Sanity Check
 
-First-run failures are surfaced by taxonomy codes in local portal and CLI.
-
-Support capture:
+Before final release announcement:
 
 ```bash
 loramapr-receiverd doctor -config /etc/loramapr/receiver.json
 loramapr-receiverd support-snapshot -config /etc/loramapr/receiver.json -out /tmp/receiver-support.json
 ```
 
-Support snapshot is redacted and omits secrets.
+## Related References
 
-## 6. Version/Channel Reporting
-
-Release builds stamp binaries with build metadata (`version`, `channel`,
-`commit`, optional `build_date`, `build_id`) using release `ldflags`.
-These values surface in:
-
-- `/api/status`
-- heartbeat metadata
-- portal advanced details
-- `doctor`, `status`, and `support-snapshot` outputs
-
-## Related Docs
-
-- `docs/release-artifacts.md`
-- `docs/linux-pi-distribution.md`
+- [Release Artifact Mapping](./release-artifacts.md)
+- [Support and Troubleshooting Workflow](./support-operations-workflow.md)
+- [Version, Channel, and Upgrade Safety](./version-channel-upgrades.md)
 - `packaging/distribution/apt/README.md`
-- `docs/diagnostics.md`
-- `docs/version-channel-upgrades.md`

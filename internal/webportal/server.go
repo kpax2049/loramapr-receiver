@@ -515,11 +515,11 @@ func summaryHint(snap status.Snapshot) (string, string) {
 
 	switch snap.PairingPhase {
 	case "unpaired":
-		return "Receiver is waiting for a pairing code.", "warn"
+		return "Receiver is installed and waiting for a pairing code.", "warn"
 	case "pairing_code_entered", "bootstrap_exchanged":
-		return "Pairing is in progress. Keep this page open and wait for activation.", "warn"
+		return "Pairing is in progress. Keep this page open while the receiver activates.", "warn"
 	case "activated", "steady_state":
-		return "Receiver is paired and credentials are active.", "ok"
+		return "Receiver is paired and ready for normal forwarding.", "ok"
 	default:
 		if snap.LastError != "" {
 			return "Receiver reported an error. Check troubleshooting details.", "err"
@@ -533,9 +533,9 @@ func nextAction(snap status.Snapshot) string {
 	isAppliance := strings.EqualFold(strings.TrimSpace(snap.RuntimeProfile), "appliance-pi")
 	switch attention.Code {
 	case "operational_blocked":
-		return "Open Troubleshooting and resolve blocking checks before expecting cloud forwarding."
+		return "Open Troubleshooting and resolve blocking checks before expecting normal forwarding."
 	case "operational_degraded":
-		return "Review Progress operational checks and resolve warnings before they become service issues."
+		return "Review Progress checks and resolve warnings before they become service issues."
 	}
 	switch attention.Category {
 	case diagnostics.AttentionCategoryLifecycle:
@@ -551,7 +551,7 @@ func nextAction(snap status.Snapshot) string {
 	case diagnostics.AttentionCategoryNode:
 		return "Connect a Meshtastic node and verify the adapter reaches connected state."
 	case diagnostics.AttentionCategoryForwarding:
-		return "Verify cloud reachability and auth, then confirm queued packets are acknowledged."
+		return "Verify cloud connectivity and authorization, then confirm queued packets are acknowledged."
 	}
 
 	switch strings.TrimSpace(snap.FailureCode) {
@@ -565,9 +565,9 @@ func nextAction(snap status.Snapshot) string {
 		}
 		return "Open Pairing and enter the pairing code from LoRaMapr Cloud."
 	case "pairing_code_entered", "bootstrap_exchanged":
-		return "Monitor Progress until the receiver reaches steady state."
+		return "Monitor Progress until pairing completes and receiver shows ready."
 	case "activated", "steady_state":
-		return "Verify meshtastic node detection and packet forwarding in Progress."
+		return "Verify Meshtastic node connection and packet forwarding on Progress."
 	default:
 		return "Check current status and resolve any reported errors."
 	}
@@ -595,9 +595,9 @@ func troubleshootingHints(snap status.Snapshot) []string {
 		if summary == "" {
 			summary = snap.FailureCode
 		}
-		hints = append(hints, "Current failure: "+summary)
+		hints = append(hints, "Current issue: "+summary)
 		if hint := strings.TrimSpace(snap.FailureHint); hint != "" {
-			hints = append(hints, "Suggested action: "+hint)
+			hints = append(hints, "Suggested next step: "+hint)
 		}
 	}
 	switch strings.TrimSpace(snap.FailureCode) {

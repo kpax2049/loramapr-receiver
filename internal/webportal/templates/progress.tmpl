@@ -1,6 +1,7 @@
 {{define "content"}}
 <section class="panel">
-  <h2>Setup Progress</h2>
+  <h2>Receiver Progress</h2>
+  <p>Use this page to confirm pairing, cloud reachability, node connection, and forwarding activity.</p>
   {{if .Flash}}
   <div class="hint {{.FlashClass}}">{{.Flash}}</div>
   {{end}}
@@ -11,7 +12,7 @@
     <div class="status-chip"><div class="label">Service State</div><div class="value">{{.Snapshot.Lifecycle}}</div></div>
     <div class="status-chip"><div class="label">Meshtastic Status</div><div class="value">{{.MeshtasticState}}</div></div>
     <div class="status-chip"><div class="label">Update Status</div><div class="value mono">{{if .Snapshot.UpdateStatus}}{{.Snapshot.UpdateStatus}}{{else}}unknown{{end}}</div></div>
-    <div class="status-chip"><div class="label">Failure State</div><div class="value mono">{{if .Snapshot.FailureCode}}{{.Snapshot.FailureCode}}{{else}}none{{end}}</div></div>
+    <div class="status-chip"><div class="label">Issue Code</div><div class="value mono">{{if .Snapshot.FailureCode}}{{.Snapshot.FailureCode}}{{else}}none{{end}}</div></div>
     <div class="status-chip">
       <div class="label">Attention</div>
       <div class="value">
@@ -47,7 +48,7 @@
   </table>
 </section>
 <section class="panel">
-  <h2>Status Details</h2>
+  <h2>Detailed Status</h2>
   <table>
     <tr><th>Ready</th><td>{{if .Snapshot.Ready}}yes{{else}}no{{end}} {{if .Snapshot.ReadyReason}}({{.Snapshot.ReadyReason}}){{end}}</td></tr>
     <tr><th>Cloud Reachable</th><td>{{if .Snapshot.CloudReachable}}yes{{else}}no{{end}}</td></tr>
@@ -60,8 +61,8 @@
     <tr><th>Cloud Endpoint</th><td class="mono">{{.Snapshot.CloudEndpoint}}</td></tr>
     <tr><th>Mode</th><td class="mono">{{.Snapshot.Mode}}</td></tr>
     <tr><th>Runtime Profile</th><td class="mono">{{.Snapshot.RuntimeProfile}}</td></tr>
-    <tr><th>Failure Summary</th><td>{{if .Snapshot.FailureSummary}}{{.Snapshot.FailureSummary}}{{else}}none{{end}}</td></tr>
-    <tr><th>Failure Guidance</th><td>{{if .Snapshot.FailureHint}}{{.Snapshot.FailureHint}}{{else}}none{{end}}</td></tr>
+    <tr><th>Issue Summary</th><td>{{if .Snapshot.FailureSummary}}{{.Snapshot.FailureSummary}}{{else}}none{{end}}</td></tr>
+    <tr><th>Issue Guidance</th><td>{{if .Snapshot.FailureHint}}{{.Snapshot.FailureHint}}{{else}}none{{end}}</td></tr>
     <tr><th>Attention State</th><td class="mono">{{if .Attention.State}}{{.Attention.State}}{{else}}none{{end}}</td></tr>
     <tr><th>Attention Category</th><td class="mono">{{if .Attention.Category}}{{.Attention.Category}}{{else}}none{{end}}</td></tr>
     <tr><th>Attention Summary</th><td>{{if .Attention.Summary}}{{.Attention.Summary}}{{else}}none{{end}}</td></tr>

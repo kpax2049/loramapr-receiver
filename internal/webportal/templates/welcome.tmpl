@@ -1,15 +1,15 @@
 {{define "content"}}
 <section class="panel">
-  <h2>Welcome</h2>
-  <p>This local portal is the primary setup and status interface for LoRaMapr Receiver.</p>
+  <h2>Welcome to LoRaMapr Receiver</h2>
+  <p>Use this local portal to pair your receiver, verify node connection, and confirm packet forwarding.</p>
   <div class="status-grid">
-    <div class="status-chip"><div class="label">Pairing</div><div class="value">{{.Snapshot.PairingPhase}}</div></div>
-    <div class="status-chip"><div class="label">Cloud</div><div class="value">{{.Snapshot.CloudStatus}}</div></div>
-    <div class="status-chip"><div class="label">Service</div><div class="value">{{.Snapshot.Lifecycle}}</div></div>
+    <div class="status-chip"><div class="label">Pairing Status</div><div class="value">{{.Snapshot.PairingPhase}}</div></div>
+    <div class="status-chip"><div class="label">Cloud Status</div><div class="value">{{.Snapshot.CloudStatus}}</div></div>
+    <div class="status-chip"><div class="label">Service Status</div><div class="value">{{.Snapshot.Lifecycle}}</div></div>
     <div class="status-chip"><div class="label">Ready</div><div class="value">{{if .Snapshot.Ready}}yes{{else}}no{{end}}</div></div>
-    <div class="status-chip"><div class="label">Failure</div><div class="value mono">{{if .Snapshot.FailureCode}}{{.Snapshot.FailureCode}}{{else}}none{{end}}</div></div>
+    <div class="status-chip"><div class="label">Issue Code</div><div class="value mono">{{if .Snapshot.FailureCode}}{{.Snapshot.FailureCode}}{{else}}none{{end}}</div></div>
     <div class="status-chip">
-      <div class="label">Attention</div>
+      <div class="label">Attention State</div>
       <div class="value">
         {{if and .Attention.State (ne .Attention.State "none")}}
           <span class="badge {{.Attention.State}}">{{.Attention.State}}</span>
@@ -35,6 +35,6 @@
 <section class="panel">
   <h2>Next Step</h2>
   <p>{{.NextAction}}</p>
-  <p class="muted">If you have a pairing code from LoRaMapr Cloud, continue to the Pairing page.</p>
+  <p class="muted">If this is first setup, open Pairing and paste the code from LoRaMapr Cloud.</p>
 </section>
 {{end}}
