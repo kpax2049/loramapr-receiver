@@ -411,6 +411,18 @@ func TestTroubleshootingLifecycleResetHint(t *testing.T) {
 	}
 }
 
+func TestTroubleshootingUnpairedHintStatesOptionalOrgMetadata(t *testing.T) {
+	t.Parallel()
+
+	snap := sampleSnapshot()
+	snap.PairingPhase = "unpaired"
+
+	hints := strings.Join(troubleshootingHints(snap), "\n")
+	if !strings.Contains(hints, "does not require workspace/site/group setup") {
+		t.Fatalf("expected explicit non-required org metadata hint, got %q", hints)
+	}
+}
+
 func TestTroubleshootingShowsMultiReceiverReplacementHint(t *testing.T) {
 	t.Parallel()
 
@@ -430,6 +442,9 @@ func TestTroubleshootingShowsMultiReceiverReplacementHint(t *testing.T) {
 	body := rec.Body.String()
 	if !strings.Contains(body, "superseded by another receiver") {
 		t.Fatalf("expected multi-receiver replacement guidance")
+	}
+	if strings.Contains(strings.ToLower(body), "household/team") {
+		t.Fatalf("did not expect household/team wording in replacement guidance")
 	}
 }
 

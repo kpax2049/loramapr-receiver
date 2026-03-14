@@ -690,7 +690,7 @@ func nextAction(snap status.Snapshot) string {
 	switch snap.PairingPhase {
 	case "unpaired":
 		if strings.TrimSpace(snap.CloudReceiverID) == "" {
-			return "Open Pairing and submit a code from LoRaMapr Cloud. If this is an additional household/team receiver, it will appear as a separate receiver."
+			return "Open Pairing and submit a code from LoRaMapr Cloud."
 		}
 		if isAppliance {
 			return "From another LAN device, open http://loramapr-receiver.local:8080 (or the Pi IP address) and enter your pairing code."
@@ -727,7 +727,7 @@ func troubleshootingHints(snap status.Snapshot) []string {
 		if group == "" {
 			group = "not set"
 		}
-		hints = append(hints, fmt.Sprintf("Cloud grouping context: site=%s group=%s", site, group))
+		hints = append(hints, fmt.Sprintf("Optional cloud labels: site=%s group=%s", site, group))
 	}
 	attention := deriveAttentionFromSnapshot(snap)
 	if attention.State != diagnostics.AttentionNone {
@@ -757,7 +757,7 @@ func troubleshootingHints(snap status.Snapshot) []string {
 	case "receiver_credential_revoked", "receiver_disabled", "receiver_replaced":
 		hints = append(hints, "Lifecycle recovery: use reset to clear local credentials, then submit a fresh pairing code.")
 		if strings.TrimSpace(snap.FailureCode) == "receiver_replaced" {
-			hints = append(hints, "This receiver was superseded by another receiver in your household/team deployment. Re-pair only if this host should become active again.")
+			hints = append(hints, "This receiver was superseded by another receiver. Re-pair only if this host should become active again.")
 		}
 	case "receiver_version_unsupported":
 		hints = append(hints, "Receiver build is unsupported and should be upgraded before continued operation.")
@@ -776,7 +776,7 @@ func troubleshootingHints(snap status.Snapshot) []string {
 	}
 	if snap.PairingPhase == "unpaired" {
 		hints = append(hints, "Generate a fresh pairing code in LoRaMapr Cloud and submit it on the Pairing page.")
-		hints = append(hints, "If you are adding a new additional receiver, pairing this host will not remove other receivers unless cloud policy replaces one explicitly.")
+		hints = append(hints, "Pairing links this local installation directly; it does not require workspace/site/group setup in the portal.")
 	}
 	if isAppliance {
 		hints = append(hints, "Appliance discovery: try http://loramapr-receiver.local:8080 first, then fallback to the Pi LAN IP.")

@@ -174,10 +174,13 @@ Top-level sections:
 ### Persisted cloud material
 
 - `cloud.endpoint_url`
-- cloud identity labels (`receiver_id`, `receiver_label`, `site_label`, `group_label`)
+- cloud identity labels (`receiver_id`, `receiver_label`) plus optional cloud labels (`site_label`, `group_label`)
 - `cloud.config_version`
 - `cloud.activate_endpoint`, `cloud.heartbeat_endpoint`, `cloud.ingest_endpoint`
 - durable credential fields (`ingest_api_key_id`, `ingest_api_key_secret`, `credential_ref`)
+
+`site_label` and `group_label` are optional metadata and are not required for
+pairing, activation, heartbeat, or forwarding.
 
 ### Persisted runtime classification
 

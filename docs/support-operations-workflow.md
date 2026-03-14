@@ -37,7 +37,7 @@ Capture:
   - `installation_id`
   - `local_name`
   - `cloud_receiver_label`
-  - `cloud_site_label` / `cloud_group_label` (if present)
+  - optional `cloud_site_label` / `cloud_group_label` (if present)
 - attention fields:
   - `attention_state`
   - `attention_code`
@@ -130,8 +130,9 @@ loramapr-receiverd reset-pairing -config /etc/loramapr/receiver.json
 
 3. Submit fresh pairing code.
 
-If replacement was intentional, confirm local identity labels (receiver/site/group)
-match expected cloud assignment after re-pair.
+If replacement was intentional, confirm receiver identity labels (and optional
+cloud site/group labels if present) match expected cloud assignment after
+re-pair.
 
 ### Outdated or Unsupported Version
 

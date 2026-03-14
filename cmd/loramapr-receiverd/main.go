@@ -344,7 +344,7 @@ func doctorCommand(args []string) {
 	)
 	if strings.TrimSpace(snapshot.Cloud.SiteLabel) != "" || strings.TrimSpace(snapshot.Cloud.GroupLabel) != "" {
 		fmt.Printf(
-			"[INFO] grouping hints: site=%s group=%s\n",
+			"[INFO] optional cloud labels: site=%s group=%s\n",
 			emptyFallback(snapshot.Cloud.SiteLabel, "n/a"),
 			emptyFallback(snapshot.Cloud.GroupLabel, "n/a"),
 		)

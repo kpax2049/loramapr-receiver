@@ -99,10 +99,10 @@ validate on at least one paired receiver:
 1. Verify local portal shows identity context:
    - `local_name`
    - `cloud_receiver_label` (when cloud provides it)
-   - site/group labels (when cloud provides them)
+   - optional site/group labels (if cloud provides them)
 2. Verify `doctor -json` and `support-snapshot` include identity fields:
    - installation/local/host hints
-   - cloud receiver/site/group labels
+   - cloud receiver labels and optional site/group labels
 3. Simulate replacement/revocation state and verify local guidance explains:
    - this receiver replaced
    - this receiver has been replaced
@@ -158,3 +158,18 @@ Use [Embedded Home Auto Session](./home-auto-session.md) and validate:
       explicit config-apply error
     - temporary cloud outage -> last effective config remains active with
       `cloud_config_fetch_failed_using_last_effective`
+
+## 10. Simplified Onboarding Wording
+
+Verify receiver setup does not require owner/workspace/site/group concepts:
+
+1. Start unpaired receiver and open `/`, `/pairing`, `/progress`, and
+   `/troubleshooting`.
+2. Confirm next-step text focuses on:
+   - install
+   - pair
+   - verify cloud/node/forwarding
+3. Confirm no page implies workspace/site/group setup is required before
+   pairing or activation.
+4. Confirm optional cloud labels, when present, are displayed as optional
+   metadata only.

@@ -7,6 +7,7 @@
 - [Embedded Local Setup Portal](./local-portal.md)
 - [Support and Operations Workflow](./support-operations-workflow.md)
 - [Reviewer Smoke Test Guide](./reviewer-smoke-test.md)
+- [Reviewer Smoke Test (Simplified Pairing)](./reviewer-smoke-test-simplified-pairing.md)
 
 ## Install and Operate
 
@@ -25,6 +26,7 @@
 - [Release Artifact Mapping](./release-artifacts.md)
 - [Publish Guide](./publish-guide.md)
 - [Release Notes Index](./release-notes.md)
+- [Simplification Cleanup Notes](./release-notes-simplification.md)
 - [Release Notes v2.12.0](./release-notes-v2.12.0.md)
 - [Release Notes v2.11.0](./release-notes-v2.11.0.md)
 - [Release Notes v2.10.0](./release-notes-v2.10.0.md)
@@ -54,5 +56,6 @@
 - [v2.3.0 Plan: Receiver Lifecycle Management](./ga-v2.3.0-receiver-lifecycle-management.md)
 - [v2.2.0 Plan: Raspberry Pi Appliance](./ga-v2.2.0-raspberry-pi-appliance.md)
 - [v2.1.0 Plan: Linux/Pi Existing-OS](./ga-v2.1.0-linux-pi-existing-os.md)
+- [Receiver Simplification: Owner/Workspace/Site Assumptions](./simplify-owner-workspace-site.md)
 - [Runtime Config and State Layout](./runtime-config-state.md)
 - [Meshtastic Adapter Behavior](./meshtastic-adapter.md)

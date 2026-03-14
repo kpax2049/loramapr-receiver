@@ -24,11 +24,11 @@ Receiver runtime endpoints used by the pairing client:
     - optional runtime metadata (`runtimeVersion`, `platform`, `arch`, `label`, `metadata`)
   - response includes durable receiver credentials:
     - `receiverAgentId`
-    - `ownerId`
     - `ingestApiKeyId`
     - `ingestApiKeySecret`
     - `heartbeatEndpoint`
     - `ingestEndpoint`
+  - optional metadata may also be present (`ownerId`, `siteLabel`, `groupLabel`)
 
 ## State Machine
 

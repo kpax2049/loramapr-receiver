@@ -105,7 +105,7 @@ Overall state:
 - identity context:
   - installation id
   - local name and hostname hints
-  - cloud receiver/site/group labels (when present)
+  - cloud receiver label/id and optional cloud labels (when present)
 - Home Auto Session context:
   - enabled/mode
   - effective config source/version
@@ -140,6 +140,8 @@ Redacted by default (never exported):
 
 Identity and label fields are intentionally support-safe so multiple receivers can
 be distinguished during troubleshooting.
+Cloud `site/group` labels are optional metadata only; missing labels are not a
+setup failure.
 
 Home Auto Session diagnostics are support-safe and do not include credential
 secrets.

@@ -1,5 +1,8 @@
 # LoRaMapr Receiver Release Notes
 
+For receiver-side onboarding simplification cleanup notes (owner/workspace/site
+assumptions), see `docs/release-notes-simplification.md`.
+
 For Embedded Home Auto Session Milestone 4 cloud-managed config notes targeting
 `v2.12.0`, see `docs/release-notes-v2.12.0.md`.
 

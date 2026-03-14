@@ -30,7 +30,7 @@ Identity shown in portal includes:
 - local receiver name hint
 - hostname hint
 - cloud receiver label/id when available
-- cloud site/group labels when available
+- optional cloud labels (`site`/`group`) when available
 
 ## Routes
 
@@ -127,9 +127,8 @@ Typical plain-language hints:
 - control is blocked due to cloud/local conflict
 - control is blocked because receiver was revoked/disabled/replaced
 
-In multi-receiver environments, portal guidance also helps distinguish:
+Optional multi-receiver hints may appear, but are not required for setup:
 
-- this receiver is an additional receiver
 - this receiver replaced another receiver
 - this receiver has been replaced/revoked/disabled
 - node is attached elsewhere and not currently seen by this receiver
