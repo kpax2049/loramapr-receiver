@@ -11,6 +11,7 @@ PI_GEN_BUILD_CMD="${PI_GEN_BUILD_CMD:-./build-docker.sh -c loramapr.config}"
 PI_IMAGE_PREP_ONLY="${PI_IMAGE_PREP_ONLY:-0}"
 PI_IMAGE_OUTPUT_DIR="${PI_IMAGE_OUTPUT_DIR:-${ROOT_DIR}/dist/${VERSION}/artifacts}"
 PI_IMAGE_ARTIFACT_NAME="${PI_IMAGE_ARTIFACT_NAME:-loramapr-receiver_${VERSION}_pi_arm64.img.xz}"
+PI_IMAGE_TARGET_ARCH="${PI_IMAGE_TARGET_ARCH:-armhf}"
 PI_FIRST_USER_NAME="${PI_FIRST_USER_NAME:-loramapr}"
 PI_FIRST_USER_PASS="${PI_FIRST_USER_PASS:-loramapr}"
 
@@ -72,7 +73,7 @@ cp "${ROOT_DIR}/packaging/pi/receiver.appliance.json" "${STAGE_DIR}/files/receiv
 
 cat > "${PI_GEN_DIR}/loramapr.config" <<CONFIG
 IMG_NAME='${IMG_NAME}'
-ARCH=arm64
+ARCH=${PI_IMAGE_TARGET_ARCH}
 DEPLOY_COMPRESSION=none
 STAGE_LIST="stage0 stage1 stage2 stage-loramapr"
 FIRST_USER_NAME='${PI_FIRST_USER_NAME}'
@@ -80,30 +81,32 @@ FIRST_USER_PASS='${PI_FIRST_USER_PASS}'
 DISABLE_FIRST_BOOT_USER_RENAME=1
 CONFIG
 
-# Some pi-gen revisions hardcode ARCH=armhf after loading config. Patch that line
-# so ARCH from loramapr.config can be honored deterministically in CI.
-PI_GEN_BUILD_SH="${PI_GEN_DIR}/build.sh"
-if [[ -f "${PI_GEN_BUILD_SH}" ]] && grep -q '^export ARCH=armhf$' "${PI_GEN_BUILD_SH}"; then
-  tmp_build_sh="$(mktemp "${TMPDIR:-/tmp}/loramapr-pi-buildsh-XXXXXX")"
-  sed 's/^export ARCH=armhf$/export ARCH=${ARCH:-armhf}/' "${PI_GEN_BUILD_SH}" > "${tmp_build_sh}"
-  mv "${tmp_build_sh}" "${PI_GEN_BUILD_SH}"
-  chmod +x "${PI_GEN_BUILD_SH}"
-fi
-
-# Some pi-gen revisions also hardcode armhf bootstrap defaults in scripts/common.
-PI_GEN_COMMON_SH="${PI_GEN_DIR}/scripts/common"
-if [[ -f "${PI_GEN_COMMON_SH}" ]]; then
-  if grep -q 'BOOTSTRAP_ARGS+=(--arch armhf)' "${PI_GEN_COMMON_SH}"; then
-    tmp_common_sh="$(mktemp "${TMPDIR:-/tmp}/loramapr-pi-common-XXXXXX")"
-    sed 's/BOOTSTRAP_ARGS+=(--arch armhf)/BOOTSTRAP_ARGS+=(--arch "${ARCH}")/' "${PI_GEN_COMMON_SH}" > "${tmp_common_sh}"
-    mv "${tmp_common_sh}" "${PI_GEN_COMMON_SH}"
-    chmod +x "${PI_GEN_COMMON_SH}"
+if [[ "${PI_IMAGE_TARGET_ARCH}" == "arm64" ]]; then
+  # Some pi-gen revisions hardcode ARCH=armhf after loading config. Patch that
+  # line so ARCH from loramapr.config can be honored deterministically in CI.
+  PI_GEN_BUILD_SH="${PI_GEN_DIR}/build.sh"
+  if [[ -f "${PI_GEN_BUILD_SH}" ]] && grep -q '^export ARCH=armhf$' "${PI_GEN_BUILD_SH}"; then
+    tmp_build_sh="$(mktemp "${TMPDIR:-/tmp}/loramapr-pi-buildsh-XXXXXX")"
+    sed 's/^export ARCH=armhf$/export ARCH=${ARCH:-armhf}/' "${PI_GEN_BUILD_SH}" > "${tmp_build_sh}"
+    mv "${tmp_build_sh}" "${PI_GEN_BUILD_SH}"
+    chmod +x "${PI_GEN_BUILD_SH}"
   fi
-  if grep -q 'setarch linux32 ' "${PI_GEN_COMMON_SH}"; then
-    tmp_common_sh="$(mktemp "${TMPDIR:-/tmp}/loramapr-pi-common-XXXXXX")"
-    sed 's/setarch linux32 /setarch linux64 /g' "${PI_GEN_COMMON_SH}" > "${tmp_common_sh}"
-    mv "${tmp_common_sh}" "${PI_GEN_COMMON_SH}"
-    chmod +x "${PI_GEN_COMMON_SH}"
+
+  # Some pi-gen revisions also hardcode armhf bootstrap defaults in scripts/common.
+  PI_GEN_COMMON_SH="${PI_GEN_DIR}/scripts/common"
+  if [[ -f "${PI_GEN_COMMON_SH}" ]]; then
+    if grep -q 'BOOTSTRAP_ARGS+=(--arch armhf)' "${PI_GEN_COMMON_SH}"; then
+      tmp_common_sh="$(mktemp "${TMPDIR:-/tmp}/loramapr-pi-common-XXXXXX")"
+      sed 's/BOOTSTRAP_ARGS+=(--arch armhf)/BOOTSTRAP_ARGS+=(--arch "${ARCH}")/' "${PI_GEN_COMMON_SH}" > "${tmp_common_sh}"
+      mv "${tmp_common_sh}" "${PI_GEN_COMMON_SH}"
+      chmod +x "${PI_GEN_COMMON_SH}"
+    fi
+    if grep -q 'setarch linux32 ' "${PI_GEN_COMMON_SH}"; then
+      tmp_common_sh="$(mktemp "${TMPDIR:-/tmp}/loramapr-pi-common-XXXXXX")"
+      sed 's/setarch linux32 /setarch linux64 /g' "${PI_GEN_COMMON_SH}" > "${tmp_common_sh}"
+      mv "${tmp_common_sh}" "${PI_GEN_COMMON_SH}"
+      chmod +x "${PI_GEN_COMMON_SH}"
+    fi
   fi
 fi
 
