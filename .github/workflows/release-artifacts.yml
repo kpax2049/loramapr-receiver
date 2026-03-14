@@ -76,6 +76,12 @@ jobs:
       - name: Run Tests
         run: go test ./...
 
+      - name: Install Pi Build Prerequisites
+        if: steps.release.outputs.enable_pi_image == '1'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y qemu-user qemu-user-static binfmt-support
+
       - name: Build Artifacts
         env:
           ENABLE_PI_IMAGE: ${{ steps.release.outputs.enable_pi_image }}
