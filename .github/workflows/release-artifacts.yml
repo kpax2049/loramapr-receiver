@@ -58,7 +58,7 @@ jobs:
           else
             VERSION="${GITHUB_REF_NAME}"
             CHANNEL="stable"
-            ENABLE_PI_IMAGE="1"
+            ENABLE_PI_IMAGE="0"
             PUBLISH_RELEASE_ASSETS="1"
           fi
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
