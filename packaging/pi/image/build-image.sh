@@ -80,6 +80,16 @@ FIRST_USER_PASS='${PI_FIRST_USER_PASS}'
 DISABLE_FIRST_BOOT_USER_RENAME=1
 CONFIG
 
+# Some pi-gen revisions hardcode ARCH=armhf after loading config. Patch that line
+# so ARCH from loramapr.config can be honored deterministically in CI.
+PI_GEN_BUILD_SH="${PI_GEN_DIR}/build.sh"
+if [[ -f "${PI_GEN_BUILD_SH}" ]] && grep -q '^export ARCH=armhf$' "${PI_GEN_BUILD_SH}"; then
+  tmp_build_sh="$(mktemp "${TMPDIR:-/tmp}/loramapr-pi-buildsh-XXXXXX")"
+  sed 's/^export ARCH=armhf$/export ARCH=${ARCH:-armhf}/' "${PI_GEN_BUILD_SH}" > "${tmp_build_sh}"
+  mv "${tmp_build_sh}" "${PI_GEN_BUILD_SH}"
+  chmod +x "${PI_GEN_BUILD_SH}"
+fi
+
 if [[ "${PI_IMAGE_PREP_ONLY}" == "1" ]]; then
   echo "Prepared pi-gen stage: ${STAGE_DIR}"
   echo "Prepared pi-gen config: ${PI_GEN_DIR}/loramapr.config"
