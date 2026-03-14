@@ -7,7 +7,7 @@ VERSION="${1:-${VERSION:-}}"
 CHANNEL="${2:-${CHANNEL:-stable}}"
 PI_GEN_DIR="${PI_GEN_DIR:-}"
 PI_GEN_DEPLOY_DIR="${PI_GEN_DEPLOY_DIR:-}"
-PI_GEN_BUILD_CMD="${PI_GEN_BUILD_CMD:-./build-docker.sh -c loramapr.config}"
+PI_GEN_BUILD_CMD="${PI_GEN_BUILD_CMD:-./build-docker.sh -a arm64 -c loramapr.config}"
 PI_IMAGE_PREP_ONLY="${PI_IMAGE_PREP_ONLY:-0}"
 PI_IMAGE_OUTPUT_DIR="${PI_IMAGE_OUTPUT_DIR:-${ROOT_DIR}/dist/${VERSION}/artifacts}"
 PI_IMAGE_ARTIFACT_NAME="${PI_IMAGE_ARTIFACT_NAME:-loramapr-receiver_${VERSION}_pi_arm64.img.xz}"
@@ -22,7 +22,7 @@ Environment:
   PI_GEN_DIR                    Path to local pi-gen checkout (required)
   PI_GEN_DEPLOY_DIR             Optional override for pi-gen deploy directory
   PI_GEN_BUILD_CMD              Build command run in PI_GEN_DIR
-                                (default: ./build-docker.sh -c loramapr.config)
+                                (default: ./build-docker.sh -a arm64 -c loramapr.config)
   LORAMAPR_ARM64_SYSTEMD_TARBALL
                                 Optional override for arm64 systemd artifact path
   PI_IMAGE_PREP_ONLY            Set to 1 to only prepare stage/config and skip build
