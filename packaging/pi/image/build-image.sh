@@ -90,6 +90,23 @@ if [[ -f "${PI_GEN_BUILD_SH}" ]] && grep -q '^export ARCH=armhf$' "${PI_GEN_BUIL
   chmod +x "${PI_GEN_BUILD_SH}"
 fi
 
+# Some pi-gen revisions also hardcode armhf bootstrap defaults in scripts/common.
+PI_GEN_COMMON_SH="${PI_GEN_DIR}/scripts/common"
+if [[ -f "${PI_GEN_COMMON_SH}" ]]; then
+  if grep -q 'BOOTSTRAP_ARGS+=(--arch armhf)' "${PI_GEN_COMMON_SH}"; then
+    tmp_common_sh="$(mktemp "${TMPDIR:-/tmp}/loramapr-pi-common-XXXXXX")"
+    sed 's/BOOTSTRAP_ARGS+=(--arch armhf)/BOOTSTRAP_ARGS+=(--arch "${ARCH}")/' "${PI_GEN_COMMON_SH}" > "${tmp_common_sh}"
+    mv "${tmp_common_sh}" "${PI_GEN_COMMON_SH}"
+    chmod +x "${PI_GEN_COMMON_SH}"
+  fi
+  if grep -q 'setarch linux32 ' "${PI_GEN_COMMON_SH}"; then
+    tmp_common_sh="$(mktemp "${TMPDIR:-/tmp}/loramapr-pi-common-XXXXXX")"
+    sed 's/setarch linux32 /setarch linux64 /g' "${PI_GEN_COMMON_SH}" > "${tmp_common_sh}"
+    mv "${tmp_common_sh}" "${PI_GEN_COMMON_SH}"
+    chmod +x "${PI_GEN_COMMON_SH}"
+  fi
+fi
+
 if [[ "${PI_IMAGE_PREP_ONLY}" == "1" ]]; then
   echo "Prepared pi-gen stage: ${STAGE_DIR}"
   echo "Prepared pi-gen config: ${PI_GEN_DIR}/loramapr.config"
