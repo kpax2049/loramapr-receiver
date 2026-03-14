@@ -316,3 +316,49 @@ func TestHomeAutoSessionStatus(t *testing.T) {
 		t.Fatalf("expected snapshot copy for home_auto_session GPSDistanceM, got %#v", snap2.HomeAutoSession.GPSDistanceM)
 	}
 }
+
+func TestMeshtasticConfigStatus(t *testing.T) {
+	t.Parallel()
+
+	model := New()
+	updatedAt := time.Date(2026, 3, 14, 8, 0, 0, 0, time.UTC)
+	model.SetMeshtasticConfig(MeshtasticConfigSnapshot{
+		Available:         true,
+		Region:            "EU_868",
+		PrimaryChannel:    "Home Mesh",
+		PrimaryChannelIdx: 0,
+		PSKState:          "present",
+		LoRaPreset:        "LONG_FAST",
+		ShareURL:          "https://meshtastic.org/e/#CwgB",
+		ShareURLRedacted:  "https://meshtastic.org/e/#<redacted>",
+		ShareURLAvailable: true,
+		ShareQRText:       "https://meshtastic.org/e/#CwgB",
+		Source:            "status_event",
+		UpdatedAt:         &updatedAt,
+	})
+
+	snap := model.Snapshot()
+	if !snap.MeshtasticConfig.Available {
+		t.Fatal("expected meshtastic config to be available")
+	}
+	if snap.MeshtasticConfig.Region != "EU_868" {
+		t.Fatalf("unexpected meshtastic config region: %q", snap.MeshtasticConfig.Region)
+	}
+	if !snap.MeshtasticConfig.ShareURLAvailable {
+		t.Fatal("expected meshtastic share url to be available")
+	}
+	if snap.MeshtasticConfig.UpdatedAt == nil || !snap.MeshtasticConfig.UpdatedAt.Equal(updatedAt) {
+		t.Fatalf("unexpected meshtastic config updated_at: %#v", snap.MeshtasticConfig.UpdatedAt)
+	}
+
+	updatedAtOut := snap.MeshtasticConfig.UpdatedAt
+	if updatedAtOut == nil {
+		t.Fatal("expected non-nil updated_at")
+	}
+	*updatedAtOut = updatedAtOut.Add(24 * time.Hour)
+
+	snap2 := model.Snapshot()
+	if snap2.MeshtasticConfig.UpdatedAt == nil || !snap2.MeshtasticConfig.UpdatedAt.Equal(updatedAt) {
+		t.Fatalf("expected snapshot copy for meshtastic config updated_at, got %#v", snap2.MeshtasticConfig.UpdatedAt)
+	}
+}

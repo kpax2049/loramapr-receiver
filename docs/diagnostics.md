@@ -124,6 +124,11 @@ Overall state:
   - GPS validity status/reason
   - blocked reason (degraded mode)
   - last error (if any)
+- Meshtastic field-node pairing context:
+  - home-node config summary availability
+  - region / primary channel / PSK state
+  - LoRa summary fields when reported
+  - share URL availability + redacted share hint
 - config/state schema markers
 - pairing/lifecycle/update summaries
 - cloud/network/node probes
@@ -137,6 +142,7 @@ Redacted by default (never exported):
 - pairing code value
 - activation token
 - raw credential secret material
+- Meshtastic raw share URL / QR text
 
 Identity and label fields are intentionally support-safe so multiple receivers can
 be distinguished during troubleshooting.

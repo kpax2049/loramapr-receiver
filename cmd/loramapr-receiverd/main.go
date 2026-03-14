@@ -227,6 +227,7 @@ func doctorCommand(args []string) {
 		UpdateStatus:        localProbeUpdateStatus(localProbe, snapshot.Update.Status),
 	})
 	attention := diagnostics.DeriveAttention(finding, ops)
+	meshConfig := localProbeMeshtasticConfig(localProbe)
 
 	build := buildinfo.Current()
 	report := map[string]any{
@@ -298,6 +299,7 @@ func doctorCommand(args []string) {
 		},
 		"meshtastic_transport": cfg.Meshtastic.Transport,
 		"meshtastic_probe":     deviceProbe,
+		"meshtastic_config":    meshConfig,
 		"failure_code":         finding.Code,
 		"failure_summary":      finding.Summary,
 		"failure_hint":         finding.Hint,
@@ -410,6 +412,22 @@ func doctorCommand(args []string) {
 		fmt.Printf(" (%s)", detected)
 	}
 	fmt.Println()
+	fmt.Printf(
+		"[INFO] meshtastic config summary: available=%v region=%s primary_channel=%s psk_state=%s share_ready=%v\n",
+		asBool(meshConfig["available"]),
+		emptyFallback(asString(meshConfig["region"]), "unknown"),
+		emptyFallback(asString(meshConfig["primary_channel"]), "unknown"),
+		emptyFallback(asString(meshConfig["psk_state"]), "unknown"),
+		asBool(meshConfig["share_url_available"]),
+	)
+	if shareHint := strings.TrimSpace(asString(meshConfig["share_url_redacted"])); shareHint != "" {
+		fmt.Printf("[INFO] meshtastic share hint: %s\n", shareHint)
+	}
+	if !asBool(meshConfig["available"]) {
+		if reason := strings.TrimSpace(asString(meshConfig["unavailable_reason"])); reason != "" {
+			fmt.Printf("[HINT] meshtastic config unavailable: %s\n", reason)
+		}
+	}
 	if finding.Code != diagnostics.FailureNone {
 		fmt.Printf("[WARN] failure state: %s - %s\n", finding.Code, finding.Summary)
 		if finding.Hint != "" {
@@ -499,6 +517,7 @@ func statusCommand(args []string) {
 		UpdateStatus:        localProbeUpdateStatus(localProbe, snapshot.Update.Status),
 	})
 	attention := diagnostics.DeriveAttention(finding, ops)
+	meshConfig := localProbeMeshtasticConfig(localProbe)
 
 	build := buildinfo.Current()
 	output := map[string]any{
@@ -528,6 +547,7 @@ func statusCommand(args []string) {
 		"install_type":          installType(snapshot.Runtime.InstallType, cfg.Runtime.Profile),
 		"meshtastic_mode":       cfg.Meshtastic.Transport,
 		"meshtastic_state":      localProbeMeshtasticState(localProbe, meshState),
+		"meshtastic_config":     meshConfig,
 		"local_runtime_probe":   summarizeLocalProbeForOutput(localProbe),
 		"cloud_config_version":  snapshot.Cloud.ConfigVersion,
 		"update_status":         snapshot.Update.Status,
@@ -791,6 +811,12 @@ func printDoctorLoadFailure(jsonOutput bool, configPath string, statePath string
 		"cloud_receiver_label":  "",
 		"cloud_site_label":      "",
 		"cloud_group_label":     "",
+		"meshtastic_config": map[string]any{
+			"available":           false,
+			"unavailable_reason":  "runtime status unavailable",
+			"psk_state":           "unknown",
+			"share_url_available": false,
+		},
 		"home_auto_session": map[string]any{
 			"enabled":                false,
 			"mode":                   "off",
@@ -851,6 +877,22 @@ func summarizeLocalProbeForOutput(probe diagnostics.LocalStatusProbe) map[string
 	out["cloud_site_label"] = probe.Snapshot.CloudSiteLabel
 	out["cloud_group_label"] = probe.Snapshot.CloudGroupLabel
 	out["update_status"] = probe.Snapshot.UpdateStatus
+	out["meshtastic_config"] = map[string]any{
+		"available":             probe.Snapshot.MeshtasticConfig.Available,
+		"unavailable_reason":    probe.Snapshot.MeshtasticConfig.UnavailableReason,
+		"region":                probe.Snapshot.MeshtasticConfig.Region,
+		"primary_channel":       probe.Snapshot.MeshtasticConfig.PrimaryChannel,
+		"primary_channel_index": probe.Snapshot.MeshtasticConfig.PrimaryChannelIdx,
+		"psk_state":             probe.Snapshot.MeshtasticConfig.PSKState,
+		"lora_preset":           probe.Snapshot.MeshtasticConfig.LoRaPreset,
+		"lora_bandwidth":        probe.Snapshot.MeshtasticConfig.LoRaBandwidth,
+		"lora_spreading":        probe.Snapshot.MeshtasticConfig.LoRaSpreading,
+		"lora_coding_rate":      probe.Snapshot.MeshtasticConfig.LoRaCodingRate,
+		"share_url_available":   probe.Snapshot.MeshtasticConfig.ShareURLAvailable,
+		"share_url_redacted":    probe.Snapshot.MeshtasticConfig.ShareURLRedacted,
+		"source":                probe.Snapshot.MeshtasticConfig.Source,
+		"updated_at":            probe.Snapshot.MeshtasticConfig.UpdatedAt,
+	}
 	out["home_auto_session"] = map[string]any{
 		"enabled":                probe.Snapshot.HomeAutoSession.Enabled,
 		"mode":                   probe.Snapshot.HomeAutoSession.Mode,
@@ -899,6 +941,50 @@ func localProbeMeshtasticState(probe diagnostics.LocalStatusProbe, fallback stri
 		return strings.TrimSpace(fallback)
 	}
 	return value
+}
+
+func localProbeMeshtasticConfig(probe diagnostics.LocalStatusProbe) map[string]any {
+	out := map[string]any{
+		"available":           false,
+		"unavailable_reason":  "home node config summary not reported",
+		"psk_state":           "unknown",
+		"share_url_available": false,
+	}
+	if probe.Snapshot == nil {
+		return out
+	}
+	mesh := probe.Snapshot.MeshtasticConfig
+	out["available"] = mesh.Available
+	out["unavailable_reason"] = mesh.UnavailableReason
+	out["region"] = mesh.Region
+	out["primary_channel"] = mesh.PrimaryChannel
+	out["primary_channel_index"] = mesh.PrimaryChannelIdx
+	out["psk_state"] = mesh.PSKState
+	out["lora_preset"] = mesh.LoRaPreset
+	out["lora_bandwidth"] = mesh.LoRaBandwidth
+	out["lora_spreading"] = mesh.LoRaSpreading
+	out["lora_coding_rate"] = mesh.LoRaCodingRate
+	out["share_url_available"] = mesh.ShareURLAvailable
+	out["share_url_redacted"] = mesh.ShareURLRedacted
+	out["source"] = mesh.Source
+	out["updated_at"] = mesh.UpdatedAt
+	return out
+}
+
+func asString(value any) string {
+	text, ok := value.(string)
+	if !ok {
+		return ""
+	}
+	return text
+}
+
+func asBool(value any) bool {
+	typed, ok := value.(bool)
+	if !ok {
+		return false
+	}
+	return typed
 }
 
 func localProbeCloudReachable(probe diagnostics.LocalStatusProbe, cloudProbe diagnostics.CloudProbe) bool {

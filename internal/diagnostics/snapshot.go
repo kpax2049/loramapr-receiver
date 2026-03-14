@@ -80,10 +80,26 @@ type SupportSnapshot struct {
 		LocalRuntime LocalStatusProbe `json:"local_runtime"`
 	} `json:"network"`
 	Meshtastic struct {
-		Transport      string      `json:"transport"`
-		ConfiguredPath string      `json:"configured_path,omitempty"`
-		Connection     string      `json:"connection_state,omitempty"`
-		Probe          DeviceProbe `json:"probe"`
+		Transport      string `json:"transport"`
+		ConfiguredPath string `json:"configured_path,omitempty"`
+		Connection     string `json:"connection_state,omitempty"`
+		ConfigSummary  struct {
+			Available         bool       `json:"available"`
+			UnavailableReason string     `json:"unavailable_reason,omitempty"`
+			Region            string     `json:"region,omitempty"`
+			PrimaryChannel    string     `json:"primary_channel,omitempty"`
+			PrimaryChannelIdx int        `json:"primary_channel_index,omitempty"`
+			PSKState          string     `json:"psk_state,omitempty"`
+			LoRaPreset        string     `json:"lora_preset,omitempty"`
+			LoRaBandwidth     string     `json:"lora_bandwidth,omitempty"`
+			LoRaSpreading     string     `json:"lora_spreading,omitempty"`
+			LoRaCodingRate    string     `json:"lora_coding_rate,omitempty"`
+			ShareURLAvailable bool       `json:"share_url_available"`
+			ShareURLRedacted  string     `json:"share_url_redacted,omitempty"`
+			Source            string     `json:"source,omitempty"`
+			UpdatedAt         *time.Time `json:"updated_at,omitempty"`
+		} `json:"config_summary"`
+		Probe DeviceProbe `json:"probe"`
 	} `json:"meshtastic"`
 	Update struct {
 		Enabled            bool       `json:"enabled"`
@@ -268,6 +284,32 @@ func CollectSupportSnapshot(cfg config.Config, data state.Data, finding Finding,
 	out.Meshtastic.Connection = deviceProbe.State
 	if localProbe.Snapshot != nil {
 		out.Meshtastic.Connection = snapshotComponentState(localProbe.Snapshot, "meshtastic")
+	}
+	out.Meshtastic.ConfigSummary.Available = false
+	out.Meshtastic.ConfigSummary.PSKState = "unknown"
+	out.Meshtastic.ConfigSummary.UnavailableReason = "home node config summary not reported"
+	if localProbe.Snapshot != nil {
+		mesh := localProbe.Snapshot.MeshtasticConfig
+		out.Meshtastic.ConfigSummary.Available = mesh.Available
+		out.Meshtastic.ConfigSummary.UnavailableReason = strings.TrimSpace(mesh.UnavailableReason)
+		out.Meshtastic.ConfigSummary.Region = strings.TrimSpace(mesh.Region)
+		out.Meshtastic.ConfigSummary.PrimaryChannel = strings.TrimSpace(mesh.PrimaryChannel)
+		out.Meshtastic.ConfigSummary.PrimaryChannelIdx = mesh.PrimaryChannelIdx
+		out.Meshtastic.ConfigSummary.PSKState = strings.TrimSpace(mesh.PSKState)
+		out.Meshtastic.ConfigSummary.LoRaPreset = strings.TrimSpace(mesh.LoRaPreset)
+		out.Meshtastic.ConfigSummary.LoRaBandwidth = strings.TrimSpace(mesh.LoRaBandwidth)
+		out.Meshtastic.ConfigSummary.LoRaSpreading = strings.TrimSpace(mesh.LoRaSpreading)
+		out.Meshtastic.ConfigSummary.LoRaCodingRate = strings.TrimSpace(mesh.LoRaCodingRate)
+		out.Meshtastic.ConfigSummary.ShareURLAvailable = mesh.ShareURLAvailable
+		out.Meshtastic.ConfigSummary.ShareURLRedacted = strings.TrimSpace(mesh.ShareURLRedacted)
+		out.Meshtastic.ConfigSummary.Source = strings.TrimSpace(mesh.Source)
+		out.Meshtastic.ConfigSummary.UpdatedAt = cloneTimePtr(mesh.UpdatedAt)
+		if out.Meshtastic.ConfigSummary.PSKState == "" {
+			out.Meshtastic.ConfigSummary.PSKState = "unknown"
+		}
+		if out.Meshtastic.ConfigSummary.UnavailableReason == "" && !out.Meshtastic.ConfigSummary.Available {
+			out.Meshtastic.ConfigSummary.UnavailableReason = "home node config summary unavailable"
+		}
 	}
 	out.Meshtastic.Probe = deviceProbe
 
@@ -473,6 +515,8 @@ func CollectSupportSnapshot(cfg config.Config, data state.Data, finding Finding,
 		"pairing.pairing_code",
 		"pairing.activation_token",
 		"cloud.credential_ref",
+		"meshtastic_config.share_url",
+		"meshtastic_config.share_qr_text",
 	}
 
 	return out
@@ -583,6 +627,8 @@ func summarizeLocalProbe(probe LocalStatusProbe) LocalStatusProbe {
 	copySnap := *probe.Snapshot
 	copySnap.Components = nil
 	copySnap.RecentFailures = nil
+	copySnap.MeshtasticConfig.ShareURL = ""
+	copySnap.MeshtasticConfig.ShareQRText = ""
 	out.Snapshot = &copySnap
 	return out
 }

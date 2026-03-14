@@ -173,3 +173,13 @@ Verify receiver setup does not require owner/workspace/site/group concepts:
    pairing or activation.
 4. Confirm optional cloud labels, when present, are displayed as optional
    metadata only.
+
+## 11. Meshtastic Field-Node Pairing Data (v2.13.0)
+
+Use [Reviewer Smoke Test (v2.13.0 Meshtastic Share)](./reviewer-smoke-test-v2.13.0-meshtastic-share.md)
+and validate:
+
+1. connected-node config summary path
+2. share URL path when node reports share data
+3. manual fallback path when summary/share data is missing
+4. support-safe redaction behavior for share values

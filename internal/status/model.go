@@ -74,6 +74,25 @@ type HomeAutoSessionSnapshot struct {
 	UpdatedAt             time.Time  `json:"updated_at,omitempty"`
 }
 
+type MeshtasticConfigSnapshot struct {
+	Available         bool       `json:"available"`
+	UnavailableReason string     `json:"unavailable_reason,omitempty"`
+	Region            string     `json:"region,omitempty"`
+	PrimaryChannel    string     `json:"primary_channel,omitempty"`
+	PrimaryChannelIdx int        `json:"primary_channel_index,omitempty"`
+	PSKState          string     `json:"psk_state,omitempty"`
+	LoRaPreset        string     `json:"lora_preset,omitempty"`
+	LoRaBandwidth     string     `json:"lora_bandwidth,omitempty"`
+	LoRaSpreading     string     `json:"lora_spreading,omitempty"`
+	LoRaCodingRate    string     `json:"lora_coding_rate,omitempty"`
+	ShareURL          string     `json:"share_url,omitempty"`
+	ShareURLRedacted  string     `json:"share_url_redacted,omitempty"`
+	ShareURLAvailable bool       `json:"share_url_available"`
+	ShareQRText       string     `json:"share_qr_text,omitempty"`
+	Source            string     `json:"source,omitempty"`
+	UpdatedAt         *time.Time `json:"updated_at,omitempty"`
+}
+
 type Snapshot struct {
 	InstallationID           string                     `json:"installation_id"`
 	LocalName                string                     `json:"local_name,omitempty"`
@@ -126,6 +145,7 @@ type Snapshot struct {
 	UpdateManifestChannel    string                     `json:"update_manifest_channel,omitempty"`
 	UpdateRecommendedVersion string                     `json:"update_recommended_version,omitempty"`
 	UpdateCheckedAt          *time.Time                 `json:"update_checked_at,omitempty"`
+	MeshtasticConfig         MeshtasticConfigSnapshot   `json:"meshtastic_config"`
 	HomeAutoSession          HomeAutoSessionSnapshot    `json:"home_auto_session"`
 	StartedAt                time.Time                  `json:"started_at"`
 	UpdatedAt                time.Time                  `json:"updated_at"`
@@ -173,6 +193,7 @@ func (m *Model) Snapshot() Snapshot {
 	out.HomeAutoSession.DecisionCooldownUntil = cloneTimePtr(m.snap.HomeAutoSession.DecisionCooldownUntil)
 	out.HomeAutoSession.GPSUpdatedAt = cloneTimePtr(m.snap.HomeAutoSession.GPSUpdatedAt)
 	out.HomeAutoSession.GPSDistanceM = cloneFloat64Ptr(m.snap.HomeAutoSession.GPSDistanceM)
+	out.MeshtasticConfig.UpdatedAt = cloneTimePtr(m.snap.MeshtasticConfig.UpdatedAt)
 	return out
 }
 
@@ -402,6 +423,33 @@ func (m *Model) SetHomeAutoSession(module HomeAutoSessionSnapshot) {
 			ObservedQueueDepth:    module.ObservedQueueDepth,
 			ObservedDropped:       module.ObservedDropped,
 			UpdatedAt:             m.now().UTC(),
+		}
+	})
+}
+
+func (m *Model) SetMeshtasticConfig(configSnap MeshtasticConfigSnapshot) {
+	m.Update(func(s *Snapshot) {
+		s.MeshtasticConfig = MeshtasticConfigSnapshot{
+			Available:         configSnap.Available,
+			UnavailableReason: normalize(configSnap.UnavailableReason),
+			Region:            normalize(configSnap.Region),
+			PrimaryChannel:    normalize(configSnap.PrimaryChannel),
+			PrimaryChannelIdx: configSnap.PrimaryChannelIdx,
+			PSKState:          normalize(configSnap.PSKState),
+			LoRaPreset:        normalize(configSnap.LoRaPreset),
+			LoRaBandwidth:     normalize(configSnap.LoRaBandwidth),
+			LoRaSpreading:     normalize(configSnap.LoRaSpreading),
+			LoRaCodingRate:    normalize(configSnap.LoRaCodingRate),
+			ShareURL:          normalize(configSnap.ShareURL),
+			ShareURLRedacted:  normalize(configSnap.ShareURLRedacted),
+			ShareURLAvailable: configSnap.ShareURLAvailable,
+			ShareQRText:       normalize(configSnap.ShareQRText),
+			Source:            normalize(configSnap.Source),
+			UpdatedAt:         cloneTimePtr(configSnap.UpdatedAt),
+		}
+		if s.MeshtasticConfig.UpdatedAt == nil && s.MeshtasticConfig.Available {
+			now := m.now().UTC()
+			s.MeshtasticConfig.UpdatedAt = &now
 		}
 	})
 }

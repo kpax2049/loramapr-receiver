@@ -206,6 +206,7 @@ func New(cfg config.Config, logger *slog.Logger) (*Service, error) {
 	mesh := meshtastic.NewAdapter(cfg.Meshtastic, logger.With("component", "meshtastic"))
 	meshSnap := mesh.Snapshot()
 	statusModel.SetComponent("meshtastic", string(meshSnap.State), meshtasticStatusMessage(meshSnap))
+	statusModel.SetMeshtasticConfig(mapMeshtasticConfigStatus(meshSnap))
 	statusModel.SetComponent("ingest", "idle", "no queued packets")
 
 	svc.container = &Container{
@@ -426,6 +427,7 @@ func (s *Service) tick(ctx context.Context) {
 	c.Status.SetPairingPhase(string(snap.Pairing.Phase))
 	c.Status.SetCloud(c.Config.Cloud.BaseURL, pairingCloudStatus(snap.Pairing))
 	c.Status.SetComponent("meshtastic", string(meshSnap.State), meshtasticStatusMessage(meshSnap))
+	c.Status.SetMeshtasticConfig(mapMeshtasticConfigStatus(meshSnap))
 
 	s.processSteadyState(ctx, snap, meshSnap)
 	s.refreshUpdateStatus(ctx, snap)
@@ -491,6 +493,7 @@ func (s *Service) onMeshtasticEvent(event meshtastic.Event) {
 				"connected",
 				fmt.Sprintf("local node %s observed=%d", event.Node.LocalNodeID, len(event.Node.ObservedNodeIDs)),
 			)
+			c.Status.SetMeshtasticConfig(mapMeshtasticConfigStatus(c.Meshtastic.Snapshot()))
 		}
 	}
 	if c.HomeAutoSession != nil {
@@ -692,6 +695,12 @@ func (s *Service) sendHeartbeat(ctx context.Context, snapshot state.Data, meshSn
 			"homeAutoBlockedReason":  updateSnap.HomeAutoSession.BlockedReason,
 			"homeAutoGPSStatus":      updateSnap.HomeAutoSession.GPSStatus,
 			"homeAutoGPSReason":      updateSnap.HomeAutoSession.GPSReason,
+			"meshConfigAvailable":    updateSnap.MeshtasticConfig.Available,
+			"meshConfigRegion":       updateSnap.MeshtasticConfig.Region,
+			"meshConfigChannel":      updateSnap.MeshtasticConfig.PrimaryChannel,
+			"meshConfigPSKState":     updateSnap.MeshtasticConfig.PSKState,
+			"meshConfigShareReady":   updateSnap.MeshtasticConfig.ShareURLAvailable,
+			"meshConfigShareHint":    updateSnap.MeshtasticConfig.ShareURLRedacted,
 		},
 	})
 	if err != nil {
@@ -1247,6 +1256,54 @@ func meshtasticStatusMessage(snapshot meshtastic.Snapshot) string {
 		message += " error=" + snapshot.LastError
 	}
 	return message
+}
+
+func mapMeshtasticConfigStatus(snapshot meshtastic.Snapshot) status.MeshtasticConfigSnapshot {
+	home := snapshot.HomeConfig
+	if home == nil {
+		reason := ""
+		switch snapshot.State {
+		case meshtastic.StateNotPresent:
+			reason = "no connected Meshtastic node detected"
+		case meshtastic.StateConnected:
+			reason = "connected node has not reported channel/config summary"
+		case meshtastic.StateConnecting, meshtastic.StateDetected:
+			reason = "waiting for node status/config event"
+		case meshtastic.StateDegraded:
+			reason = "adapter degraded; config summary unavailable"
+		default:
+			reason = "config summary unavailable"
+		}
+		return status.MeshtasticConfigSnapshot{
+			Available:         false,
+			UnavailableReason: reason,
+			PSKState:          "unknown",
+		}
+	}
+
+	var updatedPtr *time.Time
+	if !home.UpdatedAt.IsZero() {
+		updated := home.UpdatedAt.UTC()
+		updatedPtr = &updated
+	}
+	return status.MeshtasticConfigSnapshot{
+		Available:         home.Available,
+		UnavailableReason: home.UnavailableReason,
+		Region:            home.Region,
+		PrimaryChannel:    home.PrimaryChannel,
+		PrimaryChannelIdx: home.PrimaryChannelIdx,
+		PSKState:          home.PSKState,
+		LoRaPreset:        home.LoRaPreset,
+		LoRaBandwidth:     home.LoRaBandwidth,
+		LoRaSpreading:     home.LoRaSpreading,
+		LoRaCodingRate:    home.LoRaCodingRate,
+		ShareURL:          home.ShareURL,
+		ShareURLRedacted:  home.ShareURLRedacted,
+		ShareURLAvailable: home.ShareURLAvailable,
+		ShareQRText:       home.ShareQRText,
+		Source:            home.Source,
+		UpdatedAt:         updatedPtr,
+	}
 }
 
 func cloudConfigCompatibilityIssue(configVersion string) string {

@@ -19,7 +19,8 @@ Bind address is configured by `portal.bind_address`.
 
 1. **Welcome**: confirm current setup/attention state and next action
 2. **Pairing**: enter pairing code from LoRaMapr Cloud
-3. **Progress**: confirm cloud reachability, node connection, and forwarding
+3. **Progress**: confirm cloud reachability, node connection, forwarding, and
+   read-only field-node pairing data from the connected home node
 4. **Home Auto Session**: optional embedded session automation with cloud-managed
    policy visibility and local fallback config
 5. **Troubleshooting**: resolve common issues and run reset/re-pair when needed
@@ -140,6 +141,9 @@ Portal intentionally omits secret material, including:
 - pairing code value
 - activation token
 - ingest API key secret
+
+Meshtastic share URLs can include channel secrets. They are shown only on local
+portal surfaces and should be used on trusted local networks/devices.
 
 Only support-safe metadata is shown.
 

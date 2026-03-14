@@ -59,6 +59,46 @@ func TestDetectRuntimeProfile(t *testing.T) {
 	}
 }
 
+func TestMapMeshtasticConfigStatus(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 3, 14, 10, 0, 0, 0, time.UTC)
+	mapped := mapMeshtasticConfigStatus(meshtastic.Snapshot{
+		State: meshtastic.StateConnected,
+		HomeConfig: &meshtastic.HomeNodeConfigSummary{
+			Available:         true,
+			Region:            "EU_868",
+			PrimaryChannel:    "Home Mesh",
+			PSKState:          "present",
+			ShareURL:          "https://meshtastic.org/e/#CwgB",
+			ShareURLRedacted:  "https://meshtastic.org/e/#<redacted>",
+			ShareURLAvailable: true,
+			Source:            "status_event",
+			UpdatedAt:         now,
+		},
+	})
+	if !mapped.Available {
+		t.Fatal("expected mapped meshtastic config available")
+	}
+	if mapped.Region != "EU_868" {
+		t.Fatalf("expected region EU_868, got %q", mapped.Region)
+	}
+	if !mapped.ShareURLAvailable {
+		t.Fatal("expected share URL available")
+	}
+	if mapped.UpdatedAt == nil || !mapped.UpdatedAt.Equal(now) {
+		t.Fatalf("unexpected mapped updated_at: %#v", mapped.UpdatedAt)
+	}
+
+	unavailable := mapMeshtasticConfigStatus(meshtastic.Snapshot{State: meshtastic.StateConnected})
+	if unavailable.Available {
+		t.Fatal("expected unavailable meshtastic config when no home config summary is present")
+	}
+	if unavailable.UnavailableReason == "" {
+		t.Fatal("expected unavailable reason for missing config summary")
+	}
+}
+
 func TestResolveRuntimeProfile(t *testing.T) {
 	t.Parallel()
 
@@ -411,6 +451,15 @@ func TestSendHeartbeatPayloadShaping(t *testing.T) {
 	}
 	if _, ok := mockCloud.lastHeartbeat.Status["homeAutoLastResult"]; !ok {
 		t.Fatalf("expected homeAutoLastResult in heartbeat status payload")
+	}
+	if _, ok := mockCloud.lastHeartbeat.Status["meshConfigAvailable"]; !ok {
+		t.Fatalf("expected meshConfigAvailable in heartbeat status payload")
+	}
+	if _, ok := mockCloud.lastHeartbeat.Status["meshConfigPSKState"]; !ok {
+		t.Fatalf("expected meshConfigPSKState in heartbeat status payload")
+	}
+	if _, ok := mockCloud.lastHeartbeat.Status["meshConfigShareReady"]; !ok {
+		t.Fatalf("expected meshConfigShareReady in heartbeat status payload")
 	}
 	if got := mockCloud.lastHeartbeat.Status["localName"]; got != "garage-pi-abc123" {
 		t.Fatalf("expected localName in heartbeat payload, got %#v", got)

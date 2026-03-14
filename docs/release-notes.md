@@ -1,5 +1,8 @@
 # LoRaMapr Receiver Release Notes
 
+For Meshtastic field-node pairing data exposure notes targeting `v2.13.0`, see
+`docs/release-notes-v2.13.0.md`.
+
 For receiver-side onboarding simplification cleanup notes (owner/workspace/site
 assumptions), see `docs/release-notes-simplification.md`.
 

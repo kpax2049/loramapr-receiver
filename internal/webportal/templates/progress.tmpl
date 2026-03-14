@@ -83,4 +83,35 @@
     <tr><th>Last Error</th><td>{{if .Snapshot.LastError}}{{.Snapshot.LastError}}{{else}}none{{end}}</td></tr>
   </table>
 </section>
+<section class="panel">
+  <h2>Field-Node Pairing Data (Read-Only)</h2>
+  <p>Use these home-node communication settings when pairing a field node. This section is read-only.</p>
+  {{if .Snapshot.MeshtasticConfig.Available}}
+  <table>
+    <tr><th>Region</th><td class="mono">{{if .Snapshot.MeshtasticConfig.Region}}{{.Snapshot.MeshtasticConfig.Region}}{{else}}unknown{{end}}</td></tr>
+    <tr><th>Primary Channel</th><td>{{if .Snapshot.MeshtasticConfig.PrimaryChannel}}{{.Snapshot.MeshtasticConfig.PrimaryChannel}}{{else}}unknown{{end}}</td></tr>
+    <tr><th>Primary Channel Index</th><td>{{.Snapshot.MeshtasticConfig.PrimaryChannelIdx}}</td></tr>
+    <tr><th>PSK State</th><td class="mono">{{if .Snapshot.MeshtasticConfig.PSKState}}{{.Snapshot.MeshtasticConfig.PSKState}}{{else}}unknown{{end}}</td></tr>
+    <tr><th>LoRa Preset</th><td class="mono">{{if .Snapshot.MeshtasticConfig.LoRaPreset}}{{.Snapshot.MeshtasticConfig.LoRaPreset}}{{else}}unknown{{end}}</td></tr>
+    <tr><th>LoRa Bandwidth</th><td class="mono">{{if .Snapshot.MeshtasticConfig.LoRaBandwidth}}{{.Snapshot.MeshtasticConfig.LoRaBandwidth}}{{else}}unknown{{end}}</td></tr>
+    <tr><th>LoRa Spreading</th><td class="mono">{{if .Snapshot.MeshtasticConfig.LoRaSpreading}}{{.Snapshot.MeshtasticConfig.LoRaSpreading}}{{else}}unknown{{end}}</td></tr>
+    <tr><th>LoRa Coding Rate</th><td class="mono">{{if .Snapshot.MeshtasticConfig.LoRaCodingRate}}{{.Snapshot.MeshtasticConfig.LoRaCodingRate}}{{else}}unknown{{end}}</td></tr>
+    <tr><th>Share URL Available</th><td>{{if .Snapshot.MeshtasticConfig.ShareURLAvailable}}yes{{else}}no{{end}}</td></tr>
+    {{if .Snapshot.MeshtasticConfig.ShareURLAvailable}}
+    <tr><th>Share URL</th><td class="mono">{{if .Snapshot.MeshtasticConfig.ShareURL}}{{.Snapshot.MeshtasticConfig.ShareURL}}{{else}}unavailable{{end}}</td></tr>
+    <tr><th>Share URL (Redacted)</th><td class="mono">{{if .Snapshot.MeshtasticConfig.ShareURLRedacted}}{{.Snapshot.MeshtasticConfig.ShareURLRedacted}}{{else}}none{{end}}</td></tr>
+    {{end}}
+    <tr><th>Config Source</th><td class="mono">{{if .Snapshot.MeshtasticConfig.Source}}{{.Snapshot.MeshtasticConfig.Source}}{{else}}unknown{{end}}</td></tr>
+    <tr><th>Updated At</th><td class="mono">{{if .Snapshot.MeshtasticConfig.UpdatedAt}}{{.Snapshot.MeshtasticConfig.UpdatedAt}}{{else}}unknown{{end}}</td></tr>
+  </table>
+  <div class="hint warn">
+    Share URLs may include channel secrets. Only use this on trusted local networks and trusted field devices.
+  </div>
+  {{else}}
+  <div class="hint warn">
+    Home-node config summary is not available yet.
+    {{if .Snapshot.MeshtasticConfig.UnavailableReason}}Reason: {{.Snapshot.MeshtasticConfig.UnavailableReason}}{{else}}Wait for a connected node status/config event or use manual Meshtastic app sharing.{{end}}
+  </div>
+  {{end}}
+</section>
 {{end}}

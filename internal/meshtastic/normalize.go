@@ -24,7 +24,7 @@ func NormalizeLine(line []byte, now time.Time) (Event, error) {
 			return Event{}, err
 		}
 		return Event{Kind: EventPacket, Packet: &packet, Received: received}, nil
-	case "status", "node_status":
+	case "status", "node_status", "config", "channel_config", "home_config":
 		nodeStatus, received, err := normalizeNodeStatus(raw, now)
 		if err != nil {
 			return Event{}, err
@@ -76,13 +76,15 @@ func normalizePacket(raw map[string]any, now time.Time) (Packet, time.Time, erro
 func normalizeNodeStatus(raw map[string]any, now time.Time) (NodeStatus, time.Time, error) {
 	localNodeID := strings.TrimSpace(firstString(raw, "local_node_id", "localNodeId", "node_id", "nodeId"))
 	observed := stringList(raw, "observed_node_ids", "observedNodeIds", "nodes")
-	if localNodeID == "" && len(observed) == 0 {
+	homeCfg := normalizeHomeNodeConfig(raw)
+	if localNodeID == "" && len(observed) == 0 && homeCfg == nil {
 		return NodeStatus{}, time.Time{}, errors.New("status event missing node details")
 	}
 
 	return NodeStatus{
 		LocalNodeID:     localNodeID,
 		ObservedNodeIDs: observed,
+		HomeConfig:      homeCfg,
 	}, parseTime(raw, now, "received_at", "timestamp"), nil
 }
 
@@ -290,4 +292,183 @@ func firstFloat(raw map[string]any, keys ...string) (float64, bool) {
 		}
 	}
 	return 0, false
+}
+
+func normalizeHomeNodeConfig(raw map[string]any) *HomeNodeConfigSummary {
+	region := strings.TrimSpace(firstString(raw, "region", "lora_region", "loraRegion"))
+	primaryName := strings.TrimSpace(firstString(raw, "primary_channel", "primaryChannel", "channel_name", "channelName"))
+	primaryIdx := firstInt(raw, "primary_channel_index", "primaryChannelIndex", "channel_index", "channelIndex")
+	pskState := normalizePSKState(
+		raw,
+		firstString(raw, "psk_state", "pskState"),
+		firstBool(raw, "primary_channel_psk_present", "primaryChannelPskPresent", "psk_present", "pskPresent", "has_psk"),
+	)
+	loraPreset := strings.TrimSpace(firstString(raw, "lora_preset", "loraPreset", "modem_preset", "modemPreset"))
+	loraBandwidth := strings.TrimSpace(firstString(raw, "lora_bw", "loraBw", "bandwidth", "lora_bandwidth"))
+	loraSpreading := strings.TrimSpace(firstString(raw, "lora_sf", "loraSf", "spreading_factor", "spreadingFactor"))
+	loraCodingRate := strings.TrimSpace(firstString(raw, "lora_cr", "loraCr", "coding_rate", "codingRate"))
+	shareURL := strings.TrimSpace(firstString(raw,
+		"channel_url",
+		"channelUrl",
+		"share_url",
+		"shareUrl",
+		"primary_channel_url",
+		"primaryChannelUrl",
+	))
+
+	channel := firstMap(raw, "channel", "primary_channel_config", "primaryChannelConfig")
+	if channel != nil {
+		if region == "" {
+			region = strings.TrimSpace(firstString(channel, "region", "lora_region", "loraRegion"))
+		}
+		if primaryName == "" {
+			primaryName = strings.TrimSpace(firstString(channel, "name", "channel_name", "channelName", "primary_name"))
+		}
+		if primaryIdx == 0 {
+			primaryIdx = firstInt(channel, "index", "channel_index", "channelIndex")
+		}
+		if pskState == "unknown" {
+			pskState = normalizePSKState(
+				channel,
+				firstString(channel, "psk_state", "pskState"),
+				firstBool(channel, "psk_present", "pskPresent", "has_psk"),
+			)
+		}
+		if loraPreset == "" {
+			loraPreset = strings.TrimSpace(firstString(channel, "lora_preset", "loraPreset", "modem_preset", "modemPreset"))
+		}
+		if loraBandwidth == "" {
+			loraBandwidth = strings.TrimSpace(firstString(channel, "lora_bw", "loraBw", "bandwidth", "lora_bandwidth"))
+		}
+		if loraSpreading == "" {
+			loraSpreading = strings.TrimSpace(firstString(channel, "lora_sf", "loraSf", "spreading_factor", "spreadingFactor"))
+		}
+		if loraCodingRate == "" {
+			loraCodingRate = strings.TrimSpace(firstString(channel, "lora_cr", "loraCr", "coding_rate", "codingRate"))
+		}
+		if shareURL == "" {
+			shareURL = strings.TrimSpace(firstString(channel, "channel_url", "channelUrl", "share_url", "shareUrl"))
+		}
+	}
+
+	hasData := region != "" || primaryName != "" || primaryIdx > 0 || pskState != "unknown" ||
+		loraPreset != "" || loraBandwidth != "" || loraSpreading != "" || loraCodingRate != "" || shareURL != ""
+	if !hasData {
+		return nil
+	}
+
+	shareRedacted := redactShareURL(shareURL)
+	shareAvailable := shareURL != ""
+	return &HomeNodeConfigSummary{
+		Available:         true,
+		UnavailableReason: "",
+		Region:            region,
+		PrimaryChannel:    primaryName,
+		PrimaryChannelIdx: primaryIdx,
+		PSKState:          pskState,
+		LoRaPreset:        loraPreset,
+		LoRaBandwidth:     loraBandwidth,
+		LoRaSpreading:     loraSpreading,
+		LoRaCodingRate:    loraCodingRate,
+		ShareURL:          shareURL,
+		ShareURLRedacted:  shareRedacted,
+		ShareURLAvailable: shareAvailable,
+		ShareQRText:       shareURL,
+		Source:            "status_event",
+	}
+}
+
+func firstMap(raw map[string]any, keys ...string) map[string]any {
+	for _, key := range keys {
+		value, ok := raw[key]
+		if !ok || value == nil {
+			continue
+		}
+		if typed, ok := value.(map[string]any); ok {
+			return typed
+		}
+	}
+	return nil
+}
+
+func firstBool(raw map[string]any, keys ...string) *bool {
+	for _, key := range keys {
+		value, ok := raw[key]
+		if !ok {
+			continue
+		}
+		typed, ok := anyToBool(value)
+		if !ok {
+			continue
+		}
+		return &typed
+	}
+	return nil
+}
+
+func anyToBool(value any) (bool, bool) {
+	switch typed := value.(type) {
+	case bool:
+		return typed, true
+	case string:
+		switch strings.ToLower(strings.TrimSpace(typed)) {
+		case "1", "true", "yes", "on", "present", "set":
+			return true, true
+		case "0", "false", "no", "off", "unset", "missing":
+			return false, true
+		default:
+			return false, false
+		}
+	case int:
+		return typed != 0, true
+	case int64:
+		return typed != 0, true
+	case float64:
+		return typed != 0, true
+	default:
+		return false, false
+	}
+}
+
+func normalizePSKState(raw map[string]any, explicit string, present *bool) string {
+	value := strings.ToLower(strings.TrimSpace(explicit))
+	switch value {
+	case "present", "set", "configured", "available":
+		return "present"
+	case "not_set", "unset", "missing", "none", "absent":
+		return "not_set"
+	case "unknown":
+		return "unknown"
+	}
+	if present != nil {
+		if *present {
+			return "present"
+		}
+		return "not_set"
+	}
+	if inferred := firstBool(raw, "psk_present", "pskPresent", "has_psk", "hasPsk"); inferred != nil {
+		if *inferred {
+			return "present"
+		}
+		return "not_set"
+	}
+	return "unknown"
+}
+
+func redactShareURL(value string) string {
+	text := strings.TrimSpace(value)
+	if text == "" {
+		return ""
+	}
+	out := text
+	if idx := strings.Index(out, "#"); idx >= 0 {
+		return out[:idx+1] + "<redacted>"
+	}
+	if idx := strings.Index(out, "?"); idx >= 0 {
+		return out[:idx+1] + "<redacted>"
+	}
+	if len(out) <= 24 {
+		return "<redacted>"
+	}
+	return out[:12] + "..." + out[len(out)-6:]
 }

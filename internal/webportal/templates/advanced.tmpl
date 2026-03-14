@@ -19,6 +19,14 @@
     <tr><th>Install Type</th><td class="mono">{{if .InstallType}}{{.InstallType}}{{else}}unknown{{end}}</td></tr>
     <tr><th>Service Mode</th><td class="mono">{{.Snapshot.Mode}}</td></tr>
     <tr><th>Runtime Profile</th><td class="mono">{{.Snapshot.RuntimeProfile}}</td></tr>
+    <tr><th>Meshtastic Config Available</th><td>{{if .Snapshot.MeshtasticConfig.Available}}yes{{else}}no{{end}}</td></tr>
+    <tr><th>Meshtastic Region</th><td class="mono">{{if .Snapshot.MeshtasticConfig.Region}}{{.Snapshot.MeshtasticConfig.Region}}{{else}}unknown{{end}}</td></tr>
+    <tr><th>Meshtastic Primary Channel</th><td>{{if .Snapshot.MeshtasticConfig.PrimaryChannel}}{{.Snapshot.MeshtasticConfig.PrimaryChannel}}{{else}}unknown{{end}}</td></tr>
+    <tr><th>Meshtastic PSK State</th><td class="mono">{{if .Snapshot.MeshtasticConfig.PSKState}}{{.Snapshot.MeshtasticConfig.PSKState}}{{else}}unknown{{end}}</td></tr>
+    <tr><th>Meshtastic Share URL Available</th><td>{{if .Snapshot.MeshtasticConfig.ShareURLAvailable}}yes{{else}}no{{end}}</td></tr>
+    <tr><th>Meshtastic Share URL (Redacted)</th><td class="mono">{{if .Snapshot.MeshtasticConfig.ShareURLRedacted}}{{.Snapshot.MeshtasticConfig.ShareURLRedacted}}{{else}}none{{end}}</td></tr>
+    <tr><th>Meshtastic Config Source</th><td class="mono">{{if .Snapshot.MeshtasticConfig.Source}}{{.Snapshot.MeshtasticConfig.Source}}{{else}}unknown{{end}}</td></tr>
+    <tr><th>Meshtastic Config Updated</th><td class="mono">{{if .Snapshot.MeshtasticConfig.UpdatedAt}}{{.Snapshot.MeshtasticConfig.UpdatedAt}}{{else}}unknown{{end}}</td></tr>
     <tr><th>Update Status</th><td class="mono">{{if .Snapshot.UpdateStatus}}{{.Snapshot.UpdateStatus}}{{else}}unknown{{end}}</td></tr>
     <tr><th>Recommended Version</th><td class="mono">{{if .Snapshot.UpdateRecommendedVersion}}{{.Snapshot.UpdateRecommendedVersion}}{{else}}unknown{{end}}</td></tr>
     <tr><th>Manifest Channel</th><td class="mono">{{if .Snapshot.UpdateManifestChannel}}{{.Snapshot.UpdateManifestChannel}}{{else}}unknown{{end}}</td></tr>
@@ -28,6 +36,6 @@
 </section>
 <section class="panel">
   <h2>Security Notes</h2>
-  <p class="muted">This page intentionally omits stored API secrets and activation tokens.</p>
+  <p class="muted">This page intentionally omits stored API secrets and activation tokens. Meshtastic share values are shown only on local portal surfaces; redacted values are used for support exports and cloud status.</p>
 </section>
 {{end}}

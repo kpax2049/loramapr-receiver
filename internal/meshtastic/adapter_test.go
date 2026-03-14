@@ -36,7 +36,7 @@ func TestServiceLifecycleAndEvents(t *testing.T) {
 		t.Fatalf("Start returned error: %v", err)
 	}
 
-	_, _ = writer.Write([]byte(`{"type":"status","local_node_id":"!home","observed_node_ids":["!node-1"]}` + "\n"))
+	_, _ = writer.Write([]byte(`{"type":"status","local_node_id":"!home","observed_node_ids":["!node-1"],"region":"EU_868","primary_channel":"Home Mesh","psk_present":true,"channel_url":"https://meshtastic.org/e/#CwgB"}` + "\n"))
 	_, _ = writer.Write([]byte(`{"type":"packet","from":"!node-1","payload":"hello","port":1}` + "\n"))
 	_ = writer.Close()
 
@@ -66,6 +66,15 @@ func TestServiceLifecycleAndEvents(t *testing.T) {
 	}
 	if snapshot.PacketsSeen == 0 {
 		t.Fatalf("expected packet count > 0")
+	}
+	if snapshot.HomeConfig == nil {
+		t.Fatalf("expected home node config summary in snapshot")
+	}
+	if snapshot.HomeConfig.Region != "EU_868" {
+		t.Fatalf("unexpected region summary: %q", snapshot.HomeConfig.Region)
+	}
+	if !snapshot.HomeConfig.ShareURLAvailable {
+		t.Fatalf("expected share url availability in home config summary")
 	}
 	cancel()
 }

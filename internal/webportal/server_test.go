@@ -344,6 +344,42 @@ func TestProgressPageShowsReceiverIdentityContext(t *testing.T) {
 	}
 }
 
+func TestProgressPageShowsMeshtasticConfigSummary(t *testing.T) {
+	t.Parallel()
+
+	snap := sampleSnapshot()
+	snap.PairingPhase = "steady_state"
+	snap.MeshtasticConfig = status.MeshtasticConfigSnapshot{
+		Available:         true,
+		Region:            "EU_868",
+		PrimaryChannel:    "Home Mesh",
+		PSKState:          "present",
+		ShareURLAvailable: true,
+		ShareURL:          "https://meshtastic.org/e/#CwgB",
+		ShareURLRedacted:  "https://meshtastic.org/e/#<redacted>",
+		Source:            "status_event",
+	}
+
+	srv := New("127.0.0.1:0", staticStatusProvider{snapshot: snap}, &recordingPairingSubmitter{}, nil)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/progress", nil)
+	srv.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "Field-Node Pairing Data") {
+		t.Fatalf("expected field-node pairing section")
+	}
+	if !strings.Contains(body, "EU_868") || !strings.Contains(body, "Home Mesh") {
+		t.Fatalf("expected meshtastic config summary details")
+	}
+	if !strings.Contains(body, "https://meshtastic.org/e/#CwgB") {
+		t.Fatalf("expected share URL in progress page")
+	}
+}
+
 func TestAdvancedPage(t *testing.T) {
 	t.Parallel()
 
@@ -468,6 +504,25 @@ func TestTroubleshootingUnsupportedVersionHint(t *testing.T) {
 	body := rec.Body.String()
 	if !strings.Contains(body, "unsupported") {
 		t.Fatalf("expected unsupported guidance in troubleshooting page")
+	}
+}
+
+func TestTroubleshootingShowsMeshtasticConfigFallbackHint(t *testing.T) {
+	t.Parallel()
+
+	snap := sampleSnapshot()
+	snap.PairingPhase = "steady_state"
+	snap.MeshtasticConfig = status.MeshtasticConfigSnapshot{
+		Available:         false,
+		UnavailableReason: "connected node has not reported channel/config summary",
+	}
+
+	hints := strings.Join(troubleshootingHints(snap), "\n")
+	if !strings.Contains(hints, "Field-node pairing data is unavailable") {
+		t.Fatalf("expected field-node pairing unavailable hint, got %q", hints)
+	}
+	if !strings.Contains(hints, "Meshtastic app") {
+		t.Fatalf("expected Meshtastic app fallback hint, got %q", hints)
 	}
 }
 

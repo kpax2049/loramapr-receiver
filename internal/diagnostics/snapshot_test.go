@@ -7,6 +7,7 @@ import (
 	"github.com/loramapr/loramapr-receiver/internal/config"
 	"github.com/loramapr/loramapr-receiver/internal/meshtastic"
 	"github.com/loramapr/loramapr-receiver/internal/state"
+	"github.com/loramapr/loramapr-receiver/internal/status"
 )
 
 func TestSupportSnapshotRedactsSecrets(t *testing.T) {
@@ -102,6 +103,8 @@ func TestSupportSnapshotRedactsSecrets(t *testing.T) {
 	assertContains("pairing.pairing_code")
 	assertContains("pairing.activation_token")
 	assertContains("cloud.credential_ref")
+	assertContains("meshtastic_config.share_url")
+	assertContains("meshtastic_config.share_qr_text")
 	if snapshot.Config.StatePath == "" || snapshot.Config.SchemaVersion == 0 {
 		t.Fatal("expected config/state markers in support snapshot")
 	}
@@ -119,6 +122,9 @@ func TestSupportSnapshotRedactsSecrets(t *testing.T) {
 	}
 	if len(snapshot.Operations.Checks) == 0 {
 		t.Fatal("expected operational checks in support snapshot")
+	}
+	if snapshot.Meshtastic.ConfigSummary.PSKState == "" {
+		t.Fatal("expected meshtastic config summary psk_state marker")
 	}
 	if !snapshot.HomeAutoSession.Enabled || snapshot.HomeAutoSession.Mode != "observe" {
 		t.Fatalf("expected home auto session config in support snapshot: %#v", snapshot.HomeAutoSession)
@@ -152,5 +158,57 @@ func TestSupportSnapshotRedactsSecrets(t *testing.T) {
 	}
 	if snapshot.Attention.Code == "" {
 		t.Fatal("expected attention code in support snapshot")
+	}
+}
+
+func TestSupportSnapshotRedactsMeshtasticShareFromLocalProbeSnapshot(t *testing.T) {
+	t.Parallel()
+
+	cfg := config.Default()
+	data := state.Data{}
+	data.Installation.ID = "install-xyz"
+	localSnap := status.Snapshot{
+		Lifecycle:    status.LifecycleRunning,
+		Ready:        true,
+		PairingPhase: "steady_state",
+		MeshtasticConfig: status.MeshtasticConfigSnapshot{
+			Available:         true,
+			Region:            "EU_868",
+			PrimaryChannel:    "Home Mesh",
+			PSKState:          "present",
+			ShareURL:          "https://meshtastic.org/e/#SECRET",
+			ShareQRText:       "https://meshtastic.org/e/#SECRET",
+			ShareURLRedacted:  "https://meshtastic.org/e/#<redacted>",
+			ShareURLAvailable: true,
+		},
+	}
+
+	snapshot := CollectSupportSnapshot(cfg, data, Finding{}, CollectOptions{
+		Now: func() time.Time { return time.Now().UTC() },
+		ProbeCloud: func(_ string, _ time.Duration) CloudProbe {
+			return CloudProbe{Status: "reachable"}
+		},
+		ProbeNetwork: func() NetworkProbe {
+			return NetworkProbe{Status: "available"}
+		},
+		ProbeLocal: func(_ string, _ time.Duration) LocalStatusProbe {
+			return LocalStatusProbe{Status: "reachable", Snapshot: &localSnap}
+		},
+		DetectDevice: func(_ config.MeshtasticConfig) (meshtastic.DetectionResult, error) {
+			return meshtastic.DetectionResult{}, nil
+		},
+	})
+
+	if snapshot.Network.LocalRuntime.Snapshot == nil {
+		t.Fatal("expected local runtime snapshot to be present")
+	}
+	if got := snapshot.Network.LocalRuntime.Snapshot.MeshtasticConfig.ShareURL; got != "" {
+		t.Fatalf("expected local runtime snapshot meshtastic share URL to be redacted, got %q", got)
+	}
+	if got := snapshot.Network.LocalRuntime.Snapshot.MeshtasticConfig.ShareQRText; got != "" {
+		t.Fatalf("expected local runtime snapshot meshtastic share QR text to be redacted, got %q", got)
+	}
+	if got := snapshot.Meshtastic.ConfigSummary.ShareURLRedacted; got == "" {
+		t.Fatal("expected redacted meshtastic share hint in support snapshot")
 	}
 }

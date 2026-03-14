@@ -62,6 +62,26 @@ type Position struct {
 type NodeStatus struct {
 	LocalNodeID     string
 	ObservedNodeIDs []string
+	HomeConfig      *HomeNodeConfigSummary
+}
+
+type HomeNodeConfigSummary struct {
+	Available         bool
+	UnavailableReason string
+	Region            string
+	PrimaryChannel    string
+	PrimaryChannelIdx int
+	PSKState          string
+	LoRaPreset        string
+	LoRaBandwidth     string
+	LoRaSpreading     string
+	LoRaCodingRate    string
+	ShareURL          string
+	ShareURLRedacted  string
+	ShareURLAvailable bool
+	ShareQRText       string
+	Source            string
+	UpdatedAt         time.Time
 }
 
 type Snapshot struct {
@@ -75,6 +95,7 @@ type Snapshot struct {
 	LastPacketAt    *time.Time
 	Candidates      []string
 	LastError       string
+	HomeConfig      *HomeNodeConfigSummary
 	UpdatedAt       time.Time
 }
 
@@ -156,6 +177,7 @@ func (s *Service) Snapshot() Snapshot {
 	out := s.snap
 	out.ObservedNodeIDs = append([]string(nil), s.snap.ObservedNodeIDs...)
 	out.Candidates = append([]string(nil), s.snap.Candidates...)
+	out.HomeConfig = cloneHomeNodeConfig(s.snap.HomeConfig)
 	return out
 }
 
@@ -316,6 +338,13 @@ func (s *Service) applyEvent(device string, event Event) {
 				snap.LocalNodeID = event.Node.LocalNodeID
 			}
 			snap.ObservedNodeIDs = mergeNodeIDs(snap.ObservedNodeIDs, event.Node.ObservedNodeIDs)
+			if event.Node.HomeConfig != nil {
+				next := cloneHomeNodeConfig(event.Node.HomeConfig)
+				if next != nil {
+					next.UpdatedAt = now
+				}
+				snap.HomeConfig = next
+			}
 		}
 	})
 }
@@ -457,4 +486,13 @@ func isSupportedTransport(value string) bool {
 	default:
 		return false
 	}
+}
+
+func cloneHomeNodeConfig(input *HomeNodeConfigSummary) *HomeNodeConfigSummary {
+	if input == nil {
+		return nil
+	}
+	out := *input
+	out.UpdatedAt = input.UpdatedAt.UTC()
+	return &out
 }

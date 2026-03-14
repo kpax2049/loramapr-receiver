@@ -801,6 +801,34 @@ func troubleshootingHints(snap status.Snapshot) []string {
 	if meshtasticState == "degraded" {
 		hints = append(hints, "Meshtastic adapter is degraded. Verify configured device path and input stream format.")
 	}
+	meshCfg := snap.MeshtasticConfig
+	if meshCfg.Available {
+		parts := []string{}
+		if value := strings.TrimSpace(meshCfg.Region); value != "" {
+			parts = append(parts, "region="+value)
+		}
+		if value := strings.TrimSpace(meshCfg.PrimaryChannel); value != "" {
+			parts = append(parts, "primary_channel="+value)
+		}
+		if value := strings.TrimSpace(meshCfg.PSKState); value != "" {
+			parts = append(parts, "psk_state="+value)
+		}
+		if len(parts) > 0 {
+			hints = append(hints, "Home-node config summary: "+strings.Join(parts, " "))
+		}
+		if meshCfg.ShareURLAvailable {
+			hints = append(hints, "Share-based field-node pairing is available on Progress (Meshtastic share URL).")
+		} else {
+			hints = append(hints, "Share URL is unavailable; use manual region/channel summary from Progress for field-node setup.")
+		}
+	} else {
+		reason := strings.TrimSpace(meshCfg.UnavailableReason)
+		if reason == "" {
+			reason = "home node has not reported channel/config details"
+		}
+		hints = append(hints, "Field-node pairing data is unavailable: "+reason)
+		hints = append(hints, "Fallback: open Meshtastic app on the home node and share channel settings manually.")
+	}
 	networkState := componentState(snap, "network")
 	if networkState == "unavailable" {
 		hints = append(hints, "Network is unavailable. Confirm Ethernet/Wi-Fi setup and DHCP address assignment before pairing.")

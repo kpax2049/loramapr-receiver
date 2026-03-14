@@ -74,6 +74,20 @@ Actions:
 3. In multi-receiver setups, verify the node is attached to this receiver, not a different one.
 4. Refresh portal Progress for node state update.
 
+### Field-Node Pairing Data Missing
+
+Indicators:
+
+- Progress page shows field-node pairing data unavailable
+- Meshtastic config summary shows `available=false`
+
+Actions:
+
+1. Confirm Meshtastic adapter is `connected`.
+2. Wait for node status/config events to populate summary fields.
+3. If share URL is still unavailable, use manual region/channel summary.
+4. Fallback to Meshtastic app native share flow if node does not emit share URL.
+
 ### Paired but Not Forwarding
 
 Indicators:

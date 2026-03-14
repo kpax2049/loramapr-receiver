@@ -11,6 +11,7 @@ The adapter is intentionally isolated from cloud posting logic and provides:
 - connection lifecycle state
 - node/status extraction
 - packet/status event normalization into internal events
+- read-only home-node config summary extraction for field-node onboarding
 
 ## Supported Transport Modes
 
@@ -63,6 +64,12 @@ Two event kinds:
     receive timestamp, and optional metadata (RSSI/SNR/hop info)
 - `status`
   - local node ID and observed node IDs
+  - optional home-node config summary when upstream status/config events include:
+    - region
+    - primary channel summary
+    - PSK presence state
+    - LoRa share settings (if present)
+    - Meshtastic share URL text (if present)
 
 Expected incoming event shape is newline-delimited JSON records containing
 `type: "packet"` or `type: "status"`.
@@ -72,6 +79,16 @@ Expected incoming event shape is newline-delimited JSON records containing
 - No direct protobuf/native Meshtastic protocol integration yet.
 - Serial mode currently expects an upstream process/bridge to emit JSON lines.
 - Adapter attempts reconnects with bounded delays and reports coarse errors.
+- Share URL generation is not synthesized by receiver. Receiver only exposes
+  share values that were actually reported by connected node status/config data.
+- When config/share data is unavailable, receiver falls back to manual summary
+  guidance and explicit unavailable reason.
+
+## Security Notes
+
+- Meshtastic share URLs can embed channel secrets.
+- Receiver treats raw share URL/QR text as local-only operator data.
+- Cloud heartbeat and support snapshot outputs include redacted/safe hints only.
 
 This keeps the runtime boundary stable while allowing a later drop-in native
 transport implementation without changing cloud/runtime orchestration APIs.
