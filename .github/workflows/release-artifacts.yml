@@ -81,6 +81,9 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y qemu-user qemu-user-static binfmt-support
+          sudo modprobe binfmt_misc || true
+          sudo mount -t binfmt_misc binfmt_misc /proc/sys/fs/binfmt_misc || true
+          docker run --rm --privileged tonistiigi/binfmt --install arm || true
 
       - name: Build Artifacts
         env:
