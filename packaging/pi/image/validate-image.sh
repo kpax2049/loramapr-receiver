@@ -33,4 +33,15 @@ if [[ "${size_bytes}" -lt "${min_bytes}" ]]; then
   exit 1
 fi
 
+# Flash tools require raw disk images to be sector-aligned.
+raw_size_bytes="$(xz --robot --list "${IMAGE_PATH}" | awk -F'\t' '$1=="totals" { print $5 }')"
+if [[ -z "${raw_size_bytes}" ]]; then
+  echo "unable to read uncompressed image size: ${IMAGE_PATH}" >&2
+  exit 1
+fi
+if (( raw_size_bytes % 512 != 0 )); then
+  echo "invalid image geometry: uncompressed size ${raw_size_bytes} is not a multiple of 512 bytes (${IMAGE_PATH})" >&2
+  exit 1
+fi
+
 echo "Validated Pi image artifact: ${IMAGE_PATH}"
