@@ -30,8 +30,14 @@ packaging/release/build-artifacts.sh <version> [channel]
 Enable Pi image output:
 
 ```bash
-PI_GEN_DIR=/path/to/pi-gen ENABLE_PI_IMAGE=1 \
+PI_GEN_DIR=/path/to/pi-gen PI_FIRST_USER_PASS='change-me-now' ENABLE_PI_IMAGE=1 \
   packaging/release/build-artifacts.sh <version> [channel]
+```
+
+Upload artifacts to GitHub release assets:
+
+```bash
+packaging/release/publish-github-release-assets.sh <version>
 ```
 
 Outputs are written to `dist/<version>/artifacts/` with `SHA256SUMS`.
@@ -57,6 +63,7 @@ Pi appliance image outputs:
 
 - `loramapr-receiver_<version>_pi_arm64.img.xz`
 - `loramapr-receiver_<version>_pi_arm64.image-metadata.json`
+- `loramapr-receiver-pi-appliance-<version>.img.xz` (legacy URL alias)
 
 Manifest/metadata outputs:
 

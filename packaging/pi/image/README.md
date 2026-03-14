@@ -11,6 +11,7 @@ From repository root:
 VERSION=v2.2.0-rc1
 CHANNEL=stable
 PI_GEN_DIR=/path/to/pi-gen \
+PI_FIRST_USER_PASS='change-me-now' \
 ENABLE_PI_IMAGE=1 \
 packaging/release/build-artifacts.sh "${VERSION}" "${CHANNEL}"
 ```
@@ -24,6 +25,7 @@ This produces image output under:
 
 ```bash
 PI_GEN_DIR=/path/to/pi-gen \
+PI_FIRST_USER_PASS='change-me-now' \
 packaging/pi/image/build-image.sh <version> [channel]
 ```
 
@@ -34,6 +36,10 @@ PI_GEN_DIR=/path/to/pi-gen \
 PI_IMAGE_PREP_ONLY=1 \
 packaging/pi/image/build-image.sh <version>
 ```
+
+`PI_FIRST_USER_NAME` and `PI_FIRST_USER_PASS` can be provided to satisfy
+current `pi-gen` first-boot requirements. Keep this credential treated as
+temporary for appliance image build workflows.
 
 ## Expected Image Contents
 

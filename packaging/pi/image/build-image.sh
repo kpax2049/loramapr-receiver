@@ -11,6 +11,8 @@ PI_GEN_BUILD_CMD="${PI_GEN_BUILD_CMD:-./build-docker.sh -c loramapr.config}"
 PI_IMAGE_PREP_ONLY="${PI_IMAGE_PREP_ONLY:-0}"
 PI_IMAGE_OUTPUT_DIR="${PI_IMAGE_OUTPUT_DIR:-${ROOT_DIR}/dist/${VERSION}/artifacts}"
 PI_IMAGE_ARTIFACT_NAME="${PI_IMAGE_ARTIFACT_NAME:-loramapr-receiver_${VERSION}_pi_arm64.img.xz}"
+PI_FIRST_USER_NAME="${PI_FIRST_USER_NAME:-loramapr}"
+PI_FIRST_USER_PASS="${PI_FIRST_USER_PASS:-loramapr}"
 
 usage() {
   cat <<USAGE
@@ -26,6 +28,8 @@ Environment:
   PI_IMAGE_PREP_ONLY            Set to 1 to only prepare stage/config and skip build
   PI_IMAGE_OUTPUT_DIR           Output directory for final image artifact
   PI_IMAGE_ARTIFACT_NAME        Final image artifact filename
+  PI_FIRST_USER_NAME            First boot user name in image (default: loramapr)
+  PI_FIRST_USER_PASS            First boot user password in image (default: loramapr)
 USAGE
 }
 
@@ -68,9 +72,11 @@ cp "${ROOT_DIR}/packaging/pi/receiver.appliance.json" "${STAGE_DIR}/files/receiv
 
 cat > "${PI_GEN_DIR}/loramapr.config" <<CONFIG
 IMG_NAME='${IMG_NAME}'
-DEPLOY_ZIP=0
+IMG_ARCH=arm64
+DEPLOY_COMPRESSION=none
 STAGE_LIST="stage0 stage1 stage2 stage-loramapr"
-FIRST_USER_NAME='loramapr'
+FIRST_USER_NAME='${PI_FIRST_USER_NAME}'
+FIRST_USER_PASS='${PI_FIRST_USER_PASS}'
 DISABLE_FIRST_BOOT_USER_RENAME=1
 CONFIG
 

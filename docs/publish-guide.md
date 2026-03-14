@@ -16,12 +16,18 @@ packaging/release/build-artifacts.sh <version> <channel>
 For Pi image releases:
 
 ```bash
-PI_GEN_DIR=/path/to/pi-gen ENABLE_PI_IMAGE=1 \
+PI_GEN_DIR=/path/to/pi-gen PI_FIRST_USER_PASS='change-me-now' ENABLE_PI_IMAGE=1 \
   packaging/release/build-artifacts.sh <version> <channel>
 ```
 
 Outputs in `dist/<version>/artifacts/` include release artifacts, checksums,
 manifest fragment, and release metadata.
+
+Optional GitHub release asset publication:
+
+```bash
+packaging/release/publish-github-release-assets.sh <version>
+```
 
 ## 2. Publish Signed Linux/Pi Distribution
 

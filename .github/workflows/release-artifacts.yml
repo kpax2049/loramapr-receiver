@@ -10,9 +10,20 @@ on:
         description: Release channel (stable or beta)
         required: true
         default: stable
+      include_pi_image:
+        description: Build Raspberry Pi appliance image (requires longer workflow runtime)
+        required: true
+        default: 'false'
+      publish_release_assets:
+        description: Upload dist artifacts as GitHub Release assets
+        required: true
+        default: 'true'
   push:
     tags:
       - 'v*'
+
+permissions:
+  contents: write
 
 jobs:
   build-artifacts:
@@ -29,20 +40,47 @@ jobs:
       - name: Resolve Version
         id: release
         run: |
+          to_int() {
+            local value="${1:-}"
+            value="$(printf '%s' "${value}" | tr '[:upper:]' '[:lower:]')"
+            if [ "${value}" = "1" ] || [ "${value}" = "true" ] || [ "${value}" = "yes" ]; then
+              echo "1"
+            else
+              echo "0"
+            fi
+          }
+
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             VERSION="${{ github.event.inputs.version }}"
             CHANNEL="${{ github.event.inputs.channel }}"
+            ENABLE_PI_IMAGE="$(to_int "${{ github.event.inputs.include_pi_image }}")"
+            PUBLISH_RELEASE_ASSETS="$(to_int "${{ github.event.inputs.publish_release_assets }}")"
           else
             VERSION="${GITHUB_REF_NAME}"
             CHANNEL="stable"
+            ENABLE_PI_IMAGE="1"
+            PUBLISH_RELEASE_ASSETS="1"
           fi
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           echo "channel=${CHANNEL}" >> "$GITHUB_OUTPUT"
+          echo "enable_pi_image=${ENABLE_PI_IMAGE}" >> "$GITHUB_OUTPUT"
+          echo "publish_release_assets=${PUBLISH_RELEASE_ASSETS}" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout pi-gen
+        if: steps.release.outputs.enable_pi_image == '1'
+        uses: actions/checkout@v4
+        with:
+          repository: RPi-Distro/pi-gen
+          path: .pi-gen
 
       - name: Run Tests
         run: go test ./...
 
       - name: Build Artifacts
+        env:
+          ENABLE_PI_IMAGE: ${{ steps.release.outputs.enable_pi_image }}
+          PI_GEN_DIR: ${{ github.workspace }}/.pi-gen
+          PI_FIRST_USER_PASS: ${{ secrets.PI_FIRST_USER_PASS }}
         run: packaging/release/build-artifacts.sh "${{ steps.release.outputs.version }}" "${{ steps.release.outputs.channel }}"
 
       - name: Upload Artifacts
@@ -50,3 +88,14 @@ jobs:
         with:
           name: receiver-artifacts-${{ steps.release.outputs.version }}-${{ steps.release.outputs.channel }}
           path: dist/${{ steps.release.outputs.version }}/artifacts/
+
+      - name: Upload Release Assets
+        if: steps.release.outputs.publish_release_assets == '1'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          packaging/release/publish-github-release-assets.sh \
+            "${{ steps.release.outputs.version }}" \
+            "dist/${{ steps.release.outputs.version }}/artifacts" \
+            "${{ github.repository }}"

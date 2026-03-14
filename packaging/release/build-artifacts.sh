@@ -152,6 +152,13 @@ done
 if [[ "${ENABLE_PI_IMAGE}" != "0" ]]; then
   PI_IMAGE_OUTPUT_DIR="${ARTIFACTS_DIR}" \
   "${ROOT_DIR}/packaging/pi/image/build-image.sh" "${VERSION}" "${CHANNEL}"
+
+  # Legacy alias kept for cloud catalog compatibility.
+  CANONICAL_PI_IMAGE="${ARTIFACTS_DIR}/loramapr-receiver_${VERSION}_pi_arm64.img.xz"
+  LEGACY_PI_IMAGE="${ARTIFACTS_DIR}/loramapr-receiver-pi-appliance-${VERSION}.img.xz"
+  if [[ -f "${CANONICAL_PI_IMAGE}" ]]; then
+    cp -f "${CANONICAL_PI_IMAGE}" "${LEGACY_PI_IMAGE}"
+  fi
 fi
 
 required_linux=(

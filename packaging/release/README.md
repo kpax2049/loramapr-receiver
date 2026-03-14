@@ -37,8 +37,14 @@ ENABLE_DEB=0 packaging/release/build-artifacts.sh v1.0.0 beta
 Enable Raspberry Pi appliance image output (requires `PI_GEN_DIR`):
 
 ```bash
-PI_GEN_DIR=/path/to/pi-gen ENABLE_PI_IMAGE=1 \
+PI_GEN_DIR=/path/to/pi-gen PI_FIRST_USER_PASS='change-me-now' ENABLE_PI_IMAGE=1 \
   packaging/release/build-artifacts.sh v1.0.0 stable
+```
+
+Publish built artifacts to GitHub release assets:
+
+```bash
+packaging/release/publish-github-release-assets.sh v1.0.0
 ```
 
 Outputs are written to:
@@ -75,6 +81,7 @@ Raspberry Pi appliance image (when `ENABLE_PI_IMAGE=1`):
 
 - `loramapr-receiver_<version>_pi_arm64.img.xz`
 - `loramapr-receiver_<version>_pi_arm64.image-metadata.json`
+- `loramapr-receiver-pi-appliance-<version>.img.xz` (legacy cloud URL alias)
 
 Checksum file:
 
