@@ -490,7 +490,7 @@ func TestTroubleshootingUnsupportedVersionHint(t *testing.T) {
 	snap := sampleSnapshot()
 	snap.FailureCode = "receiver_version_unsupported"
 	snap.FailureSummary = "Installed receiver version is no longer supported"
-	snap.FailureHint = "Upgrade receiver using the supported package or appliance release path."
+	snap.FailureHint = "Upgrade receiver using the supported package release path."
 	snap.UpdateStatus = "unsupported"
 
 	srv := New("127.0.0.1:0", staticStatusProvider{snapshot: snap}, &recordingPairingSubmitter{}, nil)

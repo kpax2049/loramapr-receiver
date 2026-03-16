@@ -1,74 +1,24 @@
-# Raspberry Pi Image Build
+# Raspberry Pi Image Build (Deprecated)
 
-This directory contains Raspberry Pi appliance image build automation based on
-the existing `pi-gen` stage integration.
+This directory contains historical Raspberry Pi appliance image build
+scaffolding based on `pi-gen`.
 
-## Release-oriented Build
+## Status
 
-From repository root:
+Receiver image path is currently deprecated/paused and not part of active
+public release flow.
 
-```bash
-VERSION=v2.2.0-rc1
-CHANNEL=stable
-PI_GEN_DIR=/path/to/pi-gen \
-PI_FIRST_USER_PASS='change-me-now' \
-ENABLE_PI_IMAGE=1 \
-packaging/release/build-artifacts.sh "${VERSION}" "${CHANNEL}"
-```
+Current supported Raspberry Pi strategy is package install on official
+Raspberry Pi OS Lite:
 
-This produces image output under:
+- `docs/linux-pi-distribution.md`
 
-- `dist/<version>/artifacts/loramapr-receiver_<version>_pi_arm64.img.xz`
-- `dist/<version>/artifacts/loramapr-receiver_<version>_pi_arm64.image-metadata.json`
+## Internal-Only Reference
 
-## Direct Image Build
+If image build work is resumed later, key entry points are:
 
-```bash
-PI_GEN_DIR=/path/to/pi-gen \
-PI_FIRST_USER_PASS='change-me-now' \
-packaging/pi/image/build-image.sh <version> [channel]
-```
+- `packaging/pi/image/build-image.sh`
+- `packaging/pi/image/stage-loramapr/`
+- `packaging/pi/image/validate-image.sh`
 
-Optional prep-only mode (no image build):
-
-```bash
-PI_GEN_DIR=/path/to/pi-gen \
-PI_IMAGE_PREP_ONLY=1 \
-packaging/pi/image/build-image.sh <version>
-```
-
-`PI_FIRST_USER_NAME` and `PI_FIRST_USER_PASS` can be provided to satisfy
-current `pi-gen` first-boot requirements. Keep this credential treated as
-temporary for appliance image build workflows.
-
-## Expected Image Contents
-
-- LoRaMapr Receiver runtime preinstalled (`arm64` service layout payload)
-- appliance config defaults (`runtime.profile=appliance-pi`)
-- systemd service enabled at boot
-- local portal bind configured for LAN access
-- hostname defaults to `loramapr-receiver`
-- mDNS advertisement (`loramapr-receiver.local`) via Avahi
-
-## Headless Setup Expectations
-
-- Wi-Fi credentials should be configured via Raspberry Pi Imager customization
-  before first boot.
-- Normal setup path does not require SSH; pairing is done via local portal.
-- Fallback discovery is router-assigned LAN IP if `.local` name is unavailable.
-
-## Validation
-
-Validate produced image artifact:
-
-```bash
-packaging/pi/image/validate-image.sh dist/<version>/artifacts/loramapr-receiver_<version>_pi_arm64.img.xz
-```
-
-Validation checks compressed image integrity and basic size sanity.
-
-For publish-path verification once released:
-
-```bash
-PI_IMAGE_REQUIRED=1 packaging/distribution/verify.sh <version> <channel>
-```
+Any future reactivation should explicitly restore CI/release/docs guidance.

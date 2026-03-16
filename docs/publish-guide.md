@@ -2,22 +2,17 @@
 
 This guide is for maintainers publishing LoRaMapr Receiver artifacts.
 
-For user install flows, use:
+For user install flow, use:
 
-- [Raspberry Pi Appliance Path](./raspberry-pi-appliance.md)
 - [Linux/Pi Existing-OS Install Path](./linux-pi-distribution.md)
+
+Receiver appliance image path is currently deprecated/paused and is not part of
+active public release flow.
 
 ## 1. Build Release Artifacts
 
 ```bash
 packaging/release/build-artifacts.sh <version> <channel>
-```
-
-For Pi image releases:
-
-```bash
-PI_GEN_DIR=/path/to/pi-gen PI_FIRST_USER_PASS='change-me-now' ENABLE_PI_IMAGE=1 \
-  packaging/release/build-artifacts.sh <version> <channel>
 ```
 
 Outputs in `dist/<version>/artifacts/` include release artifacts, checksums,
@@ -28,6 +23,8 @@ Optional GitHub release asset publication:
 ```bash
 packaging/release/publish-github-release-assets.sh <version>
 ```
+
+By default this publish path excludes deprecated Pi appliance image files.
 
 ## 2. Publish Signed Linux/Pi Distribution
 
@@ -49,12 +46,6 @@ Staged publication tree:
 packaging/distribution/verify.sh <version> <channel>
 ```
 
-If Pi image is required in this release:
-
-```bash
-PI_IMAGE_REQUIRED=1 packaging/distribution/verify.sh <version> <channel>
-```
-
 ## 4. Cloud Artifact Mapping
 
 Cloud should consume:
@@ -62,9 +53,8 @@ Cloud should consume:
 - `cloud-manifest.fragment.json`
 - URL pattern `receiver/<channel>/<version>/<artifact-file>`
 
-Preferred kinds for onboarding:
+Preferred kind for onboarding/install:
 
-- `appliance_image` for Raspberry Pi appliance path
 - `deb_package` for existing-OS package path
 
 ## 5. Diagnostics Sanity Check

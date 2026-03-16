@@ -2,16 +2,16 @@
 
 This is the primary field runbook for LoRaMapr Receiver support.
 
-It applies to both supported install paths:
+It applies to the supported install path:
 
-- Raspberry Pi appliance image
 - Existing Debian-family Linux / Raspberry Pi OS package install
+
+Receiver appliance image path is deprecated/paused.
 
 ## 1. Identify Install Path and Device Access
 
 Record which path is in use:
 
-- `pi-appliance`
 - `linux-package`
 - `manual-systemd` (advanced fallback)
 
@@ -157,15 +157,10 @@ Indicators:
 
 Actions:
 
-1. Upgrade via supported release path (APT or appliance image).
+1. Upgrade via supported package release path (APT or manual `.deb` fallback).
 2. Recheck portal attention and operational status after restart.
 
 ## 4. Path-Specific Notes
-
-Pi appliance:
-
-- normal recovery should not require SSH
-- if portal unavailable, fallback to Pi LAN IP and check power/network
 
 Existing Linux/Pi OS:
 
@@ -177,6 +172,6 @@ Existing Linux/Pi OS:
 Include in escalation:
 
 - `/tmp/receiver-support.json`
-- install path (`pi-appliance`, `linux-package`, or `manual-systemd`)
+- install path (`linux-package` or `manual-systemd`)
 - failure + attention summary
 - actions already attempted

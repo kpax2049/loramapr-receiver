@@ -741,7 +741,7 @@ func printUsage() {
 	fmt.Println("  loramapr-receiverd reset-pairing [flags]     Clear local receiver credentials and pair again")
 	fmt.Println("")
 	fmt.Println("If no subcommand is provided, run mode is used.")
-	fmt.Println("For install guides, see docs/raspberry-pi-appliance.md and docs/linux-pi-distribution.md.")
+	fmt.Println("For install guides, see docs/linux-pi-distribution.md (recommended) and docs/raspberry-pi-appliance.md (deprecated).")
 }
 
 func detectMeshtastic(cfg config.MeshtasticConfig) (map[string]string, string) {

@@ -69,7 +69,10 @@ Runtime/portal diagnostics map these to coarse failure codes:
 - `reset-pairing` deauthorizes receiver identity but does not regenerate
   `installation.id`
 
-### Pi appliance path
+### Pi appliance path (deprecated)
+
+Receiver appliance image path is deprecated/paused. Existing historical
+appliance installs follow the same state semantics:
 
 - same SD card + existing state: install identity persists
 - fresh SD card/image: new install identity generated; pairing required

@@ -11,7 +11,7 @@ with Linux/systemd as the first-class path.
 - `docker/`: container build scaffolding
 - `release/`: multi-platform artifact generation and checksums
 - `distribution/`: signed Linux/Pi publication scaffolding
-- `pi/`: Raspberry Pi appliance image scaffolding
+- `pi/`: deprecated Raspberry Pi appliance image scaffolding (internal/paused)
 - `macos/launchd/`: launchd placeholders
 - `windows/`: Windows service placeholders
 

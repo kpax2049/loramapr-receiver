@@ -96,7 +96,7 @@ Example (minimal):
 - `local-dev`
 - `linux-service`
 - `windows-user`
-- `appliance-pi`
+- `appliance-pi` (deprecated profile retained for compatibility)
 
 ### `runtime.local_name`
 
@@ -294,5 +294,5 @@ Linux package/service path:
 - logs: `/var/log/loramapr/`
 - service: `loramapr-receiverd.service`
 
-Pi appliance path uses the same runtime/state model with appliance profile
-defaults.
+Historical Pi appliance installs use the same runtime/state model with
+`appliance-pi` defaults.

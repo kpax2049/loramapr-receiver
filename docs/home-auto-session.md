@@ -107,12 +107,11 @@ Portal now shows:
 Diagnostics (`doctor`, `status`, `support-snapshot`) expose the same
 support-safe config-source/version/apply model.
 
-## Supported Install Paths
+## Supported Install Path
 
-Same embedded behavior on both supported paths:
+Same embedded behavior on supported Linux/Pi package path:
 
 - [Linux/Pi Existing-OS Install Path](./linux-pi-distribution.md)
-- [Raspberry Pi Appliance Path](./raspberry-pi-appliance.md)
 
 ## Milestone 4 Limitations
 

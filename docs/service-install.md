@@ -51,8 +51,12 @@ Repository includes placeholder paths for future non-Linux service integration:
 
 Linux remains the only implemented service install path in this version.
 
-## Raspberry Pi Appliance Path
+## Raspberry Pi Strategy
 
-Raspberry Pi appliance images use the same Linux/systemd service model with an
-image-first distribution path. See `docs/raspberry-pi-appliance.md` and
-`packaging/pi/` for image scaffolding and appliance defaults.
+Official Raspberry Pi path uses the same Linux/systemd package model on
+Raspberry Pi OS Lite:
+
+- `docs/linux-pi-distribution.md`
+
+Custom receiver appliance image path is deprecated/paused and not part of the
+active supported release flow.

@@ -154,7 +154,7 @@ func TestUpdateStatus(t *testing.T) {
 	model.SetUpdateStatus(
 		"outdated",
 		"New stable receiver release is available",
-		"Upgrade via apt or appliance image refresh.",
+		"Upgrade via apt package install.",
 		"v2.4.0",
 		"stable",
 		"v2.4.0",

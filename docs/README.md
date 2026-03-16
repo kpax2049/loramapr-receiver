@@ -2,11 +2,12 @@
 
 ## Start Here
 
-- [Raspberry Pi Appliance Path](./raspberry-pi-appliance.md)
 - [Linux/Pi Existing-OS Distribution Path](./linux-pi-distribution.md)
+- [Raspberry Pi Appliance Path (Deprecated)](./raspberry-pi-appliance.md)
 - [Embedded Local Setup Portal](./local-portal.md)
 - [Support and Operations Workflow](./support-operations-workflow.md)
 - [Reviewer Smoke Test Guide](./reviewer-smoke-test.md)
+- [Reviewer Smoke Test (v2.14.0 Pi OS Lite)](./reviewer-smoke-test-v2.14.0-pi-os-lite.md)
 - [Reviewer Smoke Test (Simplified Pairing)](./reviewer-smoke-test-simplified-pairing.md)
 - [Reviewer Smoke Test (v2.13.0 Meshtastic Share)](./reviewer-smoke-test-v2.13.0-meshtastic-share.md)
 
@@ -27,6 +28,7 @@
 - [Release Artifact Mapping](./release-artifacts.md)
 - [Publish Guide](./publish-guide.md)
 - [Release Notes Index](./release-notes.md)
+- [Release Notes v2.14.0](./release-notes-v2.14.0.md)
 - [Release Notes v2.13.0](./release-notes-v2.13.0.md)
 - [Simplification Cleanup Notes](./release-notes-simplification.md)
 - [Release Notes v2.12.0](./release-notes-v2.12.0.md)
@@ -46,6 +48,7 @@
 ## Architecture and Milestone Specs
 
 - [ADR 0001: Standalone Runtime](./adr/0001-standalone-receiver-runtime.md)
+- [v2.14.0 Plan: Pi OS Lite Strategy and Image Deprecation](./ga-v2.14.0-pi-os-lite-strategy.md)
 - [v2.12.0 Plan: Embedded Home Auto Session (Milestone 4)](./ga-v2.12.0-home-auto-session-m4-cloud-managed-config.md)
 - [v2.13.0 Plan: Meshtastic Channel/Share Data Exposure](./ga-v2.13.0-meshtastic-share-data.md)
 - [v2.11.0 Plan: Embedded Home Auto Session (Milestone 3)](./ga-v2.11.0-home-auto-session-m3-production-control.md)

@@ -43,6 +43,28 @@ if [[ "${#files[@]}" -eq 0 ]]; then
   exit 1
 fi
 
+include_deprecated_pi_image="${INCLUDE_DEPRECATED_PI_IMAGE:-0}"
+if [[ "${include_deprecated_pi_image}" != "1" ]]; then
+  filtered=()
+  for file in "${files[@]}"; do
+    base="$(basename "${file}")"
+    case "${base}" in
+      *_pi_arm64.img.xz|*_pi_arm64.image-metadata.json|*-pi-appliance-*.img.xz)
+        continue
+        ;;
+      *)
+        filtered+=("${file}")
+        ;;
+    esac
+  done
+  files=("${filtered[@]}")
+fi
+
+if [[ "${#files[@]}" -eq 0 ]]; then
+  echo "no publishable artifact files found in ${ARTIFACTS_DIR}" >&2
+  exit 1
+fi
+
 if ! gh release view "${VERSION}" --repo "${REPO}" >/dev/null 2>&1; then
   gh release create "${VERSION}" --repo "${REPO}" --title "${VERSION}" --notes ""
 fi

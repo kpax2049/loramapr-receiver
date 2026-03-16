@@ -1,11 +1,15 @@
 # Linux/Pi Existing-OS Install Path
 
-Use this path when you already run Debian, Ubuntu, or Raspberry Pi OS and want
-LoRaMapr Receiver installed as a normal package/service.
+This is the official LoRaMapr Receiver install path for Debian-family Linux and
+Raspberry Pi OS.
 
-For the flash-image appliance path, use:
+Recommended Raspberry Pi host path:
 
-- [Raspberry Pi Appliance Path](./raspberry-pi-appliance.md)
+- flash official Raspberry Pi OS Lite
+- preconfigure Wi-Fi/hostname in Raspberry Pi Imager
+- install `loramapr-receiver` package on first boot
+
+Receiver appliance image flow is currently deprecated/paused.
 
 ## Supported Systems
 
@@ -18,7 +22,44 @@ For the flash-image appliance path, use:
   - `arm64`
   - `armv7` (`armhf` package architecture)
 
-## Recommended Install (Signed APT Repository)
+## Quick Install (Canonical)
+
+Run on the target Linux/Pi host:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/kpax2049/loramapr-receiver/main/packaging/linux/scripts/bootstrap-apt.sh | sudo bash
+```
+
+Optional beta channel install:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/kpax2049/loramapr-receiver/main/packaging/linux/scripts/bootstrap-apt.sh | sudo bash -s -- --channel beta
+```
+
+The bootstrap script:
+
+- installs `curl`/`gnupg` prerequisites if missing
+- installs LoRaMapr APT keyring and source
+- installs `loramapr-receiver`
+- enables/starts `loramapr-receiverd`
+
+## After Install
+
+1. Confirm service is running: `systemctl status loramapr-receiverd`
+2. Open local portal:
+   - `http://loramapr-receiver.local:8080` (if mDNS available)
+   - or `http://<host-lan-ip>:8080`
+3. Enter pairing code from LoRaMapr Cloud.
+
+Home Auto Session inclusion:
+
+- Feature is built into the installed receiver package.
+- Default is off (`enabled=false`, `mode=off`).
+- Enable/configure from local portal: `/home-auto-session`.
+
+## Manual APT Setup (Fallback)
+
+Use this when you do not want to use the bootstrap helper.
 
 ```bash
 CHANNEL=stable
@@ -33,20 +74,6 @@ sudo apt-get update
 sudo apt-get install -y loramapr-receiver
 ```
 
-After install:
-
-1. Confirm service is running: `systemctl status loramapr-receiverd`
-2. Open local portal:
-   - `http://loramapr-receiver.local:8080` (if mDNS available)
-   - or `http://<host-lan-ip>:8080`
-3. Enter pairing code from LoRaMapr Cloud.
-
-Home Auto Session inclusion:
-
-- Feature is built into the installed receiver package.
-- Default is off (`enabled=false`, `mode=off`).
-- Enable/configure from local portal: `/home-auto-session`.
-
 ## Manual `.deb` Install (Fallback)
 
 Use this only when APT repository access is not possible.
@@ -54,7 +81,7 @@ Use this only when APT repository access is not possible.
 `amd64` example:
 
 ```bash
-VERSION=v2.7.0
+VERSION=v2.14.0
 CHANNEL=stable
 BASE=https://downloads.loramapr.com/receiver/${CHANNEL}/${VERSION}
 
@@ -69,7 +96,7 @@ sudo apt-get install -y ./loramapr-receiver_${VERSION}_linux_amd64.deb
 `arm64` example (Raspberry Pi OS 64-bit):
 
 ```bash
-VERSION=v2.7.0
+VERSION=v2.14.0
 CHANNEL=stable
 BASE=https://downloads.loramapr.com/receiver/${CHANNEL}/${VERSION}
 

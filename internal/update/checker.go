@@ -207,7 +207,7 @@ func evaluate(installed Installed, fragment manifest.Fragment, minSupported stri
 	case versionCmp < 0:
 		result.Status = StatusOutdated
 		result.Summary = "Receiver is behind recommended release"
-		result.Hint = "Upgrade receiver using the supported package or appliance image path."
+		result.Hint = "Upgrade receiver using the supported package release path."
 	case versionCmp > 0:
 		result.Status = StatusAhead
 		result.Summary = "Receiver is newer than manifest recommendation"

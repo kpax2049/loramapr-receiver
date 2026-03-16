@@ -6,16 +6,17 @@ LoRaMapr Cloud.
 It runs as a background service (`loramapr-receiverd`), exposes a local setup
 portal, and forwards packets to the existing cloud ingest path after pairing.
 
-## Choose Your Install Path
+## Supported Install Path
 
-LoRaMapr Receiver supports two public install paths.
+LoRaMapr Receiver uses one first-class Linux/Pi install path:
 
-1. Raspberry Pi Appliance (recommended for most users)
-   - Flash the LoRaMapr Receiver Pi image, boot, open local portal, pair.
-   - Guide: [Raspberry Pi Appliance Path](./docs/raspberry-pi-appliance.md)
-2. Existing Debian-family Linux / Raspberry Pi OS
+1. Existing Debian-family Linux / Raspberry Pi OS Lite
    - Install `loramapr-receiver` from the signed APT repository.
    - Guide: [Linux/Pi Existing-OS Path](./docs/linux-pi-distribution.md)
+   - Quick install:
+     - `curl -fsSL https://raw.githubusercontent.com/kpax2049/loramapr-receiver/main/packaging/linux/scripts/bootstrap-apt.sh | sudo bash`
+
+Raspberry Pi appliance image flow is currently deprecated/paused.
 
 Advanced fallback:
 
@@ -27,7 +28,7 @@ After install, the receiver enters pairing-ready mode and waits for a pairing
 code from LoRaMapr Cloud.
 
 1. Open the local portal:
-   - Pi appliance: `http://loramapr-receiver.local:8080`
+   - Linux/Pi OS host: `http://loramapr-receiver.local:8080`
    - fallback: `http://<device-lan-ip>:8080`
 2. Go to **Pairing**.
 3. Paste the pairing code from LoRaMapr Cloud.
@@ -82,7 +83,7 @@ Repository layout:
 - `cmd/loramapr-receiverd`: runtime entrypoint
 - `internal/`: runtime subsystems (config/state/cloud/portal/adapter/runtime)
 - `docs/`: product and operational documentation
-- `packaging/`: release, package, distribution, and image scaffolding
+- `packaging/`: release, package, distribution, and deprecated image scaffolding
 
 Build from source:
 

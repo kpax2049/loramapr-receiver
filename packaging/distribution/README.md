@@ -18,9 +18,6 @@ Static per-version key files:
 - `SHA256SUMS`
 - `cloud-manifest.fragment.json`
 - `release-metadata.json`
-- optional Pi image artifact:
-  - `loramapr-receiver_<version>_pi_arm64.img.xz`
-  - `loramapr-receiver_<version>_pi_arm64.image-metadata.json`
 - optional detached signatures (`*.asc`)
 
 APT metadata key files:
@@ -38,8 +35,11 @@ APT metadata key files:
    - `GPG_KEY_ID=<key-id> SIGNING_MODE=required packaging/distribution/publish.sh <version> [channel]`
 3. Verify publication output:
    - `packaging/distribution/verify.sh <version> [channel]`
-   - if Pi image is expected in this release: `PI_IMAGE_REQUIRED=1 packaging/distribution/verify.sh <version> [channel]`
 4. Sync `dist/published/` to artifact hosting (object storage/CDN).
+
+Note:
+
+- deprecated Pi appliance image files are removed from normal publish output.
 
 ## Signing Behavior
 
@@ -62,7 +62,6 @@ Recommended stable URL patterns:
 
 - static artifacts: `https://downloads.loramapr.com/receiver/<channel>/<version>/<artifact-file>`
 - apt repo root: `https://downloads.loramapr.com/apt/<channel>/`
-- Pi image (if published): `https://downloads.loramapr.com/receiver/<channel>/<version>/loramapr-receiver_<version>_pi_arm64.img.xz`
 
 ## Install and APT Docs
 

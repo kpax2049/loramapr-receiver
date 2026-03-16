@@ -5,7 +5,6 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 VERSION="${1:-${VERSION:-}}"
 CHANNEL="${2:-${CHANNEL:-stable}}"
 ENABLE_DEB="${ENABLE_DEB:-1}"
-ENABLE_PI_IMAGE="${ENABLE_PI_IMAGE:-0}"
 GO_BIN="${GO_BIN:-$(command -v go || true)}"
 GIT_COMMIT="$(git -C "${ROOT_DIR}" rev-parse --short HEAD 2>/dev/null || true)"
 BUILD_DATE="${BUILD_DATE:-}"
@@ -27,10 +26,6 @@ fi
 
 if [[ "${ENABLE_DEB}" != "0" ]] && ! command -v dpkg-deb >/dev/null 2>&1; then
   echo "dpkg-deb is required for release builds (set ENABLE_DEB=0 to skip .deb outputs in non-Linux dev environments)." >&2
-  exit 1
-fi
-if [[ "${ENABLE_PI_IMAGE}" != "0" ]] && [[ -z "${PI_GEN_DIR:-}" ]]; then
-  echo "PI_GEN_DIR is required when ENABLE_PI_IMAGE=1." >&2
   exit 1
 fi
 
@@ -149,18 +144,6 @@ for target in "${targets[@]}"; do
   fi
 done
 
-if [[ "${ENABLE_PI_IMAGE}" != "0" ]]; then
-  PI_IMAGE_OUTPUT_DIR="${ARTIFACTS_DIR}" \
-  "${ROOT_DIR}/packaging/pi/image/build-image.sh" "${VERSION}" "${CHANNEL}"
-
-  # Legacy alias kept for cloud catalog compatibility.
-  CANONICAL_PI_IMAGE="${ARTIFACTS_DIR}/loramapr-receiver_${VERSION}_pi_arm64.img.xz"
-  LEGACY_PI_IMAGE="${ARTIFACTS_DIR}/loramapr-receiver-pi-appliance-${VERSION}.img.xz"
-  if [[ -f "${CANONICAL_PI_IMAGE}" ]]; then
-    cp -f "${CANONICAL_PI_IMAGE}" "${LEGACY_PI_IMAGE}"
-  fi
-fi
-
 required_linux=(
   "loramapr-receiver_${VERSION}_linux_amd64.tar.gz"
   "loramapr-receiver_${VERSION}_linux_arm64.tar.gz"
@@ -175,11 +158,6 @@ if [[ "${ENABLE_DEB}" != "0" ]]; then
     "loramapr-receiver_${VERSION}_linux_amd64.deb"
     "loramapr-receiver_${VERSION}_linux_arm64.deb"
     "loramapr-receiver_${VERSION}_linux_armv7.deb"
-  )
-fi
-if [[ "${ENABLE_PI_IMAGE}" != "0" ]]; then
-  required_linux+=(
-    "loramapr-receiver_${VERSION}_pi_arm64.img.xz"
   )
 fi
 

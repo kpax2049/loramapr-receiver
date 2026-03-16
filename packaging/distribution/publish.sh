@@ -40,8 +40,14 @@ mkdir -p "${DEST_DIR}" "${CHANNEL_DIR}"
 
 cp -f "${ARTIFACTS_DIR}"/* "${DEST_DIR}/"
 
-PI_IMAGE_PATH="${DEST_DIR}/loramapr-receiver_${VERSION}_pi_arm64.img.xz"
-PI_IMAGE_METADATA_PATH="${DEST_DIR}/loramapr-receiver_${VERSION}_pi_arm64.image-metadata.json"
+# Pi appliance image publication is deprecated in active public flows.
+rm -f \
+  "${DEST_DIR}/loramapr-receiver_${VERSION}_pi_arm64.img.xz" \
+  "${DEST_DIR}/loramapr-receiver_${VERSION}_pi_arm64.image-metadata.json" \
+  "${DEST_DIR}/loramapr-receiver-pi-appliance-${VERSION}.img.xz" \
+  "${DEST_DIR}/loramapr-receiver_${VERSION}_pi_arm64.img.xz.asc" \
+  "${DEST_DIR}/loramapr-receiver_${VERSION}_pi_arm64.image-metadata.json.asc" \
+  "${DEST_DIR}/loramapr-receiver-pi-appliance-${VERSION}.img.xz.asc"
 
 INDEX_PATH="${CHANNEL_DIR}/channel-index.json"
 cat > "${INDEX_PATH}" <<JSON
@@ -82,12 +88,6 @@ if [[ "${SIGNING_MODE}" != "none" ]]; then
     sign_file "${DEST_DIR}/cloud-manifest.fragment.json"
     sign_file "${DEST_DIR}/release-metadata.json"
     sign_file "${INDEX_PATH}"
-    if [[ -f "${PI_IMAGE_PATH}" ]]; then
-      sign_file "${PI_IMAGE_PATH}"
-    fi
-    if [[ -f "${PI_IMAGE_METADATA_PATH}" ]]; then
-      sign_file "${PI_IMAGE_METADATA_PATH}"
-    fi
   fi
 fi
 
@@ -111,15 +111,6 @@ JSON
 )
 fi
 
-pi_summary_block=""
-if [[ -f "${PI_IMAGE_PATH}" ]]; then
-  pi_summary_block=$(cat <<JSON
-  ,
-  "piImageUrl": "${BASE_URL}/receiver/${CHANNEL}/${VERSION}/$(basename "${PI_IMAGE_PATH}")"
-JSON
-)
-fi
-
 SUMMARY_PATH="${DEST_DIR}/publish-summary.json"
 cat > "${SUMMARY_PATH}" <<JSON
 {
@@ -128,7 +119,7 @@ cat > "${SUMMARY_PATH}" <<JSON
   "baseUrl": "${BASE_URL}",
   "manifestUrl": "${BASE_URL}/receiver/${CHANNEL}/${VERSION}/cloud-manifest.fragment.json",
   "checksumsUrl": "${BASE_URL}/receiver/${CHANNEL}/${VERSION}/SHA256SUMS",
-  "channelIndexUrl": "${BASE_URL}/receiver/${CHANNEL}/channel-index.json"${apt_summary_block}${pi_summary_block}
+  "channelIndexUrl": "${BASE_URL}/receiver/${CHANNEL}/channel-index.json"${apt_summary_block}
 }
 JSON
 

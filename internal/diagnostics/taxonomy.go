@@ -222,7 +222,7 @@ func Evaluate(input Input) Finding {
 		return Finding{
 			Code:    FailureReceiverUnsupported,
 			Summary: "Installed receiver version is no longer supported",
-			Hint:    "Upgrade receiver using the supported package or appliance release path.",
+			Hint:    "Upgrade receiver using the supported package release path.",
 		}
 	case "outdated":
 		return Finding{

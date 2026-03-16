@@ -25,6 +25,17 @@ jobs:
       - name: Build Artifacts
         run: packaging/release/build-artifacts.sh v0.0.0-ci stable
 
+      - name: Assert Pi Appliance Image Is Not Produced
+        run: |
+          if compgen -G "dist/v0.0.0-ci/artifacts/*pi*img.xz" >/dev/null; then
+            echo "unexpected Pi appliance image artifact found in active release flow" >&2
+            ls -1 dist/v0.0.0-ci/artifacts/*pi*img.xz >&2
+            exit 1
+          fi
+
+      - name: Validate Pi OS Lite Bootstrap Script
+        run: bash -n packaging/linux/scripts/bootstrap-apt.sh
+
       - name: Validate .deb Artifacts
         run: |
           packaging/debian/validate-deb.sh dist/v0.0.0-ci/artifacts/loramapr-receiver_v0.0.0-ci_linux_amd64.deb

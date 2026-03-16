@@ -7,17 +7,16 @@ cloud onboarding should reference them.
 
 For end users:
 
-1. Raspberry Pi appliance user:
-   - download `loramapr-receiver_<version>_pi_arm64.img.xz`
-   - flash image and boot
-2. Existing Debian/Ubuntu/Raspberry Pi OS user:
+1. Raspberry Pi OS Lite / Debian / Ubuntu existing host:
    - use APT repository install (`loramapr-receiver` package)
    - or manual `.deb` fallback for your architecture
 
-For install guides:
+For install guide:
 
-- [Raspberry Pi Appliance Path](./raspberry-pi-appliance.md)
 - [Linux/Pi Existing-OS Install Path](./linux-pi-distribution.md)
+
+Receiver appliance image path is currently deprecated/paused and is not part of
+active release outputs.
 
 ## Artifact Generation
 
@@ -25,13 +24,6 @@ Build release artifacts:
 
 ```bash
 packaging/release/build-artifacts.sh <version> [channel]
-```
-
-Enable Pi image output:
-
-```bash
-PI_GEN_DIR=/path/to/pi-gen PI_FIRST_USER_PASS='change-me-now' ENABLE_PI_IMAGE=1 \
-  packaging/release/build-artifacts.sh <version> [channel]
 ```
 
 Upload artifacts to GitHub release assets:
@@ -58,12 +50,6 @@ Linux package outputs:
 Linux advanced fallback archives:
 
 - `loramapr-receiver_<version>_linux_<arch>_systemd.tar.gz`
-
-Pi appliance image outputs:
-
-- `loramapr-receiver_<version>_pi_arm64.img.xz`
-- `loramapr-receiver_<version>_pi_arm64.image-metadata.json`
-- `loramapr-receiver-pi-appliance-<version>.img.xz` (legacy URL alias)
 
 Manifest/metadata outputs:
 
@@ -92,7 +78,6 @@ Cloud onboarding maps each artifact using:
 
 Typical kinds:
 
-- `appliance_image`
 - `deb_package`
 - `systemd_layout`
 - `binary`
@@ -109,7 +94,6 @@ This keeps version/channel explicit and aligns with generated manifest
 ## Validation Helpers (Maintainers)
 
 - `packaging/debian/validate-deb.sh <deb-file>`
-- `packaging/pi/image/validate-image.sh <image-artifact>`
 - `packaging/distribution/verify.sh <version> <channel>`
 
 For signed publication and APT repository details:

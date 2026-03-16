@@ -114,9 +114,6 @@ func BuildManifest(opts BuildOptions) (Manifest, error) {
 		if goos == "linux" && kind == "deb_package" {
 			artifact.Recommended = true
 		}
-		if platform == "raspberry_pi" && kind == "appliance_image" && arch == "arm64" {
-			artifact.Recommended = true
-		}
 		if goos == "linux" && arch == "arm64" && kind == "systemd_layout" {
 			artifact.Recommended = true
 		}

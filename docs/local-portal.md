@@ -7,9 +7,9 @@ For most users, this portal is the only interface needed after install.
 
 ## Open the Portal
 
-Portal address depends on install path:
+Portal address depends on network context:
 
-- Pi appliance: `http://loramapr-receiver.local:8080` (preferred)
+- Linux/Pi OS host on LAN: `http://loramapr-receiver.local:8080` (preferred)
 - fallback: `http://<device-lan-ip>:8080`
 - local desktop/dev install: `http://127.0.0.1:8080`
 

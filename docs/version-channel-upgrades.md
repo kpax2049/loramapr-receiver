@@ -54,7 +54,7 @@ Reported core fields:
 - build date (if present)
 - build id (if present)
 - platform/arch
-- install type (`manual`, `linux-package`, `pi-appliance`, `windows-user`)
+- install type (`manual`, `linux-package`, `pi-appliance` [deprecated], `windows-user`)
 
 ## Update-Status Reasoning (No Auto-Update)
 

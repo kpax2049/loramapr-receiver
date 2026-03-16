@@ -1,31 +1,29 @@
-# Raspberry Pi Packaging Scaffolding
+# Raspberry Pi Image Scaffolding (Deprecated)
 
-This directory contains Raspberry Pi appliance/image packaging scaffolding for
-LoRaMapr Receiver.
+This directory contains historical Raspberry Pi appliance/image packaging
+scaffolding for LoRaMapr Receiver.
 
-## Purpose
+## Status
 
-Make Raspberry Pi the novice-friendly recommended Meshtastic host path while
-reusing the same `loramapr-receiverd` runtime and local setup portal.
+Receiver image path is currently deprecated/paused:
 
-## Contents
+- not part of active public build/release/publish/test flow
+- not recommended in product-facing install docs
+
+Current supported Raspberry Pi strategy is:
+
+- official Raspberry Pi OS Lite
+- install `loramapr-receiver` package on existing OS
+
+Guide:
+
+- `docs/linux-pi-distribution.md`
+
+## Contents (Internal Reference)
 
 - `receiver.appliance.json`: appliance-tuned runtime config
-- `image/`: image-build helper and `pi-gen` stage scaffolding
+- `image/`: `pi-gen` stage and image-build helpers
 
-## Inputs
-
-Expected release artifact input for image build:
-
-- `loramapr-receiver_<version>_linux_arm64_systemd.tar.gz`
-
-This artifact is produced by the release pipeline and used to construct the Pi
-appliance image.
-
-Release image output:
-
-- `loramapr-receiver_<version>_pi_arm64.img.xz`
-
-GA planning reference:
+GA planning history:
 
 - `docs/ga-v2.2.0-raspberry-pi-appliance.md`

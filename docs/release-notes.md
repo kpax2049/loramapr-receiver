@@ -1,5 +1,8 @@
 # LoRaMapr Receiver Release Notes
 
+For Raspberry Pi OS Lite strategy shift notes targeting `v2.14.0`, see
+`docs/release-notes-v2.14.0.md`.
+
 For Meshtastic field-node pairing data exposure notes targeting `v2.13.0`, see
 `docs/release-notes-v2.13.0.md`.
 

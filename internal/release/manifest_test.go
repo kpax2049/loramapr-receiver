@@ -68,8 +68,8 @@ func TestBuildManifestIncludesLinuxAndPiEntries(t *testing.T) {
 		}
 		if artifact.Platform == "raspberry_pi" && artifact.Arch == "arm64" && artifact.Kind == "appliance_image" {
 			hasPiImage = true
-			if !artifact.Recommended {
-				t.Fatal("expected raspberry_pi appliance image artifact to be recommended")
+			if artifact.Recommended {
+				t.Fatal("did not expect raspberry_pi appliance image artifact to be recommended")
 			}
 		}
 	}

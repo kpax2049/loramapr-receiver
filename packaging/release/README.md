@@ -34,18 +34,16 @@ environments:
 ENABLE_DEB=0 packaging/release/build-artifacts.sh v1.0.0 beta
 ```
 
-Enable Raspberry Pi appliance image output (requires `PI_GEN_DIR`):
-
-```bash
-PI_GEN_DIR=/path/to/pi-gen PI_FIRST_USER_PASS='change-me-now' ENABLE_PI_IMAGE=1 \
-  packaging/release/build-artifacts.sh v1.0.0 stable
-```
-
 Publish built artifacts to GitHub release assets:
 
 ```bash
 packaging/release/publish-github-release-assets.sh v1.0.0
 ```
+
+Note:
+
+- deprecated Pi image artifacts are excluded from normal release uploads
+- internal override: `INCLUDE_DEPRECATED_PI_IMAGE=1`
 
 Outputs are written to:
 
@@ -76,12 +74,6 @@ Linux Debian packages:
 - `loramapr-receiver_<version>_linux_amd64.deb`
 - `loramapr-receiver_<version>_linux_arm64.deb`
 - `loramapr-receiver_<version>_linux_armv7.deb`
-
-Raspberry Pi appliance image (when `ENABLE_PI_IMAGE=1`):
-
-- `loramapr-receiver_<version>_pi_arm64.img.xz`
-- `loramapr-receiver_<version>_pi_arm64.image-metadata.json`
-- `loramapr-receiver-pi-appliance-<version>.img.xz` (legacy cloud URL alias)
 
 Checksum file:
 
@@ -121,7 +113,7 @@ This aligns with the Linux-first service/install model.
 - `channel`
 - artifact entries with:
   - `platform`, `arch`
-  - `kind` (`binary`, `systemd_layout`, `deb_package`, `appliance_image`)
+  - `kind` (`binary`, `systemd_layout`, `deb_package`)
   - `filename`
   - `checksumSha256`
   - `sizeBytes`
@@ -129,3 +121,8 @@ This aligns with the Linux-first service/install model.
 
 Raspberry Pi aliases are emitted for Linux arm64/armv7 systemd layout archives
 using `platform = raspberry_pi`.
+
+## Pi Image Scaffolding Status
+
+Pi appliance image scaffolding under `packaging/pi/` is currently deprecated
+for active release flows and is not emitted by the standard artifact pipeline.

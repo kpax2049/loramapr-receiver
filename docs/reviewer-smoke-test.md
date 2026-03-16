@@ -1,6 +1,6 @@
-# Reviewer Smoke Test Guide (v2.12.0 Home Auto Session M4)
+# Reviewer Smoke Test Guide (v2.14.0 Pi OS Lite Strategy)
 
-This guide verifies both supported install paths, portal/diagnostics behavior,
+This guide verifies the supported install path, portal/diagnostics behavior,
 multi-receiver identity/coexistence guidance, and Home Auto Session Milestone 4
 cloud-managed config behavior.
 
@@ -18,27 +18,18 @@ GOCACHE=/tmp/go-build-cache GOTMPDIR=/tmp go test ./internal/webportal -run Test
 GOCACHE=/tmp/go-build-cache GOTMPDIR=/tmp go test ./internal/diagnostics -run Test
 ```
 
-## 2. Path A: Raspberry Pi Appliance (Public Recommended Path)
-
-Validate docs flow using [Raspberry Pi Appliance Path](./raspberry-pi-appliance.md):
-
-1. Flash published Pi image.
-2. Boot Pi on LAN and connect Meshtastic device.
-3. Open local portal via `.local` or LAN IP.
-4. Confirm pairing page is reachable and pairing-ready state is clear.
-5. Confirm Troubleshooting page offers actionable guidance without SSH-first assumptions.
-
-## 3. Path B: Existing Linux/Pi OS Package Install
+## 2. Path A: Existing Linux/Pi OS Package Install (Supported Path)
 
 Validate docs flow using [Linux/Pi Existing-OS Install Path](./linux-pi-distribution.md):
 
-1. Configure signed APT repo.
-2. Install `loramapr-receiver` package.
-3. Confirm `loramapr-receiverd` service starts.
-4. Open local portal and confirm pairing-ready flow.
-5. Confirm remove/purge behavior in docs is coherent with package lifecycle policy.
+1. Run canonical bootstrap install command from docs.
+2. Confirm `loramapr-receiverd` service starts.
+3. Open local portal and confirm pairing-ready flow.
+4. Confirm remove/purge behavior in docs is coherent with package lifecycle policy.
 
-## 4. Local Portal and Attention Guidance
+Receiver appliance image path should appear only as deprecated/legacy in docs.
+
+## 3. Local Portal and Attention Guidance
 
 Validate portal copy on:
 
@@ -53,7 +44,7 @@ Check:
 - attention states are understandable (`none/info/action_required/urgent`)
 - raw codes are present but secondary to actionable guidance
 
-## 5. Diagnostics and Support Export
+## 4. Diagnostics and Support Export
 
 Run:
 
@@ -68,7 +59,7 @@ Verify:
 - failure + attention + operational fields are present
 - support snapshot is useful and redacted (no secrets)
 
-## 6. Troubleshooting and Recovery Flows
+## 5. Troubleshooting and Recovery Flows
 
 Cross-check [Support and Troubleshooting Workflow](./support-operations-workflow.md)
 for representative cases:
@@ -79,11 +70,11 @@ for representative cases:
 - revoked/replaced/disabled lifecycle state
 - outdated/unsupported receiver state
 
-## 7. Release Surface and Artifact Clarity
+## 6. Release Surface and Artifact Clarity
 
 Validate docs explain user download choice clearly:
 
-- Pi appliance image vs Linux package path
+- Linux package path vs manual `.deb` fallback
 - artifact naming and checksum verification
 
 References:
@@ -91,7 +82,7 @@ References:
 - [Release Artifact Mapping](./release-artifacts.md)
 - [Release Notes Index](./release-notes.md)
 
-## 8. Multi-Receiver Identity and Coexistence
+## 7. Multi-Receiver Identity and Coexistence
 
 Use [Multi-Receiver Identity and Guidance](./multi-receiver-identity.md) and
 validate on at least one paired receiver:
@@ -110,7 +101,7 @@ validate on at least one paired receiver:
 4. Verify paired-but-node-missing guidance includes multi-receiver attachment
    checks (node may be attached to another receiver).
 
-## 9. Home Auto Session Milestone 4
+## 8. Home Auto Session Milestone 4
 
 Use [Embedded Home Auto Session](./home-auto-session.md) and validate:
 
@@ -159,7 +150,7 @@ Use [Embedded Home Auto Session](./home-auto-session.md) and validate:
     - temporary cloud outage -> last effective config remains active with
       `cloud_config_fetch_failed_using_last_effective`
 
-## 10. Simplified Onboarding Wording
+## 9. Simplified Onboarding Wording
 
 Verify receiver setup does not require owner/workspace/site/group concepts:
 
@@ -174,7 +165,7 @@ Verify receiver setup does not require owner/workspace/site/group concepts:
 4. Confirm optional cloud labels, when present, are displayed as optional
    metadata only.
 
-## 11. Meshtastic Field-Node Pairing Data (v2.13.0)
+## 10. Meshtastic Field-Node Pairing Data (v2.13.0)
 
 Use [Reviewer Smoke Test (v2.13.0 Meshtastic Share)](./reviewer-smoke-test-v2.13.0-meshtastic-share.md)
 and validate:
