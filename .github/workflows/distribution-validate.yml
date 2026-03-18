@@ -47,7 +47,10 @@ jobs:
           packaging/debian/validate-lifecycle.sh dist/v0.0.0-ci/artifacts/loramapr-receiver_v0.0.0-ci_linux_amd64.deb
 
       - name: Publish Skeleton (Unsigned)
-        run: SIGNING_MODE=none packaging/distribution/publish.sh v0.0.0-ci stable
+        run: SIGNING_MODE=none ENABLE_PAGES_LAYOUT=1 packaging/distribution/publish.sh v0.0.0-ci stable
 
       - name: Verify Published Skeleton
         run: packaging/distribution/verify.sh v0.0.0-ci stable
+
+      - name: Verify Pages-Ready Skeleton
+        run: packaging/distribution/pages/verify-pages-tree.sh v0.0.0-ci stable

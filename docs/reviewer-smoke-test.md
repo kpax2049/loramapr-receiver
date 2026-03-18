@@ -29,6 +29,17 @@ Validate docs flow using [Linux/Pi Existing-OS Install Path](./linux-pi-distribu
 
 Receiver appliance image path should appear only as deprecated/legacy in docs.
 
+## 2.1 APT Host Availability (downloads.loramapr.com)
+
+Verify expected APT host endpoints before bootstrap:
+
+```bash
+curl -fsSL https://downloads.loramapr.com/apt/stable/loramapr-archive-keyring.asc | head
+curl -fsSL https://downloads.loramapr.com/apt/stable/dists/stable/InRelease | head
+```
+
+Then validate canonical bootstrap still succeeds on clean Pi OS Lite.
+
 ## 3. Local Portal and Attention Guidance
 
 Validate portal copy on:

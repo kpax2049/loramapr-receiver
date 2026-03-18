@@ -1,0 +1,143 @@
+name: APT Pages Deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Release version tag (for example v2.15.0)
+        required: true
+      channel:
+        description: Distribution channel (stable or beta)
+        required: true
+        default: stable
+      apt_suite:
+        description: APT suite/codename (defaults to channel)
+        required: false
+      custom_domain:
+        description: Pages custom domain for public downloads
+        required: true
+        default: downloads.loramapr.com
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+jobs:
+  publish-pages:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Install Packaging Tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y dpkg-dev gnupg
+
+      - name: Resolve Inputs
+        id: release
+        run: |
+          VERSION="${{ github.event.inputs.version }}"
+          CHANNEL="${{ github.event.inputs.channel }}"
+          APT_SUITE="${{ github.event.inputs.apt_suite }}"
+          CUSTOM_DOMAIN="${{ github.event.inputs.custom_domain }}"
+
+          if [ -z "${VERSION}" ] || [ -z "${CHANNEL}" ] || [ -z "${CUSTOM_DOMAIN}" ]; then
+            echo "version, channel, and custom_domain are required." >&2
+            exit 1
+          fi
+          if [ -z "${APT_SUITE}" ]; then
+            APT_SUITE="${CHANNEL}"
+          fi
+
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "channel=${CHANNEL}" >> "$GITHUB_OUTPUT"
+          echo "apt_suite=${APT_SUITE}" >> "$GITHUB_OUTPUT"
+          echo "custom_domain=${CUSTOM_DOMAIN}" >> "$GITHUB_OUTPUT"
+
+      - name: Import APT Signing Key
+        id: gpg
+        env:
+          APT_GPG_PRIVATE_KEY: ${{ secrets.APT_GPG_PRIVATE_KEY }}
+          APT_GPG_KEY_ID: ${{ secrets.APT_GPG_KEY_ID }}
+        run: |
+          if [ -z "${APT_GPG_PRIVATE_KEY}" ]; then
+            echo "Missing required secret: APT_GPG_PRIVATE_KEY" >&2
+            exit 1
+          fi
+
+          printf '%s' "${APT_GPG_PRIVATE_KEY}" | gpg --batch --import
+
+          KEY_ID="${APT_GPG_KEY_ID}"
+          if [ -z "${KEY_ID}" ]; then
+            KEY_ID="$(gpg --list-secret-keys --with-colons | awk -F: '/^sec:/{print $5; exit}')"
+          fi
+          if [ -z "${KEY_ID}" ]; then
+            echo "Unable to resolve imported GPG key id." >&2
+            exit 1
+          fi
+
+          echo "key_id=${KEY_ID}" >> "$GITHUB_OUTPUT"
+
+      - name: Build Release Artifacts
+        run: packaging/release/build-artifacts.sh "${{ steps.release.outputs.version }}" "${{ steps.release.outputs.channel }}"
+
+      - name: Publish Signed Distribution + Pages Tree
+        env:
+          GPG_KEY_ID: ${{ steps.gpg.outputs.key_id }}
+        run: |
+          SIGNING_MODE=required \
+          GPG_KEY_ID="${GPG_KEY_ID}" \
+          BASE_URL="https://${{ steps.release.outputs.custom_domain }}" \
+          APT_SUITE="${{ steps.release.outputs.apt_suite }}" \
+          ENABLE_PAGES_LAYOUT=1 \
+          PAGES_CNAME="${{ steps.release.outputs.custom_domain }}" \
+          PAGES_OUTPUT_ROOT="${PWD}/dist/published-pages" \
+          packaging/distribution/publish.sh \
+            "${{ steps.release.outputs.version }}" \
+            "${{ steps.release.outputs.channel }}"
+
+      - name: Verify Signed Distribution
+        run: |
+          APT_SUITE="${{ steps.release.outputs.apt_suite }}" \
+          SIGNING_REQUIRED=1 \
+          packaging/distribution/verify.sh \
+            "${{ steps.release.outputs.version }}" \
+            "${{ steps.release.outputs.channel }}"
+
+      - name: Verify Pages Tree
+        run: |
+          APT_SUITE="${{ steps.release.outputs.apt_suite }}" \
+          SIGNING_REQUIRED=1 \
+          packaging/distribution/pages/verify-pages-tree.sh \
+            "${{ steps.release.outputs.version }}" \
+            "${{ steps.release.outputs.channel }}" \
+            dist/published-pages \
+            "${{ steps.release.outputs.custom_domain }}"
+
+      - name: Upload Staged Pages Tree
+        uses: actions/upload-artifact@v4
+        with:
+          name: apt-pages-tree-${{ steps.release.outputs.version }}-${{ steps.release.outputs.channel }}
+          path: dist/published-pages/
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload Pages Artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist/published-pages
+
+      - name: Deploy to GitHub Pages
+        id: deploy
+        uses: actions/deploy-pages@v4

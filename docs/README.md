@@ -7,6 +7,7 @@
 - [Embedded Local Setup Portal](./local-portal.md)
 - [Support and Operations Workflow](./support-operations-workflow.md)
 - [Reviewer Smoke Test Guide](./reviewer-smoke-test.md)
+- [Reviewer Smoke Test (v2.15.0 APT Pages Host)](./reviewer-smoke-test-v2.15.0-apt-pages.md)
 - [Reviewer Smoke Test (v2.14.0 Pi OS Lite)](./reviewer-smoke-test-v2.14.0-pi-os-lite.md)
 - [Reviewer Smoke Test (Simplified Pairing)](./reviewer-smoke-test-simplified-pairing.md)
 - [Reviewer Smoke Test (v2.13.0 Meshtastic Share)](./reviewer-smoke-test-v2.13.0-meshtastic-share.md)
@@ -15,6 +16,7 @@
 
 - [Service and Install Model](./service-install.md)
 - [Debian Package Lifecycle Behavior](./linux-package-lifecycle.md)
+- [APT Hosting via GitHub Pages (Temporary)](./apt-pages-hosting.md)
 - [Pairing and Bootstrap Lifecycle](./pairing-lifecycle.md)
 - [Embedded Home Auto Session (Milestone 4)](./home-auto-session.md)
 - [Multi-Receiver Identity and Guidance](./multi-receiver-identity.md)
@@ -28,6 +30,7 @@
 - [Release Artifact Mapping](./release-artifacts.md)
 - [Publish Guide](./publish-guide.md)
 - [Release Notes Index](./release-notes.md)
+- [Release Notes v2.15.0](./release-notes-v2.15.0.md)
 - [Release Notes v2.14.0](./release-notes-v2.14.0.md)
 - [Release Notes v2.13.0](./release-notes-v2.13.0.md)
 - [Simplification Cleanup Notes](./release-notes-simplification.md)
@@ -48,6 +51,7 @@
 ## Architecture and Milestone Specs
 
 - [ADR 0001: Standalone Runtime](./adr/0001-standalone-receiver-runtime.md)
+- [v2.15.0 Plan: Pages-Backed APT Hosting](./ga-v2.15.0-apt-pages-hosting.md)
 - [v2.14.0 Plan: Pi OS Lite Strategy and Image Deprecation](./ga-v2.14.0-pi-os-lite-strategy.md)
 - [v2.12.0 Plan: Embedded Home Auto Session (Milestone 4)](./ga-v2.12.0-home-auto-session-m4-cloud-managed-config.md)
 - [v2.13.0 Plan: Meshtastic Channel/Share Data Exposure](./ga-v2.13.0-meshtastic-share-data.md)

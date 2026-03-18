@@ -11,6 +11,11 @@ Recommended Raspberry Pi host path:
 
 Receiver appliance image flow is currently deprecated/paused.
 
+APT host note:
+
+- `downloads.loramapr.com` is currently served via GitHub Pages static hosting.
+- Public APT URL remains stable and should not change for clients.
+
 ## Supported Systems
 
 - Debian-family OS:
@@ -42,6 +47,13 @@ The bootstrap script:
 - installs LoRaMapr APT keyring and source
 - installs `loramapr-receiver`
 - enables/starts `loramapr-receiverd`
+
+If bootstrap fails early, verify host reachability:
+
+```bash
+curl -fsSL https://downloads.loramapr.com/apt/stable/loramapr-archive-keyring.asc | head
+curl -fsSL https://downloads.loramapr.com/apt/stable/dists/stable/InRelease | head
+```
 
 ## After Install
 
@@ -81,7 +93,7 @@ Use this only when APT repository access is not possible.
 `amd64` example:
 
 ```bash
-VERSION=v2.14.0
+VERSION=v2.15.0
 CHANNEL=stable
 BASE=https://downloads.loramapr.com/receiver/${CHANNEL}/${VERSION}
 
@@ -96,7 +108,7 @@ sudo apt-get install -y ./loramapr-receiver_${VERSION}_linux_amd64.deb
 `arm64` example (Raspberry Pi OS 64-bit):
 
 ```bash
-VERSION=v2.14.0
+VERSION=v2.15.0
 CHANNEL=stable
 BASE=https://downloads.loramapr.com/receiver/${CHANNEL}/${VERSION}
 
@@ -151,8 +163,10 @@ Maintainer publish/verify flow:
 - `packaging/release/build-artifacts.sh <version> <channel>`
 - `packaging/distribution/publish.sh <version> <channel>`
 - `packaging/distribution/verify.sh <version> <channel>`
+- `packaging/distribution/pages/verify-pages-tree.sh <version> <channel>`
 - `packaging/distribution/apt/README.md`
 
 Cloud artifact mapping:
 
 - [Release Artifact Mapping](./release-artifacts.md)
+- [APT Pages Hosting (Temporary)](./apt-pages-hosting.md)

@@ -1,5 +1,8 @@
 # LoRaMapr Receiver Release Notes
 
+For Pages-backed APT hosting notes targeting `v2.15.0`, see
+`docs/release-notes-v2.15.0.md`.
+
 For Raspberry Pi OS Lite strategy shift notes targeting `v2.14.0`, see
 `docs/release-notes-v2.14.0.md`.
 

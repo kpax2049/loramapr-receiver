@@ -10,7 +10,7 @@ with Linux/systemd as the first-class path.
 - `debian/`: native `.deb` package build and validation scripts
 - `docker/`: container build scaffolding
 - `release/`: multi-platform artifact generation and checksums
-- `distribution/`: signed Linux/Pi publication scaffolding
+- `distribution/`: signed Linux/Pi publication scaffolding + Pages-backed APT host output
 - `pi/`: deprecated Raspberry Pi appliance image scaffolding (internal/paused)
 - `macos/launchd/`: launchd placeholders
 - `windows/`: Windows service placeholders

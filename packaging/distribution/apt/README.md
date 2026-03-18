@@ -3,6 +3,12 @@
 This directory contains the signed APT publication path for Linux/Pi existing-OS
 installs.
 
+Current hosting strategy:
+
+- signed APT tree is published as static files
+- static files are deployed to GitHub Pages
+- public URL remains `https://downloads.loramapr.com/apt/<channel>`
+
 ## Scope
 
 - Debian-family repo layout (`pool/`, `dists/`)
@@ -30,6 +36,12 @@ Output tree:
 - `dist/published/apt/<channel>/loramapr-archive-keyring.{asc,gpg}` (when signed)
 - `dist/published/apt/<channel>/apt-summary.json`
 
+When invoked through `packaging/distribution/publish.sh` (default
+`ENABLE_PAGES_LAYOUT=1`), the published tree is also mirrored to:
+
+- `dist/published-pages/apt/<channel>/...`
+- `dist/published-pages/CNAME`
+
 ## Verify
 
 ```bash
@@ -40,6 +52,13 @@ To require signatures during verification:
 
 ```bash
 SIGNING_REQUIRED=1 packaging/distribution/apt/verify-apt.sh <channel>
+```
+
+Pages-tree verification:
+
+```bash
+SIGNING_REQUIRED=1 \
+  packaging/distribution/pages/verify-pages-tree.sh <version> <channel>
 ```
 
 ## End-user install (expected)

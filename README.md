@@ -12,6 +12,7 @@ LoRaMapr Receiver uses one first-class Linux/Pi install path:
 
 1. Existing Debian-family Linux / Raspberry Pi OS Lite
    - Install `loramapr-receiver` from the signed APT repository.
+   - APT origin: `https://downloads.loramapr.com/apt/stable` (currently served via GitHub Pages).
    - Guide: [Linux/Pi Existing-OS Path](./docs/linux-pi-distribution.md)
    - Quick install:
      - `curl -fsSL https://raw.githubusercontent.com/kpax2049/loramapr-receiver/main/packaging/linux/scripts/bootstrap-apt.sh | sudo bash`
@@ -73,6 +74,7 @@ Then follow the field workflow:
 Start here:
 
 - [Docs Index](./docs/README.md)
+- [APT Hosting via GitHub Pages](./docs/apt-pages-hosting.md)
 - [Reviewer Smoke Test Guide](./docs/reviewer-smoke-test.md)
 - [Release Notes](./docs/release-notes.md)
 

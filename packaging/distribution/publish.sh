@@ -10,6 +10,9 @@ GPG_KEY_ID="${GPG_KEY_ID:-}"
 BASE_URL="${BASE_URL:-https://downloads.loramapr.com}"
 ENABLE_APT="${ENABLE_APT:-1}"
 APT_SUITE="${APT_SUITE:-${CHANNEL}}"
+ENABLE_PAGES_LAYOUT="${ENABLE_PAGES_LAYOUT:-1}"
+PAGES_OUTPUT_ROOT="${PAGES_OUTPUT_ROOT:-${ROOT_DIR}/dist/published-pages}"
+PAGES_CNAME="${PAGES_CNAME:-downloads.loramapr.com}"
 
 if [[ -z "${VERSION}" ]]; then
   echo "Usage: $0 <version> [channel] [output-root]" >&2
@@ -68,6 +71,40 @@ JSON
 sign_file() {
   local file="$1"
   gpg --batch --yes --armor --detach-sign -u "${GPG_KEY_ID}" "${file}"
+}
+
+emit_pages_layout() {
+  local source_root pages_root
+  mkdir -p "${OUTPUT_ROOT}" "${PAGES_OUTPUT_ROOT}"
+  source_root="$(cd "${OUTPUT_ROOT}" && pwd)"
+  pages_root="$(cd "${PAGES_OUTPUT_ROOT}" && pwd)"
+
+  if [[ "${source_root}" != "${pages_root}" ]]; then
+    rm -rf "${PAGES_OUTPUT_ROOT}/apt" "${PAGES_OUTPUT_ROOT}/receiver"
+    if [[ -d "${OUTPUT_ROOT}/apt" ]]; then
+      cp -R "${OUTPUT_ROOT}/apt" "${PAGES_OUTPUT_ROOT}/apt"
+    fi
+    if [[ -d "${OUTPUT_ROOT}/receiver" ]]; then
+      cp -R "${OUTPUT_ROOT}/receiver" "${PAGES_OUTPUT_ROOT}/receiver"
+    fi
+  fi
+
+  : > "${PAGES_OUTPUT_ROOT}/.nojekyll"
+  if [[ -n "${PAGES_CNAME}" ]]; then
+    printf '%s\n' "${PAGES_CNAME}" > "${PAGES_OUTPUT_ROOT}/CNAME"
+  fi
+
+  cat > "${PAGES_OUTPUT_ROOT}/pages-deploy-summary.json" <<JSON
+{
+  "schemaVersion": "receiver-pages-layout/v1",
+  "receiverVersion": "${VERSION}",
+  "channel": "${CHANNEL}",
+  "publicBaseUrl": "${BASE_URL}",
+  "customDomain": "${PAGES_CNAME}",
+  "aptRootPath": "apt/${CHANNEL}",
+  "receiverRootPath": "receiver/${CHANNEL}"
+}
+JSON
 }
 
 if [[ "${SIGNING_MODE}" != "none" ]]; then
@@ -129,5 +166,12 @@ else
   (cd "${DEST_DIR}" && shasum -a 256 -c SHA256SUMS)
 fi
 
+if [[ "${ENABLE_PAGES_LAYOUT}" != "0" ]]; then
+  emit_pages_layout
+fi
+
 echo "Published receiver artifacts to ${DEST_DIR}"
 echo "Channel index: ${INDEX_PATH}"
+if [[ "${ENABLE_PAGES_LAYOUT}" != "0" ]]; then
+  echo "Pages-ready tree: ${PAGES_OUTPUT_ROOT}"
+fi

@@ -76,7 +76,11 @@ echo "  repo:    ${repo_url}"
 tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/loramapr-bootstrap-XXXXXX")"
 trap 'rm -rf "${tmp_dir}"' EXIT
 
-curl -fsSL "${key_url}" -o "${tmp_dir}/loramapr-archive-keyring.asc"
+if ! curl -fsSL "${key_url}" -o "${tmp_dir}/loramapr-archive-keyring.asc"; then
+  echo "Failed to fetch signing key: ${key_url}" >&2
+  echo "Verify DNS/HTTPS for downloads.loramapr.com and published channel path." >&2
+  exit 1
+fi
 gpg --dearmor < "${tmp_dir}/loramapr-archive-keyring.asc" > "${tmp_dir}/loramapr-archive-keyring.gpg"
 
 install -d -m 0755 "$(dirname "${KEYRING_PATH}")"
@@ -86,7 +90,11 @@ cat > "${LIST_PATH}" <<EOF
 deb [signed-by=${KEYRING_PATH}] ${repo_url} ${CHANNEL} main
 EOF
 
-apt-get update
+if ! apt-get update; then
+  echo "apt-get update failed for source: ${repo_url}" >&2
+  echo "Verify that ${repo_url} is reachable and signed metadata is published." >&2
+  exit 1
+fi
 apt-get install -y "${PACKAGE_NAME}"
 
 if command -v systemctl >/dev/null 2>&1 && [[ -d /run/systemd/system ]]; then
