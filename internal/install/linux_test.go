@@ -3,6 +3,7 @@ package install
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/loramapr/loramapr-receiver/internal/config"
@@ -54,6 +55,9 @@ func TestInstallLinuxSystemdWritesFiles(t *testing.T) {
 	}
 	if len(unitText) == 0 {
 		t.Fatal("expected non-empty unit file")
+	}
+	if !strings.Contains(string(unitText), "SupplementaryGroups=dialout") {
+		t.Fatal("expected systemd unit to include SupplementaryGroups=dialout")
 	}
 
 	cfg, err := config.Load(result.Layout.ConfigPath)

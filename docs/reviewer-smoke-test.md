@@ -24,8 +24,13 @@ Validate docs flow using [Linux/Pi Existing-OS Install Path](./linux-pi-distribu
 
 1. Run canonical bootstrap install command from docs.
 2. Confirm `loramapr-receiverd` service starts.
-3. Open local portal and confirm pairing-ready flow.
-4. Confirm remove/purge behavior in docs is coherent with package lifecycle policy.
+3. Confirm service account and serial prerequisites are auto-configured:
+   - `id loramapr` includes `dialout`
+   - `systemctl cat loramapr-receiverd` includes `SupplementaryGroups=dialout`
+4. Confirm runtime path ownership:
+   - `/var/lib/loramapr` and `/var/log/loramapr` are owned by `loramapr:loramapr`
+5. Open local portal and confirm pairing-ready flow.
+6. Confirm remove/purge behavior in docs is coherent with package lifecycle policy.
 
 Receiver appliance image path should appear only as deprecated/legacy in docs.
 

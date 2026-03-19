@@ -36,6 +36,9 @@ require_match() {
 
 require_match '^/etc/loramapr/receiver\.json$' "${CONTROL_DIR}/conffiles" "missing conffile policy for /etc/loramapr/receiver.json"
 require_match 'configure\|reconfigure' "${CONTROL_DIR}/postinst" "postinst missing configure handling"
+require_match 'ensure_serial_access' "${CONTROL_DIR}/postinst" "postinst missing serial-access hardening hook"
+require_match 'dialout' "${CONTROL_DIR}/postinst" "postinst missing dialout membership handling"
+require_match 'ensure_runtime_permissions' "${CONTROL_DIR}/postinst" "postinst missing runtime permission hardening hook"
 require_match 'normalize_legacy_systemd_unit' "${CONTROL_DIR}/postinst" "postinst missing tarball-to-package unit normalization hook"
 require_match 'remove\|deconfigure' "${CONTROL_DIR}/prerm" "prerm missing remove/deconfigure handling"
 require_match 'upgrade\|failed-upgrade' "${CONTROL_DIR}/prerm" "prerm missing upgrade handling"

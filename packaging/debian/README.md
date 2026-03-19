@@ -34,7 +34,11 @@ string.
 - `packaging/linux/receiver.linux-package.json`
 
 Maintainer scripts in `scripts/` handle service lifecycle and runtime directory
-setup for install/upgrade/remove/purge flows.
+setup for install/upgrade/remove/purge flows, including:
+
+- service account normalization (`loramapr`)
+- serial-access hardening (`dialout` membership)
+- runtime path ownership/permission normalization
 
 ## Validation
 

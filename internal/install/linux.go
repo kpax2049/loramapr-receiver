@@ -134,6 +134,7 @@ Wants=network-online.target
 Type=simple
 User=%s
 Group=%s
+SupplementaryGroups=dialout
 ExecStart=%s -config %s
 WorkingDirectory=%s
 Restart=on-failure

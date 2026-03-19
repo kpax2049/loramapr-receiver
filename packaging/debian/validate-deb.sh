@@ -52,6 +52,20 @@ for required_dir in \
   fi
 done
 
+UNIT_PATH="${ROOT_DIR}/lib/systemd/system/loramapr-receiverd.service"
+if ! grep -Fq 'User=loramapr' "${UNIT_PATH}"; then
+  echo "packaged systemd unit missing service user loramapr" >&2
+  exit 1
+fi
+if ! grep -Fq 'Group=loramapr' "${UNIT_PATH}"; then
+  echo "packaged systemd unit missing service group loramapr" >&2
+  exit 1
+fi
+if ! grep -Fq 'SupplementaryGroups=dialout' "${UNIT_PATH}"; then
+  echo "packaged systemd unit missing dialout supplementary group" >&2
+  exit 1
+fi
+
 CONFIG_PATH="${ROOT_DIR}/etc/loramapr/receiver.json"
 if ! grep -Fq '"state_file": "/var/lib/loramapr/receiver-state.json"' "${CONFIG_PATH}"; then
   echo "packaged config missing production state_file default" >&2

@@ -19,8 +19,11 @@ On `apt install loramapr-receiver`:
 
 1. Package payload installs binary + service unit + default config.
 2. `postinst` ensures service user/group `loramapr` exists.
-3. Runtime directories are created/chowned.
-4. Service is enabled and started.
+3. `postinst` ensures serial access for the service user (`dialout` membership).
+4. Runtime directories are created with service ownership/permissions:
+   - `/var/lib/loramapr` and `/var/log/loramapr` owned by `loramapr:loramapr`
+   - state file ownership/permissions normalized when present
+5. Service is enabled and started.
 
 Expected result: receiver reaches pairing-ready service state.
 

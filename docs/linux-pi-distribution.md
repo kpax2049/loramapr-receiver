@@ -47,6 +47,10 @@ The bootstrap script:
 - installs LoRaMapr APT keyring and source
 - installs `loramapr-receiver`
 - enables/starts `loramapr-receiverd`
+- configures package runtime prerequisites in postinst:
+  - creates/normalizes `loramapr` service account
+  - ensures `dialout` membership for serial-device access
+  - normalizes ownership/permissions for `/var/lib/loramapr` and `/var/log/loramapr`
 
 Installed package config uses production Linux defaults:
 
