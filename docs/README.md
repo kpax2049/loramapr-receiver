@@ -51,6 +51,7 @@
 ## Architecture and Milestone Specs
 
 - [ADR 0001: Standalone Runtime](./adr/0001-standalone-receiver-runtime.md)
+- [v2.16.0 Plan: Linux/Pi One-Click Install Hardening](./ga-v2.16.0-one-click-linux-pi-hardening.md)
 - [v2.15.0 Plan: Pages-Backed APT Hosting](./ga-v2.15.0-apt-pages-hosting.md)
 - [v2.14.0 Plan: Pi OS Lite Strategy and Image Deprecation](./ga-v2.14.0-pi-os-lite-strategy.md)
 - [v2.12.0 Plan: Embedded Home Auto Session (Milestone 4)](./ga-v2.12.0-home-auto-session-m4-cloud-managed-config.md)
