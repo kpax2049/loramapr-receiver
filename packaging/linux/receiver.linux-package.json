@@ -15,7 +15,7 @@
     "bind_address": "0.0.0.0:8080"
   },
   "cloud": {
-    "base_url": "https://api.loramapr.example"
+    "base_url": "https://loramapr.com"
   },
   "update": {
     "enabled": false,

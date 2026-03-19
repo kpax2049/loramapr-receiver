@@ -73,6 +73,9 @@ func TestInstallLinuxSystemdWritesFiles(t *testing.T) {
 	if cfg.Runtime.Profile != "linux-service" {
 		t.Fatalf("expected packaged runtime profile linux-service, got %q", cfg.Runtime.Profile)
 	}
+	if cfg.Cloud.BaseURL != "https://loramapr.com" {
+		t.Fatalf("expected packaged cloud base URL https://loramapr.com, got %q", cfg.Cloud.BaseURL)
+	}
 }
 
 func TestUninstallLinuxSystemd(t *testing.T) {

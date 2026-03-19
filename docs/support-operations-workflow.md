@@ -57,6 +57,9 @@ Actions:
 
 1. Verify local internet/DNS/firewall.
 2. Verify `cloud.base_url`.
+   - update without manual file editing:
+     - `sudo /usr/bin/loramapr-receiverd configure-cloud -config /etc/loramapr/receiver.json -base-url http://<cloud-host-or-ip>:3001`
+     - `sudo systemctl restart loramapr-receiverd`
 3. Confirm system clock is correct.
 4. Recheck portal and `doctor` output.
 

@@ -49,6 +49,8 @@ func main() {
 		supportSnapshotCommand(args[1:])
 	case "reset-pairing":
 		resetPairingCommand(args[1:])
+	case "configure-cloud":
+		configureCloudCommand(args[1:])
 	default:
 		if strings.HasPrefix(cmd, "-") {
 			runCommand(args)
@@ -725,6 +727,33 @@ func resetPairingCommand(args []string) {
 	fmt.Println("Next step: open local portal and submit a fresh pairing code.")
 }
 
+func configureCloudCommand(args []string) {
+	flags := flag.NewFlagSet("configure-cloud", flag.ExitOnError)
+	configPath := flags.String("config", "/etc/loramapr/receiver.json", "path to receiver config file")
+	baseURL := flags.String("base-url", "", "cloud base URL (for example https://loramapr.com or http://192.168.1.50:3001)")
+	_ = flags.Parse(args)
+
+	normalized := strings.TrimSpace(*baseURL)
+	if normalized == "" {
+		slog.Error("configure cloud failed: -base-url is required")
+		os.Exit(1)
+	}
+
+	cfg, err := config.Load(*configPath)
+	if err != nil {
+		slog.Error("configure cloud failed: load config", "err", err, "config", *configPath)
+		os.Exit(1)
+	}
+
+	cfg.Cloud.BaseURL = normalized
+	if err := config.Save(*configPath, cfg); err != nil {
+		slog.Error("configure cloud failed: save config", "err", err, "config", *configPath)
+		os.Exit(1)
+	}
+
+	fmt.Printf("Updated cloud.base_url in %s to %s\n", *configPath, normalized)
+}
+
 func signalNotifyContext() (context.Context, context.CancelFunc) {
 	return signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 }
@@ -739,6 +768,7 @@ func printUsage() {
 	fmt.Println("  loramapr-receiverd status [flags]            Print structured local status")
 	fmt.Println("  loramapr-receiverd support-snapshot [flags]  Export redacted support bundle")
 	fmt.Println("  loramapr-receiverd reset-pairing [flags]     Clear local receiver credentials and pair again")
+	fmt.Println("  loramapr-receiverd configure-cloud [flags]   Update cloud.base_url in config")
 	fmt.Println("")
 	fmt.Println("If no subcommand is provided, run mode is used.")
 	fmt.Println("For install guides, see docs/linux-pi-distribution.md (recommended) and docs/raspberry-pi-appliance.md (deprecated).")

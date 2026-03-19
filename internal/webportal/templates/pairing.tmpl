@@ -2,6 +2,7 @@
 <section class="panel">
   <h2>Pair This Receiver</h2>
   <p>Paste the pairing code from LoRaMapr Cloud to link this installation to your account.</p>
+  <p class="muted">For local/self-hosted cloud testing, set cloud base URL during bootstrap with <span class="mono">--cloud-base-url</span> (no manual config editing needed).</p>
   {{if .Flash}}
   <div class="hint {{.FlashClass}}">{{.Flash}}</div>
   {{end}}
@@ -16,6 +17,7 @@
   <table>
     <tr><th>Local Receiver Name</th><td>{{if .Snapshot.LocalName}}{{.Snapshot.LocalName}}{{else}}unnamed{{end}}</td></tr>
     <tr><th>Cloud Receiver</th><td>{{if .Snapshot.CloudReceiverLabel}}{{.Snapshot.CloudReceiverLabel}}{{else if .Snapshot.CloudReceiverID}}{{.Snapshot.CloudReceiverID}}{{else}}not assigned yet{{end}}</td></tr>
+    <tr><th>Cloud Endpoint</th><td class="mono">{{.Snapshot.CloudEndpoint}}</td></tr>
     <tr><th>Pairing Phase</th><td class="mono">{{.Snapshot.PairingPhase}}</td></tr>
     <tr><th>Cloud Status</th><td>{{.Snapshot.CloudStatus}}</td></tr>
     <tr><th>Service Status</th><td>{{.Snapshot.Lifecycle}}</td></tr>

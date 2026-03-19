@@ -16,6 +16,8 @@ LoRaMapr Receiver uses one first-class Linux/Pi install path:
    - Guide: [Linux/Pi Existing-OS Path](./docs/linux-pi-distribution.md)
    - Quick install:
      - `curl -fsSL https://raw.githubusercontent.com/kpax2049/loramapr-receiver/main/packaging/linux/scripts/bootstrap-apt.sh | sudo bash`
+   - Local/self-hosted cloud override:
+     - `curl -fsSL https://raw.githubusercontent.com/kpax2049/loramapr-receiver/main/packaging/linux/scripts/bootstrap-apt.sh | sudo bash -s -- --cloud-base-url http://<cloud-host-or-ip>:3001`
 
 Raspberry Pi appliance image flow is currently deprecated/paused.
 

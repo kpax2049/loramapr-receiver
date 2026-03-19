@@ -91,11 +91,19 @@ Packaged Linux/Pi defaults (`/etc/loramapr/receiver.json`) are:
 - `runtime.profile = "linux-service"`
 - `paths.state_file = "/var/lib/loramapr/receiver-state.json"`
 - `portal.bind_address = "0.0.0.0:8080"`
+- `cloud.base_url = "https://loramapr.com"`
 - `meshtastic.transport = "serial"` (auto-detect device if not pinned)
 
 Packaged config source template:
 
 - `packaging/linux/receiver.linux-package.json`
+
+Cloud endpoint can be changed safely without manual JSON edits:
+
+```bash
+sudo /usr/bin/loramapr-receiverd configure-cloud -config /etc/loramapr/receiver.json -base-url https://loramapr.com
+sudo systemctl restart loramapr-receiverd
+```
 
 ### `service.mode`
 

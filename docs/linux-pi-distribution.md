@@ -41,6 +41,12 @@ Optional beta channel install:
 curl -fsSL https://raw.githubusercontent.com/kpax2049/loramapr-receiver/main/packaging/linux/scripts/bootstrap-apt.sh | sudo bash -s -- --channel beta
 ```
 
+Local/self-hosted cloud install (no manual config edit required):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/kpax2049/loramapr-receiver/main/packaging/linux/scripts/bootstrap-apt.sh | sudo bash -s -- --cloud-base-url http://<cloud-host-or-ip>:3001
+```
+
 The bootstrap script:
 
 - installs `curl`/`gnupg` prerequisites if missing
@@ -57,6 +63,7 @@ Installed package config uses production Linux defaults:
 - `runtime.profile = linux-service`
 - `paths.state_file = /var/lib/loramapr/receiver-state.json`
 - `portal.bind_address = 0.0.0.0:8080`
+- `cloud.base_url = https://loramapr.com` (override with `--cloud-base-url` for local/self-hosted cloud)
 
 If bootstrap fails early, verify host reachability:
 
@@ -72,6 +79,13 @@ curl -fsSL https://downloads.loramapr.com/apt/stable/dists/stable/InRelease | he
    - `http://loramapr-receiver.local:8080` (if mDNS available)
    - or `http://<host-lan-ip>:8080`
 3. Enter pairing code from LoRaMapr Cloud.
+
+If you need to change cloud endpoint after install (without editing JSON by hand):
+
+```bash
+sudo /usr/bin/loramapr-receiverd configure-cloud -config /etc/loramapr/receiver.json -base-url http://<cloud-host-or-ip>:3001
+sudo systemctl restart loramapr-receiverd
+```
 
 Home Auto Session inclusion:
 

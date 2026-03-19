@@ -112,6 +112,7 @@ func defaultLinuxConfig() string {
 	cfg.Service.Mode = config.ModeAuto
 	cfg.Runtime.Profile = "linux-service"
 	cfg.Portal.BindAddress = "0.0.0.0:8080"
+	cfg.Cloud.BaseURL = "https://loramapr.com"
 	cfg.Logging.Level = "info"
 	cfg.Logging.Format = "json"
 
@@ -121,7 +122,7 @@ func defaultLinuxConfig() string {
 	}
 
 	// Fallback should only trigger on unexpected local filesystem errors.
-	return "{\n  \"service\": {\n    \"mode\": \"auto\",\n    \"heartbeat\": \"30s\"\n  },\n  \"runtime\": {\n    \"profile\": \"linux-service\"\n  },\n  \"paths\": {\n    \"state_file\": \"/var/lib/loramapr/receiver-state.json\"\n  },\n  \"portal\": {\n    \"bind_address\": \"0.0.0.0:8080\"\n  },\n  \"cloud\": {\n    \"base_url\": \"https://api.loramapr.example\"\n  },\n  \"meshtastic\": {\n    \"transport\": \"serial\"\n  },\n  \"logging\": {\n    \"level\": \"info\",\n    \"format\": \"json\"\n  }\n}\n"
+	return "{\n  \"service\": {\n    \"mode\": \"auto\",\n    \"heartbeat\": \"30s\"\n  },\n  \"runtime\": {\n    \"profile\": \"linux-service\"\n  },\n  \"paths\": {\n    \"state_file\": \"/var/lib/loramapr/receiver-state.json\"\n  },\n  \"portal\": {\n    \"bind_address\": \"0.0.0.0:8080\"\n  },\n  \"cloud\": {\n    \"base_url\": \"https://loramapr.com\"\n  },\n  \"meshtastic\": {\n    \"transport\": \"serial\"\n  },\n  \"logging\": {\n    \"level\": \"info\",\n    \"format\": \"json\"\n  }\n}\n"
 }
 
 func defaultSystemdUnit(layout Layout, serviceUser, serviceGroup string) string {

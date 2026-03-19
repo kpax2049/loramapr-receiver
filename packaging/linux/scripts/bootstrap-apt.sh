@@ -6,15 +6,17 @@ BASE_URL="https://downloads.loramapr.com/apt"
 PACKAGE_NAME="loramapr-receiver"
 KEYRING_PATH="/usr/share/keyrings/loramapr-archive-keyring.gpg"
 LIST_PATH="/etc/apt/sources.list.d/loramapr-receiver.list"
+CLOUD_BASE_URL="${LORAMAPR_CLOUD_BASE_URL:-}"
 
 usage() {
   cat <<'EOF'
 Usage:
-  bootstrap-apt.sh [--channel stable|beta] [--base-url <apt-root>] [--package <name>]
+  bootstrap-apt.sh [--channel stable|beta] [--base-url <apt-root>] [--package <name>] [--cloud-base-url <api-origin>]
 
 Examples:
   sudo ./bootstrap-apt.sh
   sudo ./bootstrap-apt.sh --channel beta
+  sudo ./bootstrap-apt.sh --cloud-base-url http://192.168.178.22:3001
 EOF
 }
 
@@ -30,6 +32,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --package)
       PACKAGE_NAME="${2:-}"
+      shift 2
+      ;;
+    --cloud-base-url)
+      CLOUD_BASE_URL="${2:-}"
       shift 2
       ;;
     -h|--help)
@@ -51,6 +57,11 @@ fi
 
 if [[ -z "${CHANNEL}" ]]; then
   echo "--channel must not be empty" >&2
+  exit 1
+fi
+
+if [[ -n "${CLOUD_BASE_URL}" && ! "${CLOUD_BASE_URL}" =~ ^https?:// ]]; then
+  echo "--cloud-base-url must start with http:// or https://" >&2
   exit 1
 fi
 
@@ -97,9 +108,26 @@ if ! apt-get update; then
 fi
 apt-get install -y "${PACKAGE_NAME}"
 
+cloud_updated="false"
+if [[ -n "${CLOUD_BASE_URL}" ]]; then
+  echo "Configuring receiver cloud endpoint"
+  echo "  cloud:   ${CLOUD_BASE_URL}"
+  if ! /usr/bin/loramapr-receiverd configure-cloud -config /etc/loramapr/receiver.json -base-url "${CLOUD_BASE_URL}"; then
+    echo "Failed to apply cloud base URL to receiver config." >&2
+    echo "Use: sudo /usr/bin/loramapr-receiverd configure-cloud -config /etc/loramapr/receiver.json -base-url <url>" >&2
+    exit 1
+  fi
+  chown root:loramapr /etc/loramapr/receiver.json >/dev/null 2>&1 || true
+  chmod 0640 /etc/loramapr/receiver.json >/dev/null 2>&1 || true
+  cloud_updated="true"
+fi
+
 if command -v systemctl >/dev/null 2>&1 && [[ -d /run/systemd/system ]]; then
   systemctl daemon-reload || true
   systemctl enable --now loramapr-receiverd.service || true
+  if [[ "${cloud_updated}" == "true" ]]; then
+    systemctl restart loramapr-receiverd.service || true
+  fi
 fi
 
 echo ""
