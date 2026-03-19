@@ -57,6 +57,8 @@ The bootstrap script:
   - creates/normalizes `loramapr` service account
   - ensures `dialout` membership for serial-device access
   - normalizes ownership/permissions for `/var/lib/loramapr` and `/var/log/loramapr`
+- installs packaged helper script:
+  - `/usr/share/loramapr/scripts/update-receiver.sh` (safe non-interactive upgrade)
 
 Installed package config uses production Linux defaults:
 
@@ -161,7 +163,12 @@ sudo systemctl enable --now loramapr-receiverd
 
 ## Install/Upgrade/Remove Behavior
 
-- `apt upgrade`: keeps config/state and restarts service safely
+- recommended upgrade path:
+  - `sudo /usr/share/loramapr/scripts/update-receiver.sh`
+  - keeps local config (`--force-confold`), runs non-interactive apt flow, and
+    writes backup snapshots under `/var/backups/loramapr/`
+- direct apt upgrade also works:
+  - `sudo APT_LISTCHANGES_FRONTEND=none DEBIAN_FRONTEND=noninteractive apt-get install -y -o Dpkg::Options::=--force-confold --only-upgrade loramapr-receiver`
 - `apt remove`: removes package and stops service, keeps config/state
 - `apt purge`: removes package plus config/state (full local reset)
 

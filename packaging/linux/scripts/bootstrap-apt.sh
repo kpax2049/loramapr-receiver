@@ -106,7 +106,8 @@ if ! apt-get update; then
   echo "Verify that ${repo_url} is reachable and signed metadata is published." >&2
   exit 1
 fi
-apt-get install -y "${PACKAGE_NAME}"
+APT_LISTCHANGES_FRONTEND=none DEBIAN_FRONTEND=noninteractive \
+  apt-get install -y -o Dpkg::Options::=--force-confold "${PACKAGE_NAME}"
 
 cloud_updated="false"
 if [[ -n "${CLOUD_BASE_URL}" ]]; then

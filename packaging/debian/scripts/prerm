@@ -1,16 +1,51 @@
 #!/bin/sh
 set -eu
 
-if ! command -v systemctl >/dev/null 2>&1; then
-  exit 0
-fi
+SERVICE_NAME="loramapr-receiverd.service"
+SYSTEMCTL_TIMEOUT_SECONDS="${LORAMAPR_SYSTEMCTL_TIMEOUT_SECONDS:-45}"
+
+have_systemd() {
+  command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]
+}
+
+systemctl_transition() {
+  if ! have_systemd; then
+    return 0
+  fi
+
+  command_name="$1"
+  shift
+
+  if command -v timeout >/dev/null 2>&1; then
+    if timeout "${SYSTEMCTL_TIMEOUT_SECONDS}s" systemctl "${command_name}" "$@" >/dev/null 2>&1; then
+      return 0
+    fi
+
+    rc="$?"
+    if [ "${rc}" -eq 124 ]; then
+      echo "systemctl ${command_name} $* timed out after ${SYSTEMCTL_TIMEOUT_SECONDS}s; continuing package lifecycle." >&2
+      return 1
+    fi
+
+    echo "systemctl ${command_name} $* failed with exit ${rc}; continuing package lifecycle." >&2
+    return 1
+  fi
+
+  if systemctl "${command_name}" "$@" >/dev/null 2>&1; then
+    return 0
+  fi
+
+  rc="$?"
+  echo "systemctl ${command_name} $* failed with exit ${rc}; continuing package lifecycle." >&2
+  return 1
+}
 
 case "${1:-}" in
   remove|deconfigure)
-    systemctl disable --now loramapr-receiverd.service >/dev/null 2>&1 || true
+    systemctl_transition disable --now "${SERVICE_NAME}" || true
     ;;
   upgrade|failed-upgrade)
-    systemctl stop loramapr-receiverd.service >/dev/null 2>&1 || true
+    systemctl_transition stop "${SERVICE_NAME}" || true
     ;;
 esac
 

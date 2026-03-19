@@ -172,7 +172,9 @@ Indicators:
 
 Actions:
 
-1. Upgrade via supported package release path (APT or manual `.deb` fallback).
+1. Upgrade via supported package release path:
+   - preferred: `sudo /usr/share/loramapr/scripts/update-receiver.sh`
+   - fallback: `sudo APT_LISTCHANGES_FRONTEND=none DEBIAN_FRONTEND=noninteractive apt-get install -y -o Dpkg::Options::=--force-confold --only-upgrade loramapr-receiver`
 2. Recheck portal attention and operational status after restart.
 
 ## 4. Path-Specific Notes

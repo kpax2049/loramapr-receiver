@@ -7,6 +7,7 @@ This document defines install/upgrade/remove/reinstall behavior for the
 
 - Package name: `loramapr-receiver`
 - Service unit path: `/lib/systemd/system/loramapr-receiverd.service`
+- Upgrade helper script: `/usr/share/loramapr/scripts/update-receiver.sh`
 - Config file: `/etc/loramapr/receiver.json` (`conffile`, preserved across upgrade/remove)
 - State file: `/var/lib/loramapr/receiver-state.json` (preserved on remove)
 - State/log directories:
@@ -32,12 +33,24 @@ Expected result: receiver reaches pairing-ready service state.
 On `apt upgrade`/`apt install` newer version:
 
 1. Existing config and state are preserved.
-2. `prerm upgrade` stops the running service.
+2. `prerm upgrade` stops the running service with bounded timeout protection
+   (default `45s`) so dpkg cannot block indefinitely on service stop.
 3. New package payload replaces binary/unit.
-4. `postinst` reloads systemd and restarts service if it is enabled.
+4. `postinst` reloads systemd and restarts service if it is enabled, with the
+   same bounded timeout protection.
 
 If service was explicitly disabled before upgrade, upgrade does not force-enable
 it.
+
+Recommended operator command:
+
+```bash
+sudo /usr/share/loramapr/scripts/update-receiver.sh
+```
+
+This helper performs non-interactive package upgrade with `--force-confold` and
+captures backup snapshots of config/state under `/var/backups/loramapr/` before
+updating.
 
 ## Migration from Tarball/Systemd Layout (Practical Path)
 

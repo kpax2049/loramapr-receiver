@@ -79,12 +79,14 @@ DEBIAN_DIR="${STAGE_DIR}/DEBIAN"
 mkdir -p \
   "${DEBIAN_DIR}" \
   "${STAGE_DIR}/usr/bin" \
+  "${STAGE_DIR}/usr/share/loramapr/scripts" \
   "${STAGE_DIR}/lib/systemd/system" \
   "${STAGE_DIR}/etc/loramapr" \
   "${STAGE_DIR}/var/lib/loramapr" \
   "${STAGE_DIR}/var/log/loramapr"
 
 install -m 0755 "${BIN_PATH}" "${STAGE_DIR}/usr/bin/loramapr-receiverd"
+install -m 0755 "${ROOT_DIR}/packaging/linux/scripts/update-receiver.sh" "${STAGE_DIR}/usr/share/loramapr/scripts/update-receiver.sh"
 install -m 0644 "${ROOT_DIR}/packaging/linux/systemd/loramapr-receiverd.service" "${STAGE_DIR}/lib/systemd/system/loramapr-receiverd.service"
 install -m 0644 "${ROOT_DIR}/packaging/linux/receiver.linux-package.json" "${STAGE_DIR}/etc/loramapr/receiver.json"
 

@@ -1,6 +1,9 @@
 #!/bin/sh
 set -eu
 
+SERVICE_NAME="loramapr-receiverd.service"
+SYSTEMCTL_TIMEOUT_SECONDS="${LORAMAPR_SYSTEMCTL_TIMEOUT_SECONDS:-45}"
+
 create_service_user() {
   if ! getent group loramapr >/dev/null 2>&1; then
     addgroup --system loramapr >/dev/null 2>&1 || true
@@ -75,25 +78,84 @@ normalize_legacy_systemd_unit() {
   echo "Keeping legacy unit override at ${legacy_unit}; review if migration is required." >&2
 }
 
+have_systemd() {
+  command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]
+}
+
+systemctl_transition() {
+  if ! have_systemd; then
+    return 0
+  fi
+
+  command_name="$1"
+  shift
+
+  if command -v timeout >/dev/null 2>&1; then
+    if timeout "${SYSTEMCTL_TIMEOUT_SECONDS}s" systemctl "${command_name}" "$@" >/dev/null 2>&1; then
+      return 0
+    fi
+
+    rc="$?"
+    if [ "${rc}" -eq 124 ]; then
+      echo "systemctl ${command_name} $* timed out after ${SYSTEMCTL_TIMEOUT_SECONDS}s; continuing package configuration." >&2
+      return 1
+    fi
+
+    echo "systemctl ${command_name} $* failed with exit ${rc}; continuing package configuration." >&2
+    return 1
+  fi
+
+  if systemctl "${command_name}" "$@" >/dev/null 2>&1; then
+    return 0
+  fi
+
+  rc="$?"
+  echo "systemctl ${command_name} $* failed with exit ${rc}; continuing package configuration." >&2
+  return 1
+}
+
+systemctl_query() {
+  if ! have_systemd; then
+    return 1
+  fi
+
+  command_name="$1"
+  shift
+
+  if command -v timeout >/dev/null 2>&1; then
+    if timeout "${SYSTEMCTL_TIMEOUT_SECONDS}s" systemctl "${command_name}" "$@" >/dev/null 2>&1; then
+      return 0
+    fi
+
+    rc="$?"
+    if [ "${rc}" -eq 124 ]; then
+      echo "systemctl ${command_name} $* timed out after ${SYSTEMCTL_TIMEOUT_SECONDS}s." >&2
+    fi
+    return 1
+  fi
+
+  systemctl "${command_name}" "$@" >/dev/null 2>&1
+}
+
 start_or_restart_service() {
-  if ! command -v systemctl >/dev/null 2>&1; then
+  if ! have_systemd; then
     return
   fi
 
-  systemctl daemon-reload || true
+  systemctl_transition daemon-reload || true
   action="${1:-install}"
   if [ "${action}" = "install" ]; then
-    systemctl enable loramapr-receiverd.service >/dev/null 2>&1 || true
+    systemctl_transition enable "${SERVICE_NAME}" || true
   fi
 
-  if ! systemctl is-enabled --quiet loramapr-receiverd.service; then
+  if ! systemctl_query is-enabled --quiet "${SERVICE_NAME}"; then
     return
   fi
 
-  if systemctl is-active --quiet loramapr-receiverd.service; then
-    systemctl restart loramapr-receiverd.service || true
+  if systemctl_query is-active --quiet "${SERVICE_NAME}"; then
+    systemctl_transition restart "${SERVICE_NAME}" || true
   else
-    systemctl start loramapr-receiverd.service || true
+    systemctl_transition start "${SERVICE_NAME}" || true
   fi
 }
 

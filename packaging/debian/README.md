@@ -24,6 +24,7 @@ string.
 ## Package Contents
 
 - `/usr/bin/loramapr-receiverd`
+- `/usr/share/loramapr/scripts/update-receiver.sh`
 - `/lib/systemd/system/loramapr-receiverd.service`
 - `/etc/loramapr/receiver.json` (dpkg conffile)
 - `/var/lib/loramapr`
@@ -39,6 +40,7 @@ setup for install/upgrade/remove/purge flows, including:
 - service account normalization (`loramapr`)
 - serial-access hardening (`dialout` membership)
 - runtime path ownership/permission normalization
+- bounded service transition timeouts for install/upgrade lifecycle operations
 
 ## Validation
 

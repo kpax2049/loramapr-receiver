@@ -35,6 +35,7 @@ fi
 
 for required_path in \
   "usr/bin/loramapr-receiverd" \
+  "usr/share/loramapr/scripts/update-receiver.sh" \
   "lib/systemd/system/loramapr-receiverd.service" \
   "etc/loramapr/receiver.json"; do
   if [[ ! -f "${ROOT_DIR}/${required_path}" ]]; then
@@ -63,6 +64,10 @@ if ! grep -Fq 'Group=loramapr' "${UNIT_PATH}"; then
 fi
 if ! grep -Fq 'SupplementaryGroups=dialout' "${UNIT_PATH}"; then
   echo "packaged systemd unit missing dialout supplementary group" >&2
+  exit 1
+fi
+if ! grep -Fq 'TimeoutStopSec=30' "${UNIT_PATH}"; then
+  echo "packaged systemd unit missing TimeoutStopSec hardening" >&2
   exit 1
 fi
 

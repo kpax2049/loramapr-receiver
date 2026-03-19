@@ -40,8 +40,12 @@ require_match 'ensure_serial_access' "${CONTROL_DIR}/postinst" "postinst missing
 require_match 'dialout' "${CONTROL_DIR}/postinst" "postinst missing dialout membership handling"
 require_match 'ensure_runtime_permissions' "${CONTROL_DIR}/postinst" "postinst missing runtime permission hardening hook"
 require_match 'normalize_legacy_systemd_unit' "${CONTROL_DIR}/postinst" "postinst missing tarball-to-package unit normalization hook"
+require_match 'SYSTEMCTL_TIMEOUT_SECONDS' "${CONTROL_DIR}/postinst" "postinst missing bounded systemd timeout control"
+require_match 'systemctl_transition' "${CONTROL_DIR}/postinst" "postinst missing bounded systemd transition helper"
 require_match 'remove\|deconfigure' "${CONTROL_DIR}/prerm" "prerm missing remove/deconfigure handling"
 require_match 'upgrade\|failed-upgrade' "${CONTROL_DIR}/prerm" "prerm missing upgrade handling"
+require_match 'SYSTEMCTL_TIMEOUT_SECONDS' "${CONTROL_DIR}/prerm" "prerm missing bounded systemd timeout control"
+require_match 'systemctl_transition' "${CONTROL_DIR}/prerm" "prerm missing bounded systemd transition helper"
 require_match 'purge' "${CONTROL_DIR}/postrm" "postrm missing purge handling"
 require_match '/var/lib/loramapr/receiver-state\.json' "${CONTROL_DIR}/postrm" "postrm missing state purge handling"
 
