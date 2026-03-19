@@ -203,7 +203,7 @@ func Evaluate(input Input) Finding {
 		return Finding{
 			Code:    FailureNodeNotConnected,
 			Summary: "Meshtastic device detected but connection is not ready",
-			Hint:    "Wait for connection to stabilize or verify serial path and protocol bridge.",
+			Hint:    "Wait for connection to stabilize or verify serial path, permissions, and native protocol readiness.",
 		}
 	}
 

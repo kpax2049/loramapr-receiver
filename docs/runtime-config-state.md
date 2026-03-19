@@ -141,6 +141,14 @@ This logic is informational only; no self-update actions are performed.
 - `json_stream`
 - `disabled`
 
+Transport behavior:
+
+- `serial` (default): native Meshtastic USB serial framing/protobuf path used for
+  supported Pi/Linux installs.
+- `json_stream`: newline-delimited JSON compatibility mode for fixtures/tests or
+  explicit sidecar feeds.
+- `disabled`: Meshtastic adapter remains inactive.
+
 ### `home_auto_session` block
 
 Optional embedded Home Auto Session module config:

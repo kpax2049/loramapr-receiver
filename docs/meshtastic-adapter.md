@@ -19,10 +19,13 @@ Configured via `meshtastic.transport`:
 
 - `serial` (default)
   - auto-detects likely serial devices on Linux/macOS
-  - reads newline-delimited JSON events from the selected device path
+  - connects directly to native Meshtastic serial protocol frames on the
+    selected device path
+  - sends an initial receiver-side config bootstrap request to move the node
+    into API/config stream behavior
 - `json_stream`
   - reads newline-delimited JSON events from `meshtastic.device`
-  - useful for sidecar-proxy or test pipes/files
+  - compatibility/test mode for sidecar-proxy pipes or fixture files
 - `disabled`
   - adapter stays inactive
 
@@ -71,13 +74,18 @@ Two event kinds:
     - LoRa share settings (if present)
     - Meshtastic share URL text (if present)
 
-Expected incoming event shape is newline-delimited JSON records containing
+`serial` mode normalizes native `FromRadio` protobuf frames.
+
+`json_stream` mode expects newline-delimited JSON records containing
 `type: "packet"` or `type: "status"`.
 
-## Known Limits (v1 skeleton)
+## Known Limits
 
-- No direct protobuf/native Meshtastic protocol integration yet.
-- Serial mode currently expects an upstream process/bridge to emit JSON lines.
+- Native serial handling is intentionally narrow and supports the receiver’s
+  primary onboarding/forwarding flow. It does not implement full Meshtastic
+  device management.
+- Home-node channel/config summary in native mode depends on what the connected
+  node reports over the serial API stream.
 - Adapter attempts reconnects with bounded delays and reports coarse errors.
 - Share URL generation is not synthesized by receiver. Receiver only exposes
   share values that were actually reported by connected node status/config data.

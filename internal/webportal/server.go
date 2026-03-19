@@ -799,7 +799,7 @@ func troubleshootingHints(snap status.Snapshot) []string {
 		}
 	}
 	if meshtasticState == "degraded" {
-		hints = append(hints, "Meshtastic adapter is degraded. Verify configured device path and input stream format.")
+		hints = append(hints, "Meshtastic adapter is degraded. Verify configured device path, USB serial permissions, and native protocol connectivity.")
 	}
 	meshCfg := snap.MeshtasticConfig
 	if meshCfg.Available {

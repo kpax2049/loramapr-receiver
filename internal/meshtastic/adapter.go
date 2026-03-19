@@ -120,7 +120,7 @@ type Service struct {
 	events chan Event
 
 	detectFn          func(config.MeshtasticConfig) (DetectionResult, error)
-	openFn            func(path string) (io.ReadCloser, error)
+	openFn            func(path string) (io.ReadWriteCloser, error)
 	detectionInterval time.Duration
 	reconnectDelay    time.Duration
 }
@@ -146,7 +146,7 @@ func NewAdapter(cfg config.MeshtasticConfig, logger *slog.Logger) Adapter {
 			UpdatedAt: now,
 		},
 		detectFn:          DetectDevice,
-		openFn:            openReadCloser,
+		openFn:            openReadWriteCloser,
 		detectionInterval: 3 * time.Second,
 		reconnectDelay:    2 * time.Second,
 	}
@@ -246,6 +246,20 @@ func (s *Service) run(ctx context.Context, out chan Event) {
 			continue
 		}
 
+		if s.cfg.Transport == "serial" {
+			if err := s.bootstrapNativeSession(stream); err != nil {
+				_ = stream.Close()
+				s.setSnapshot(func(snap *Snapshot) {
+					snap.State = StateDegraded
+					snap.LastError = err.Error()
+				})
+				if !waitOrDone(ctx, s.reconnectDelay) {
+					return
+				}
+				continue
+			}
+		}
+
 		s.setSnapshot(func(snap *Snapshot) {
 			snap.State = StateConnected
 			snap.DetectedDevice = detection.Device
@@ -274,7 +288,14 @@ func (s *Service) run(ctx context.Context, out chan Event) {
 	}
 }
 
-func (s *Service) consumeStream(ctx context.Context, device string, reader io.Reader, out chan<- Event) error {
+func (s *Service) consumeStream(ctx context.Context, device string, stream io.ReadWriteCloser, out chan<- Event) error {
+	if strings.EqualFold(s.cfg.Transport, "serial") {
+		return s.consumeNativeSerial(ctx, device, stream, out)
+	}
+	return s.consumeJSONStream(ctx, device, stream, out)
+}
+
+func (s *Service) consumeJSONStream(ctx context.Context, device string, reader io.Reader, out chan<- Event) error {
 	scanner := bufio.NewScanner(reader)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 
@@ -339,7 +360,7 @@ func (s *Service) applyEvent(device string, event Event) {
 			}
 			snap.ObservedNodeIDs = mergeNodeIDs(snap.ObservedNodeIDs, event.Node.ObservedNodeIDs)
 			if event.Node.HomeConfig != nil {
-				next := cloneHomeNodeConfig(event.Node.HomeConfig)
+				next := mergeHomeNodeConfig(snap.HomeConfig, event.Node.HomeConfig)
 				if next != nil {
 					next.UpdatedAt = now
 				}
@@ -425,8 +446,16 @@ func fileExists(path string) bool {
 	return err == nil
 }
 
-func openReadCloser(path string) (io.ReadCloser, error) {
-	return os.Open(path)
+func openReadWriteCloser(path string) (io.ReadWriteCloser, error) {
+	file, err := os.OpenFile(path, os.O_RDWR, 0)
+	if err == nil {
+		return file, nil
+	}
+	readOnly, readOnlyErr := os.Open(path)
+	if readOnlyErr != nil {
+		return nil, err
+	}
+	return &readOnlyStream{ReadCloser: readOnly}, nil
 }
 
 func waitOrDone(ctx context.Context, delay time.Duration) bool {
@@ -495,4 +524,72 @@ func cloneHomeNodeConfig(input *HomeNodeConfigSummary) *HomeNodeConfigSummary {
 	out := *input
 	out.UpdatedAt = input.UpdatedAt.UTC()
 	return &out
+}
+
+func mergeHomeNodeConfig(current, update *HomeNodeConfigSummary) *HomeNodeConfigSummary {
+	if update == nil {
+		return cloneHomeNodeConfig(current)
+	}
+	if current == nil {
+		return cloneHomeNodeConfig(update)
+	}
+	merged := cloneHomeNodeConfig(current)
+	if merged == nil {
+		merged = &HomeNodeConfigSummary{}
+	}
+	next := cloneHomeNodeConfig(update)
+	if next == nil {
+		return merged
+	}
+
+	merged.Available = merged.Available || next.Available
+	if next.UnavailableReason != "" {
+		merged.UnavailableReason = next.UnavailableReason
+	}
+	if next.Region != "" {
+		merged.Region = next.Region
+	}
+	if next.PrimaryChannel != "" {
+		merged.PrimaryChannel = next.PrimaryChannel
+	}
+	if next.PrimaryChannelIdx > 0 {
+		merged.PrimaryChannelIdx = next.PrimaryChannelIdx
+	}
+	if next.PSKState != "" && next.PSKState != "unknown" {
+		merged.PSKState = next.PSKState
+	}
+	if next.LoRaPreset != "" {
+		merged.LoRaPreset = next.LoRaPreset
+	}
+	if next.LoRaBandwidth != "" {
+		merged.LoRaBandwidth = next.LoRaBandwidth
+	}
+	if next.LoRaSpreading != "" {
+		merged.LoRaSpreading = next.LoRaSpreading
+	}
+	if next.LoRaCodingRate != "" {
+		merged.LoRaCodingRate = next.LoRaCodingRate
+	}
+	if next.ShareURL != "" {
+		merged.ShareURL = next.ShareURL
+		merged.ShareURLRedacted = next.ShareURLRedacted
+		merged.ShareQRText = next.ShareQRText
+		merged.ShareURLAvailable = true
+	}
+	if next.Source != "" {
+		merged.Source = next.Source
+	}
+	if !next.UpdatedAt.IsZero() {
+		merged.UpdatedAt = next.UpdatedAt.UTC()
+	}
+
+	return merged
+}
+
+type readOnlyStream struct {
+	io.ReadCloser
+}
+
+func (s *readOnlyStream) Write(_ []byte) (int, error) {
+	return 0, errors.New("stream is read-only")
 }
