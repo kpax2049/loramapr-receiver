@@ -21,6 +21,12 @@ loramapr-receiverd support-snapshot -config /etc/loramapr/receiver.json -out /tm
   - `GET /api/status`
   - `GET /api/ops`
 
+`GET /api/ops` now includes:
+
+- operational checks (`overall`, `checks[]`)
+- derived attention object
+- `setup_issues[]` (concrete first-run root causes with next-step guidance)
+
 ## Stable Failure Codes
 
 Receiver uses stable coarse failure codes:
@@ -96,6 +102,30 @@ Overall state:
 - `ok`
 - `degraded`
 - `blocked`
+
+## Setup Root Cause Mapping
+
+To avoid generic "degraded" setup wording, receiver derives concrete setup issues
+from component status and operational checks.
+
+Common first-run issue codes include:
+
+- `portal_bind_localhost`
+- `cloud_base_url_missing`
+- `cloud_base_url_placeholder`
+- `cloud_base_url_invalid`
+- `cloud_unreachable`
+- `usb_device_not_detected`
+- `usb_detected_node_not_ready`
+- `usb_protocol_unusable`
+- `usb_serial_permission_denied`
+- `packets_not_ingesting`
+
+These are surfaced on:
+
+- Portal **Welcome**, **Progress**, and **Troubleshooting**
+- `GET /api/ops` as `setup_issues[]`
+- `support-snapshot` export under `setup.issues`
 
 ## Support Snapshot Export
 

@@ -37,6 +37,8 @@ code from LoRaMapr Cloud.
 3. Paste the pairing code from LoRaMapr Cloud.
 4. Wait until the portal shows paired/ready state.
 5. Confirm Meshtastic node connection and forwarding on **Progress**.
+6. If setup is blocked, check **Setup Root Cause** on Progress/Troubleshooting
+   (or `GET /api/ops` -> `setup_issues`) for concrete next steps.
 
 Portal reference: [Embedded Local Setup Portal](./docs/local-portal.md)
 

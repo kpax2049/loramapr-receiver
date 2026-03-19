@@ -32,8 +32,26 @@
     <strong>{{if .Attention.Category}}{{.Attention.Category}}{{else}}attention{{end}}</strong>: {{.Attention.Summary}}
     {{if .Attention.Hint}}<br>{{.Attention.Hint}}{{end}}
   </div>
-  {{end}}
+{{end}}
 </section>
+{{if .SetupIssues}}
+<section class="panel">
+  <h2>Setup Root Cause</h2>
+  <p>Aggregate status may show degraded while one component is actually blocking setup. Resolve these concrete issues first.</p>
+  <table>
+    <tr><th>Code</th><th>Component</th><th>Level</th><th>Summary</th><th>Next Step</th></tr>
+    {{range .SetupIssues}}
+    <tr>
+      <td class="mono">{{.Code}}</td>
+      <td class="mono">{{if .Component}}{{.Component}}{{else}}unknown{{end}}</td>
+      <td class="mono">{{if .Level}}{{.Level}}{{else}}warn{{end}}</td>
+      <td>{{.Summary}}{{if .Detail}}<br><span class="mono">{{.Detail}}</span>{{end}}</td>
+      <td>{{if .Guidance}}{{.Guidance}}{{else}}-{{end}}</td>
+    </tr>
+    {{end}}
+  </table>
+</section>
+{{end}}
 <section class="panel">
   <h2>Operational Checks</h2>
   <p><strong>{{if .OperationalOverall}}{{.OperationalOverall}}{{else}}unknown{{end}}</strong>{{if .OperationalSummary}}: {{.OperationalSummary}}{{end}}</p>

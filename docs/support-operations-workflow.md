@@ -33,6 +33,8 @@ Capture:
 
 - portal `/progress` screenshot
 - portal `/troubleshooting` screenshot
+- setup root causes from portal **Progress** (`Setup Root Cause`) or
+  `GET /api/ops` -> `setup_issues[]`
 - identity hints:
   - `installation_id`
   - `local_name`
@@ -52,6 +54,11 @@ Indicators:
 - failure: `cloud_unreachable`
 - attention: `action_required` / `connectivity`
 - operational: `cloud_reachability = fail`
+- setup root causes may include:
+  - `cloud_base_url_missing`
+  - `cloud_base_url_placeholder`
+  - `cloud_base_url_invalid`
+  - `cloud_unreachable`
 
 Actions:
 
@@ -69,6 +76,11 @@ Indicators:
 
 - failure: `no_serial_device_detected` or `node_detected_not_connected`
 - attention: `action_required` / `node`
+- setup root causes may include:
+  - `usb_device_not_detected`
+  - `usb_detected_node_not_ready`
+  - `usb_protocol_unusable`
+  - `usb_serial_permission_denied`
 
 Actions:
 

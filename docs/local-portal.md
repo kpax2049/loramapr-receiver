@@ -20,7 +20,8 @@ Bind address is configured by `portal.bind_address`.
 1. **Welcome**: confirm current setup/attention state and next action
 2. **Pairing**: enter pairing code from LoRaMapr Cloud
 3. **Progress**: confirm cloud reachability, node connection, forwarding, and
-   read-only field-node pairing data from the connected home node
+   read-only field-node pairing data from the connected home node, plus concrete
+   setup root-cause issues when setup is degraded
 4. **Home Auto Session**: optional embedded session automation with cloud-managed
    policy visibility and local fallback config
 5. **Troubleshooting**: resolve common issues and run reset/re-pair when needed
@@ -62,6 +63,7 @@ API routes:
 
 - coarse operational check summary
 - derived attention object (`state/category/code/summary/hint`)
+- `setup_issues[]` root-cause list for first-run blockers
 
 ## Attention States (User Meaning)
 

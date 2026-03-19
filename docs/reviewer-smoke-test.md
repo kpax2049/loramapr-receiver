@@ -4,6 +4,10 @@ This guide verifies the supported install path, portal/diagnostics behavior,
 multi-receiver identity/coexistence guidance, and Home Auto Session Milestone 4
 cloud-managed config behavior.
 
+For focused one-click hardening verification (v2.16.0), use:
+
+- [Reviewer Smoke Test (v2.16.0 One-Click Hardening)](./reviewer-smoke-test-v2.16.0-one-click-hardening.md)
+
 ## 1. Build and Baseline Tests
 
 ```bash

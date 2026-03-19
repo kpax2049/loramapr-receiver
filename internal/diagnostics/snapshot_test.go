@@ -212,3 +212,73 @@ func TestSupportSnapshotRedactsMeshtasticShareFromLocalProbeSnapshot(t *testing.
 		t.Fatal("expected redacted meshtastic share hint in support snapshot")
 	}
 }
+
+func TestSupportSnapshotIncludesSetupIssuesFromLocalStatus(t *testing.T) {
+	t.Parallel()
+
+	cfg := config.Default()
+	cfg.Cloud.BaseURL = "https://api.loramapr.example"
+	data := state.Data{}
+	data.Pairing.Phase = state.PairingSteadyState
+
+	now := time.Now().UTC()
+	localSnap := status.Snapshot{
+		RuntimeProfile: "linux-service",
+		InstallType:    "linux-package",
+		Lifecycle:      status.LifecycleRunning,
+		Ready:          true,
+		PairingPhase:   "steady_state",
+		CloudEndpoint:  "https://api.loramapr.example",
+		CloudStatus:    "unreachable",
+		CloudReachable: false,
+		Components: map[string]status.ComponentStatus{
+			"portal": {
+				State:     "running",
+				Message:   "local setup portal listening on 127.0.0.1:8080",
+				UpdatedAt: now,
+			},
+			"meshtastic": {
+				State:     "degraded",
+				Message:   "device=/dev/ttyACM0 error=native serial stream unreadable",
+				UpdatedAt: now,
+			},
+		},
+	}
+
+	snapshot := CollectSupportSnapshot(cfg, data, Finding{}, CollectOptions{
+		Now: func() time.Time { return now },
+		ProbeCloud: func(_ string, _ time.Duration) CloudProbe {
+			return CloudProbe{Status: "unreachable", Detail: "dial tcp timeout"}
+		},
+		ProbeNetwork: func() NetworkProbe {
+			return NetworkProbe{Status: "available"}
+		},
+		ProbeLocal: func(_ string, _ time.Duration) LocalStatusProbe {
+			return LocalStatusProbe{Status: "reachable", Snapshot: &localSnap}
+		},
+		DetectDevice: func(_ config.MeshtasticConfig) (meshtastic.DetectionResult, error) {
+			return meshtastic.DetectionResult{Device: "/dev/ttyACM0"}, nil
+		},
+	})
+
+	if len(snapshot.Setup.Issues) == 0 {
+		t.Fatal("expected setup issues in support snapshot")
+	}
+
+	hasPortal := false
+	hasCloud := false
+	hasUSB := false
+	for _, issue := range snapshot.Setup.Issues {
+		switch issue.Code {
+		case "portal_bind_localhost":
+			hasPortal = true
+		case "cloud_base_url_placeholder":
+			hasCloud = true
+		case "usb_protocol_unusable":
+			hasUSB = true
+		}
+	}
+	if !hasPortal || !hasCloud || !hasUSB {
+		t.Fatalf("expected portal/cloud/usb setup issues, got %#v", snapshot.Setup.Issues)
+	}
+}

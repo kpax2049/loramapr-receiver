@@ -157,6 +157,9 @@ type SupportSnapshot struct {
 		Summary string             `json:"summary"`
 		Checks  []OperationalCheck `json:"checks"`
 	} `json:"operations"`
+	Setup struct {
+		Issues []SetupIssue `json:"issues,omitempty"`
+	} `json:"setup"`
 	Attention struct {
 		State          AttentionState    `json:"state"`
 		Category       AttentionCategory `json:"category,omitempty"`
@@ -497,6 +500,9 @@ func CollectSupportSnapshot(cfg config.Config, data state.Data, finding Finding,
 	out.Operations.Overall = ops.Overall
 	out.Operations.Summary = ops.Summary
 	out.Operations.Checks = append([]OperationalCheck(nil), ops.Checks...)
+	if localProbe.Snapshot != nil {
+		out.Setup.Issues = DeriveSetupIssues(*localProbe.Snapshot, ops)
+	}
 	attention := DeriveAttention(finding, ops)
 	out.Attention.State = attention.State
 	out.Attention.Category = attention.Category

@@ -79,6 +79,8 @@ curl -fsSL https://downloads.loramapr.com/apt/stable/dists/stable/InRelease | he
    - `http://loramapr-receiver.local:8080` (if mDNS available)
    - or `http://<host-lan-ip>:8080`
 3. Enter pairing code from LoRaMapr Cloud.
+4. If setup is blocked, open **Progress** and review **Setup Root Cause** for
+   concrete next steps (also available in `GET /api/ops` as `setup_issues`).
 
 If you need to change cloud endpoint after install (without editing JSON by hand):
 
@@ -117,7 +119,7 @@ Use this only when APT repository access is not possible.
 `amd64` example:
 
 ```bash
-VERSION=v2.15.0
+VERSION=v2.16.0
 CHANNEL=stable
 BASE=https://downloads.loramapr.com/receiver/${CHANNEL}/${VERSION}
 
@@ -132,7 +134,7 @@ sudo apt-get install -y ./loramapr-receiver_${VERSION}_linux_amd64.deb
 `arm64` example (Raspberry Pi OS 64-bit):
 
 ```bash
-VERSION=v2.15.0
+VERSION=v2.16.0
 CHANNEL=stable
 BASE=https://downloads.loramapr.com/receiver/${CHANNEL}/${VERSION}
 

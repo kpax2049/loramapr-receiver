@@ -64,6 +64,7 @@ type pageData struct {
 	OperationalOverall   string
 	OperationalSummary   string
 	OperationalChecks    []diagnostics.OperationalCheck
+	SetupIssues          []diagnostics.SetupIssue
 	RuntimeVersion       string
 	ReleaseChannel       string
 	BuildCommit          string
@@ -201,12 +202,15 @@ func (s *Server) handleOps(w http.ResponseWriter, _ *http.Request) {
 	}
 	snap := s.status.CurrentStatus()
 	ops := evaluateOperationalFromSnapshot(snap)
+	setupIssues := diagnostics.DeriveSetupIssues(snap, ops)
 	payload, err := json.Marshal(struct {
 		diagnostics.OperationalSummary
-		Attention diagnostics.Attention `json:"attention"`
+		Attention   diagnostics.Attention    `json:"attention"`
+		SetupIssues []diagnostics.SetupIssue `json:"setup_issues,omitempty"`
 	}{
 		OperationalSummary: ops,
 		Attention:          deriveAttentionFromSnapshot(snap),
+		SetupIssues:        append([]diagnostics.SetupIssue(nil), setupIssues...),
 	})
 	if err != nil {
 		s.logger.Error("ops encoding failed", "err", err)
@@ -445,6 +449,8 @@ func (s *Server) handleWelcome(w http.ResponseWriter, r *http.Request) {
 
 	snap := s.currentSnapshot()
 	data := s.basePageData("Welcome", snap)
+	ops := evaluateOperationalFromSnapshot(snap)
+	data.SetupIssues = diagnostics.DeriveSetupIssues(snap, ops)
 	data.SummaryHint, data.SummaryHintClass = summaryHint(snap)
 	data.NextAction = nextAction(snap)
 	s.renderHTML(w, http.StatusOK, "welcome", data)
@@ -471,6 +477,7 @@ func (s *Server) handleProgress(w http.ResponseWriter, r *http.Request) {
 	data.OperationalOverall = ops.Overall
 	data.OperationalSummary = ops.Summary
 	data.OperationalChecks = append([]diagnostics.OperationalCheck(nil), ops.Checks...)
+	data.SetupIssues = diagnostics.DeriveSetupIssues(snap, ops)
 	s.renderHTML(w, http.StatusOK, "progress", data)
 }
 
@@ -482,6 +489,7 @@ func (s *Server) handleTroubleshooting(w http.ResponseWriter, _ *http.Request) {
 	data.OperationalOverall = ops.Overall
 	data.OperationalSummary = ops.Summary
 	data.OperationalChecks = append([]diagnostics.OperationalCheck(nil), ops.Checks...)
+	data.SetupIssues = diagnostics.DeriveSetupIssues(snap, ops)
 	s.renderHTML(w, http.StatusOK, "troubleshooting", data)
 }
 
@@ -708,6 +716,18 @@ func nextAction(snap status.Snapshot) string {
 func troubleshootingHints(snap status.Snapshot) []string {
 	hints := []string{}
 	isAppliance := strings.EqualFold(strings.TrimSpace(snap.RuntimeProfile), "appliance-pi")
+	ops := evaluateOperationalFromSnapshot(snap)
+	for _, issue := range diagnostics.DeriveSetupIssues(snap, ops) {
+		summary := strings.TrimSpace(issue.Summary)
+		if summary == "" {
+			continue
+		}
+		message := "Setup root cause [" + strings.TrimSpace(issue.Code) + "]: " + summary
+		if guidance := strings.TrimSpace(issue.Guidance); guidance != "" {
+			message += " Next: " + guidance
+		}
+		hints = append(hints, message)
+	}
 	if strings.TrimSpace(snap.LocalName) != "" {
 		hints = append(hints, "Local receiver name: "+strings.TrimSpace(snap.LocalName))
 	}

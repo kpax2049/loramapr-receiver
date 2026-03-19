@@ -25,6 +25,16 @@
   {{if .SummaryHint}}
   <div class="hint {{.SummaryHintClass}}">{{.SummaryHint}}</div>
   {{end}}
+  {{if .SetupIssues}}
+  <div class="hint warn">
+    <strong>Setup root cause</strong>
+    <ul>
+      {{range .SetupIssues}}
+      <li><span class="mono">{{.Code}}</span>: {{.Summary}}{{if .Guidance}} Next: {{.Guidance}}{{end}}</li>
+      {{end}}
+    </ul>
+  </div>
+  {{end}}
   {{if ne .Attention.State "none"}}
   {{if .Attention.Summary}}
   <div class="hint {{if eq .Attention.State "urgent"}}err{{else if eq .Attention.State "action_required"}}warn{{else}}none{{end}}">

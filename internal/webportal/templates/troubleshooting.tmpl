@@ -15,6 +15,16 @@
     {{if .Attention.Hint}}<br>{{.Attention.Hint}}{{end}}
   </div>
   {{end}}
+  {{if .SetupIssues}}
+  <div class="hint warn">
+    <strong>Concrete setup issues detected:</strong>
+    <ul>
+      {{range .SetupIssues}}
+      <li><span class="mono">{{.Code}}</span>: {{.Summary}}{{if .Guidance}} Next: {{.Guidance}}{{end}}</li>
+      {{end}}
+    </ul>
+  </div>
+  {{end}}
   <ul>
     {{range .TroubleshootingHints}}
     <li>{{.}}</li>

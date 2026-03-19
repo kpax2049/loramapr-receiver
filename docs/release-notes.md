@@ -1,5 +1,8 @@
 # LoRaMapr Receiver Release Notes
 
+For Linux/Pi one-click hardening notes targeting `v2.16.0`, see
+`docs/release-notes-v2.16.0.md`.
+
 For Pages-backed APT hosting notes targeting `v2.15.0`, see
 `docs/release-notes-v2.15.0.md`.
 

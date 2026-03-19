@@ -175,6 +175,40 @@ func TestOpsAPI(t *testing.T) {
 	}
 }
 
+func TestOpsAPIIncludesSetupIssues(t *testing.T) {
+	t.Parallel()
+
+	snap := sampleSnapshot()
+	snap.RuntimeProfile = "linux-service"
+	snap.InstallType = "linux-package"
+	snap.CloudEndpoint = "https://api.loramapr.example"
+	snap.CloudStatus = "unreachable"
+	snap.CloudReachable = false
+	snap.Components["portal"] = status.ComponentStatus{
+		State:   "running",
+		Message: "local setup portal listening on 127.0.0.1:8080",
+	}
+	srv := New("127.0.0.1:0", staticStatusProvider{snapshot: snap}, &recordingPairingSubmitter{}, nil)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/ops", nil)
+	srv.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "\"setup_issues\"") {
+		t.Fatalf("expected setup_issues in ops payload")
+	}
+	if !strings.Contains(body, "portal_bind_localhost") {
+		t.Fatalf("expected portal bind setup issue")
+	}
+	if !strings.Contains(body, "cloud_base_url_placeholder") {
+		t.Fatalf("expected cloud placeholder setup issue")
+	}
+}
+
 func TestResetRoute(t *testing.T) {
 	t.Parallel()
 
@@ -289,6 +323,37 @@ func TestWelcomePageShowsDerivedAttention(t *testing.T) {
 	}
 }
 
+func TestWelcomePageShowsSetupRootCausePanel(t *testing.T) {
+	t.Parallel()
+
+	snap := sampleSnapshot()
+	snap.RuntimeProfile = "linux-service"
+	snap.InstallType = "linux-package"
+	snap.CloudEndpoint = "https://api.loramapr.example"
+	snap.CloudStatus = "unreachable"
+	snap.CloudReachable = false
+	snap.Components["portal"] = status.ComponentStatus{
+		State:   "running",
+		Message: "local setup portal listening on 127.0.0.1:8080",
+	}
+
+	srv := New("127.0.0.1:0", staticStatusProvider{snapshot: snap}, &recordingPairingSubmitter{}, nil)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	srv.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "Setup root cause") {
+		t.Fatalf("expected setup root cause panel")
+	}
+	if !strings.Contains(body, "portal_bind_localhost") {
+		t.Fatalf("expected portal bind root cause in welcome page")
+	}
+}
+
 func TestProgressPageShowsAttentionFields(t *testing.T) {
 	t.Parallel()
 
@@ -341,6 +406,36 @@ func TestProgressPageShowsReceiverIdentityContext(t *testing.T) {
 	}
 	if !strings.Contains(body, "Garage Receiver") {
 		t.Fatalf("expected cloud receiver label in progress page")
+	}
+}
+
+func TestProgressPageShowsSetupRootCause(t *testing.T) {
+	t.Parallel()
+
+	snap := sampleSnapshot()
+	snap.PairingPhase = "steady_state"
+	snap.CloudEndpoint = "https://loramapr.com"
+	snap.CloudStatus = "reachable"
+	snap.CloudReachable = true
+	snap.Components["meshtastic"] = status.ComponentStatus{
+		State:   "degraded",
+		Message: "device=/dev/ttyACM0 error=native serial stream unreadable",
+	}
+
+	srv := New("127.0.0.1:0", staticStatusProvider{snapshot: snap}, &recordingPairingSubmitter{}, nil)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/progress", nil)
+	srv.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "Setup Root Cause") {
+		t.Fatalf("expected setup root cause section on progress page")
+	}
+	if !strings.Contains(body, "usb_protocol_unusable") {
+		t.Fatalf("expected protocol root cause code on progress page")
 	}
 }
 
@@ -523,6 +618,22 @@ func TestTroubleshootingShowsMeshtasticConfigFallbackHint(t *testing.T) {
 	}
 	if !strings.Contains(hints, "Meshtastic app") {
 		t.Fatalf("expected Meshtastic app fallback hint, got %q", hints)
+	}
+}
+
+func TestTroubleshootingShowsSetupRootCauseHints(t *testing.T) {
+	t.Parallel()
+
+	snap := sampleSnapshot()
+	snap.PairingPhase = "steady_state"
+	snap.Components["meshtastic"] = status.ComponentStatus{
+		State:   "connecting",
+		Message: "device=/dev/ttyACM0 packets=0 observed_nodes=0",
+	}
+
+	hints := strings.Join(troubleshootingHints(snap), "\n")
+	if !strings.Contains(hints, "Setup root cause [usb_detected_node_not_ready]") {
+		t.Fatalf("expected setup root cause troubleshooting hint, got %q", hints)
 	}
 }
 
