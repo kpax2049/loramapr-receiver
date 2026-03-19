@@ -29,6 +29,10 @@ string.
 - `/var/lib/loramapr`
 - `/var/log/loramapr`
 
+`/etc/loramapr/receiver.json` is sourced from:
+
+- `packaging/linux/receiver.linux-package.json`
+
 Maintainer scripts in `scripts/` handle service lifecycle and runtime directory
 setup for install/upgrade/remove/purge flows.
 

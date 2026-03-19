@@ -94,6 +94,10 @@ Cloud-manifest metadata:
 - `usr/share/loramapr/scripts/install.sh`
 - `usr/share/loramapr/scripts/uninstall.sh`
 
+`etc/loramapr/receiver.json` in Linux release outputs is sourced from:
+
+- `packaging/linux/receiver.linux-package.json`
+
 This aligns with the Linux-first service/install model.
 
 `.deb` package contents align to Debian-family install norms:

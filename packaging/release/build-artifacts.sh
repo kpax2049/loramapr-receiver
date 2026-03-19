@@ -125,7 +125,7 @@ for target in "${targets[@]}"; do
 
     cp "${BIN_PATH}" "${STAGE_DIR}/usr/bin/loramapr-receiverd"
     cp "${ROOT_DIR}/packaging/linux/systemd/loramapr-receiverd.service" "${STAGE_DIR}/etc/systemd/system/loramapr-receiverd.service"
-    cp "${ROOT_DIR}/receiver.example.json" "${STAGE_DIR}/etc/loramapr/receiver.json"
+    cp "${ROOT_DIR}/packaging/linux/receiver.linux-package.json" "${STAGE_DIR}/etc/loramapr/receiver.json"
     cp "${ROOT_DIR}/packaging/linux/scripts/install.sh" "${STAGE_DIR}/usr/share/loramapr/scripts/install.sh"
     cp "${ROOT_DIR}/packaging/linux/scripts/uninstall.sh" "${STAGE_DIR}/usr/share/loramapr/scripts/uninstall.sh"
 

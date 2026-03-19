@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/loramapr/loramapr-receiver/internal/config"
 )
 
 func TestDefaultLinuxLayout(t *testing.T) {
@@ -52,6 +54,20 @@ func TestInstallLinuxSystemdWritesFiles(t *testing.T) {
 	}
 	if len(unitText) == 0 {
 		t.Fatal("expected non-empty unit file")
+	}
+
+	cfg, err := config.Load(result.Layout.ConfigPath)
+	if err != nil {
+		t.Fatalf("load generated config: %v", err)
+	}
+	if cfg.Portal.BindAddress != "0.0.0.0:8080" {
+		t.Fatalf("expected packaged bind address 0.0.0.0:8080, got %q", cfg.Portal.BindAddress)
+	}
+	if cfg.Paths.StateFile != "/var/lib/loramapr/receiver-state.json" {
+		t.Fatalf("expected packaged state path /var/lib/loramapr/receiver-state.json, got %q", cfg.Paths.StateFile)
+	}
+	if cfg.Runtime.Profile != "linux-service" {
+		t.Fatalf("expected packaged runtime profile linux-service, got %q", cfg.Runtime.Profile)
 	}
 }
 

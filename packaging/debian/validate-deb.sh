@@ -52,6 +52,20 @@ for required_dir in \
   fi
 done
 
+CONFIG_PATH="${ROOT_DIR}/etc/loramapr/receiver.json"
+if ! grep -Fq '"state_file": "/var/lib/loramapr/receiver-state.json"' "${CONFIG_PATH}"; then
+  echo "packaged config missing production state_file default" >&2
+  exit 1
+fi
+if ! grep -Fq '"bind_address": "0.0.0.0:8080"' "${CONFIG_PATH}"; then
+  echo "packaged config missing LAN portal bind default" >&2
+  exit 1
+fi
+if ! grep -Fq '"profile": "linux-service"' "${CONFIG_PATH}"; then
+  echo "packaged config missing linux-service runtime profile default" >&2
+  exit 1
+fi
+
 for required_control in postinst prerm postrm conffiles; do
   if [[ ! -f "${CONTROL_DIR}/${required_control}" ]]; then
     echo "missing required control file: ${required_control}" >&2

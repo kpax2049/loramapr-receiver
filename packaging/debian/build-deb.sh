@@ -86,7 +86,7 @@ mkdir -p \
 
 install -m 0755 "${BIN_PATH}" "${STAGE_DIR}/usr/bin/loramapr-receiverd"
 install -m 0644 "${ROOT_DIR}/packaging/linux/systemd/loramapr-receiverd.service" "${STAGE_DIR}/lib/systemd/system/loramapr-receiverd.service"
-install -m 0644 "${ROOT_DIR}/receiver.example.json" "${STAGE_DIR}/etc/loramapr/receiver.json"
+install -m 0644 "${ROOT_DIR}/packaging/linux/receiver.linux-package.json" "${STAGE_DIR}/etc/loramapr/receiver.json"
 
 cat > "${DEBIAN_DIR}/control" <<EOF
 Package: ${PACKAGE_NAME}

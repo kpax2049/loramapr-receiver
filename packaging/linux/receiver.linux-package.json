@@ -1,0 +1,55 @@
+{
+  "schema_version": 3,
+  "service": {
+    "mode": "auto",
+    "heartbeat": "30s"
+  },
+  "runtime": {
+    "profile": "linux-service",
+    "local_name": ""
+  },
+  "paths": {
+    "state_file": "/var/lib/loramapr/receiver-state.json"
+  },
+  "portal": {
+    "bind_address": "0.0.0.0:8080"
+  },
+  "cloud": {
+    "base_url": "https://api.loramapr.example"
+  },
+  "update": {
+    "enabled": false,
+    "manifest_url": "https://downloads.loramapr.com/receiver/stable/latest/cloud-manifest.fragment.json",
+    "check_interval": "6h",
+    "request_timeout": "4s",
+    "min_supported_version": ""
+  },
+  "meshtastic": {
+    "transport": "serial",
+    "device": ""
+  },
+  "home_auto_session": {
+    "enabled": false,
+    "mode": "off",
+    "home": {
+      "lat": 0,
+      "lon": 0,
+      "radius_m": 150
+    },
+    "tracked_node_ids": [],
+    "start_debounce": "30s",
+    "stop_debounce": "30s",
+    "idle_stop_timeout": "15m",
+    "startup_reconcile": true,
+    "session_name_template": "Home Auto {{.NodeID}}",
+    "session_notes_template": "Automatically managed by LoRaMapr Receiver",
+    "cloud": {
+      "start_endpoint": "/api/receiver/home-auto-session/start",
+      "stop_endpoint": "/api/receiver/home-auto-session/stop"
+    }
+  },
+  "logging": {
+    "level": "info",
+    "format": "json"
+  }
+}

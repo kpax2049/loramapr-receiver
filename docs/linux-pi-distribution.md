@@ -48,6 +48,12 @@ The bootstrap script:
 - installs `loramapr-receiver`
 - enables/starts `loramapr-receiverd`
 
+Installed package config uses production Linux defaults:
+
+- `runtime.profile = linux-service`
+- `paths.state_file = /var/lib/loramapr/receiver-state.json`
+- `portal.bind_address = 0.0.0.0:8080`
+
 If bootstrap fails early, verify host reachability:
 
 ```bash

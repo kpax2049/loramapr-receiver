@@ -25,7 +25,7 @@ Key sections:
 - `home_auto_session`
 - `logging`
 
-Example (minimal):
+Example (local-dev defaults):
 
 ```json
 {
@@ -83,6 +83,19 @@ Example (minimal):
   }
 }
 ```
+
+Linux/Pi package installs do not use the local-dev defaults above.
+
+Packaged Linux/Pi defaults (`/etc/loramapr/receiver.json`) are:
+
+- `runtime.profile = "linux-service"`
+- `paths.state_file = "/var/lib/loramapr/receiver-state.json"`
+- `portal.bind_address = "0.0.0.0:8080"`
+- `meshtastic.transport = "serial"` (auto-detect device if not pinned)
+
+Packaged config source template:
+
+- `packaging/linux/receiver.linux-package.json`
 
 ### `service.mode`
 
