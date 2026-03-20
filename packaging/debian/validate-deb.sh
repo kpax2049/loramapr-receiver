@@ -70,6 +70,10 @@ if ! grep -Fq 'TimeoutStopSec=30' "${UNIT_PATH}"; then
   echo "packaged systemd unit missing TimeoutStopSec hardening" >&2
   exit 1
 fi
+if ! grep -Fq 'RestartForceExitStatus=SIGHUP' "${UNIT_PATH}"; then
+  echo "packaged systemd unit missing SIGHUP restart hardening" >&2
+  exit 1
+fi
 
 CONFIG_PATH="${ROOT_DIR}/etc/loramapr/receiver.json"
 if ! grep -Fq '"state_file": "/var/lib/loramapr/receiver-state.json"' "${CONFIG_PATH}"; then

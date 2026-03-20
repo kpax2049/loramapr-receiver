@@ -446,18 +446,6 @@ func fileExists(path string) bool {
 	return err == nil
 }
 
-func openReadWriteCloser(path string) (io.ReadWriteCloser, error) {
-	file, err := os.OpenFile(path, os.O_RDWR, 0)
-	if err == nil {
-		return file, nil
-	}
-	readOnly, readOnlyErr := os.Open(path)
-	if readOnlyErr != nil {
-		return nil, err
-	}
-	return &readOnlyStream{ReadCloser: readOnly}, nil
-}
-
 func waitOrDone(ctx context.Context, delay time.Duration) bool {
 	if delay <= 0 {
 		delay = 10 * time.Millisecond

@@ -755,6 +755,8 @@ func configureCloudCommand(args []string) {
 }
 
 func signalNotifyContext() (context.Context, context.CancelFunc) {
+	// Ignore SIGHUP so transient USB serial hangups do not terminate the daemon.
+	signal.Ignore(syscall.SIGHUP)
 	return signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 }
 

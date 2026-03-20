@@ -12,6 +12,7 @@ ExecStart=/usr/bin/loramapr-receiverd -config /etc/loramapr/receiver.json
 WorkingDirectory=/var/lib/loramapr
 Restart=on-failure
 RestartSec=5
+RestartForceExitStatus=SIGHUP
 TimeoutStartSec=30
 TimeoutStopSec=30
 NoNewPrivileges=true
