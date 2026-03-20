@@ -301,6 +301,23 @@ func TestMergeNodeIDsDeduplicates(t *testing.T) {
 	}
 }
 
+func TestShouldBootstrapDeviceThrottle(t *testing.T) {
+	t.Parallel()
+
+	history := map[string]time.Time{}
+	now := time.Now().UTC()
+
+	if !shouldBootstrapDevice(history, "/dev/ttyACM0", now) {
+		t.Fatal("expected first bootstrap attempt to be allowed")
+	}
+	if shouldBootstrapDevice(history, "/dev/ttyACM0", now.Add(30*time.Second)) {
+		t.Fatal("expected second bootstrap attempt to be throttled")
+	}
+	if !shouldBootstrapDevice(history, "/dev/ttyACM0", now.Add(nativeBootstrapCooldown+time.Second)) {
+		t.Fatal("expected bootstrap attempt after cooldown to be allowed")
+	}
+}
+
 type testReadWriteStream struct {
 	io.Reader
 	io.Writer

@@ -18,8 +18,10 @@ const (
 	nativeSerialStart2        byte = 0xC3
 	nativeSerialWantConfigID       = 69420
 	nativeMaxFramePayloadSize      = 4096
-	nativeMaxDiscardedBytes        = 16 * 1024
+	nativeMaxDiscardedBytes        = 256 * 1024
 	nativePortNumPositionApp       = 3
+	nativeNoFrameHoldDelay         = 10 * time.Second
+	nativeDecodeHoldDelay          = 5 * time.Second
 )
 
 var errNoNativeFrames = errors.New("no Meshtastic native serial frames detected")
@@ -40,14 +42,31 @@ func (s *Service) consumeNativeSerial(ctx context.Context, device string, reader
 	}
 
 	decodeFailures := 0
+	noFrameSignals := 0
 	for {
 		payload, discarded, err := scanner.NextFrame()
 		if err != nil {
 			if errors.Is(err, errNoNativeFrames) {
-				return fmt.Errorf("native serial stream unreadable: %w", err)
+				noFrameSignals++
+				s.setSnapshot(func(snap *Snapshot) {
+					snap.State = StateDegraded
+					snap.DetectedDevice = device
+					snap.LastError = "native serial frames not detected yet; keeping device connection open"
+				})
+				s.logger.Warn(
+					"native serial frames not detected; keeping connection open",
+					"device", device,
+					"signals", noFrameSignals,
+				)
+				scanner.resetDiscarded()
+				if !waitOrDone(ctx, nativeNoFrameHoldDelay) {
+					return ctx.Err()
+				}
+				continue
 			}
 			return err
 		}
+		noFrameSignals = 0
 		if discarded > 0 {
 			s.logger.Debug("discarded non-frame bytes before native serial frame", "device", device, "discarded_bytes", discarded)
 		}
@@ -57,7 +76,15 @@ func (s *Service) consumeNativeSerial(ctx context.Context, device string, reader
 			decodeFailures++
 			s.logger.Warn("failed to decode native Meshtastic frame", "device", device, "err", err, "consecutive_failures", decodeFailures)
 			if decodeFailures >= 5 {
-				return fmt.Errorf("native serial decode failed repeatedly: %w", err)
+				s.setSnapshot(func(snap *Snapshot) {
+					snap.State = StateDegraded
+					snap.DetectedDevice = device
+					snap.LastError = "native serial decode failed repeatedly; holding connection for recovery"
+				})
+				decodeFailures = 0
+				if !waitOrDone(ctx, nativeDecodeHoldDelay) {
+					return ctx.Err()
+				}
 			}
 			continue
 		}
@@ -87,6 +114,10 @@ type nativeFrameScanner struct {
 	maxDiscarded int
 	discarded    int
 	seenFrames   int
+}
+
+func (s *nativeFrameScanner) resetDiscarded() {
+	s.discarded = 0
 }
 
 func (s *nativeFrameScanner) NextFrame() ([]byte, int, error) {

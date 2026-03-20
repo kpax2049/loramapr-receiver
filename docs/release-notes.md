@@ -1,5 +1,8 @@
 # LoRaMapr Receiver Release Notes
 
+For serial-stability and portal auto-refresh notes targeting `v2.16.7`, see
+`docs/release-notes-v2.16.7.md`.
+
 For serial-hangup/runtime hardening notes targeting `v2.16.3`, see
 `docs/release-notes-v2.16.3.md`.
 

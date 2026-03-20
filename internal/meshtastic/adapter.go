@@ -127,6 +127,7 @@ type Service struct {
 }
 
 const nativeNoFrameReconnectDelay = 15 * time.Second
+const nativeBootstrapCooldown = 5 * time.Minute
 
 func NewAdapter(cfg config.MeshtasticConfig, logger *slog.Logger) Adapter {
 	if logger == nil {
@@ -201,6 +202,7 @@ func (s *Service) Snapshot() Snapshot {
 
 func (s *Service) run(ctx context.Context, out chan Event) {
 	defer close(out)
+	bootstrapLast := map[string]time.Time{}
 
 	if s.cfg.Transport == "disabled" {
 		s.setSnapshot(func(snap *Snapshot) {
@@ -264,9 +266,9 @@ func (s *Service) run(ctx context.Context, out chan Event) {
 			continue
 		}
 
-		// Issue one best-effort bootstrap request to encourage native API frames.
+		// Issue a throttled best-effort bootstrap request to encourage native API frames.
 		// Failures are non-fatal so serial streams can still run in passive mode.
-		if s.cfg.Transport == "serial" {
+		if s.cfg.Transport == "serial" && shouldBootstrapDevice(bootstrapLast, detection.Device, time.Now().UTC()) {
 			if err := s.bootstrapNativeSession(stream); err != nil {
 				s.logger.Warn(
 					"native serial bootstrap write failed; continuing in passive mode",
@@ -308,6 +310,19 @@ func (s *Service) run(ctx context.Context, out chan Event) {
 			return
 		}
 	}
+}
+
+func shouldBootstrapDevice(history map[string]time.Time, device string, now time.Time) bool {
+	normalized := strings.TrimSpace(device)
+	if normalized == "" {
+		return false
+	}
+	last, ok := history[normalized]
+	if ok && now.Sub(last) < nativeBootstrapCooldown {
+		return false
+	}
+	history[normalized] = now
+	return true
 }
 
 func (s *Service) consumeStream(ctx context.Context, device string, stream io.ReadWriteCloser, out chan<- Event) error {

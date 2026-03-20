@@ -165,6 +165,25 @@
   <main>
     {{template "content" .}}
   </main>
+  <script>
+    (function() {
+      const autoRefreshPaths = new Set(["/", "/progress", "/troubleshooting", "/advanced"]);
+      if (!autoRefreshPaths.has(window.location.pathname)) {
+        return;
+      }
+      const refreshIntervalMs = 5000;
+      setInterval(function() {
+        if (document.hidden) {
+          return;
+        }
+        const active = document.activeElement;
+        if (active && (active.tagName === "INPUT" || active.tagName === "TEXTAREA")) {
+          return;
+        }
+        window.location.reload();
+      }, refreshIntervalMs);
+    })();
+  </script>
 </body>
 </html>
 {{end}}
