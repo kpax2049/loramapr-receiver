@@ -126,6 +126,8 @@ type Service struct {
 	reconnectDelay    time.Duration
 }
 
+const nativeNoFrameReconnectDelay = 15 * time.Second
+
 func NewAdapter(cfg config.MeshtasticConfig, logger *slog.Logger) Adapter {
 	if logger == nil {
 		logger = slog.Default()
@@ -262,19 +264,8 @@ func (s *Service) run(ctx context.Context, out chan Event) {
 			continue
 		}
 
-		if s.cfg.Transport == "serial" {
-			if err := s.bootstrapNativeSession(stream); err != nil {
-				_ = stream.Close()
-				s.setSnapshot(func(snap *Snapshot) {
-					snap.State = StateDegraded
-					snap.LastError = err.Error()
-				})
-				if !waitOrDone(ctx, s.reconnectDelay) {
-					return
-				}
-				continue
-			}
-		}
+		// Keep native serial in passive mode by default.
+		// Avoid writing bootstrap frames during first connection attempts.
 
 		s.setSnapshot(func(snap *Snapshot) {
 			snap.State = StateConnected
@@ -287,18 +278,22 @@ func (s *Service) run(ctx context.Context, out chan Event) {
 		if ctx.Err() != nil {
 			return
 		}
+		nextReconnectDelay := s.reconnectDelay
 		if err != nil && !errors.Is(err, io.EOF) {
 			s.setSnapshot(func(snap *Snapshot) {
 				snap.State = StateDegraded
 				snap.LastError = err.Error()
 			})
+			if errors.Is(err, errNoNativeFrames) {
+				nextReconnectDelay = maxDuration(nextReconnectDelay, nativeNoFrameReconnectDelay)
+			}
 		} else {
 			s.setSnapshot(func(snap *Snapshot) {
 				snap.State = StateDetected
 				snap.LastError = "connection closed"
 			})
 		}
-		if !waitOrDone(ctx, s.reconnectDelay) {
+		if !waitOrDone(ctx, nextReconnectDelay) {
 			return
 		}
 	}
@@ -474,6 +469,13 @@ func waitOrDone(ctx context.Context, delay time.Duration) bool {
 	case <-timer.C:
 		return true
 	}
+}
+
+func maxDuration(a, b time.Duration) time.Duration {
+	if b > a {
+		return b
+	}
+	return a
 }
 
 func mergeNodeIDs(existing, incoming []string) []string {
