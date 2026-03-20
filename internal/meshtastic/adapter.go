@@ -264,8 +264,19 @@ func (s *Service) run(ctx context.Context, out chan Event) {
 			continue
 		}
 
-		// Keep native serial in passive mode by default.
-		// Avoid writing bootstrap frames during first connection attempts.
+		// Issue one best-effort bootstrap request to encourage native API frames.
+		// Failures are non-fatal so serial streams can still run in passive mode.
+		if s.cfg.Transport == "serial" {
+			if err := s.bootstrapNativeSession(stream); err != nil {
+				s.logger.Warn(
+					"native serial bootstrap write failed; continuing in passive mode",
+					"device",
+					detection.Device,
+					"err",
+					err,
+				)
+			}
+		}
 
 		s.setSnapshot(func(snap *Snapshot) {
 			snap.State = StateConnected
