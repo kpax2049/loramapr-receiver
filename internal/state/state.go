@@ -1,10 +1,12 @@
 package state
 
 import (
+	"bytes"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -144,10 +146,11 @@ type MetadataState struct {
 }
 
 type Store struct {
-	path string
-	mu   sync.RWMutex
-	data Data
-	now  func() time.Time
+	path            string
+	mu              sync.RWMutex
+	data            Data
+	now             func() time.Time
+	recoveredOnLoad bool
 }
 
 func Open(path string) (*Store, error) {
@@ -177,7 +180,7 @@ func Open(path string) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	if changed || migrated {
+	if changed || migrated || s.recoveredOnLoad {
 		if err := s.Save(); err != nil {
 			return nil, err
 		}
@@ -197,10 +200,73 @@ func (s *Store) load() error {
 	if err != nil {
 		return err
 	}
-	if err := json.Unmarshal(data, &s.data); err != nil {
-		return err
+	decoded, recovered, err := decodeStateBytes(data)
+	if err != nil {
+		backupPath, backupErr := backupCorruptStateFile(s.path, data)
+		if backupErr != nil {
+			return fmt.Errorf("%w (backup failed: %v)", err, backupErr)
+		}
+		return fmt.Errorf("state file is corrupt; backed up to %s: %w", backupPath, os.ErrNotExist)
 	}
+
+	s.recoveredOnLoad = recovered
+	s.data = decoded
 	return nil
+}
+
+func decodeStateBytes(raw []byte) (Data, bool, error) {
+	var decoded Data
+	if err := json.Unmarshal(raw, &decoded); err == nil {
+		return decoded, false, nil
+	}
+
+	trimmed := bytes.Trim(raw, "\x00\r\n\t ")
+	if len(trimmed) > 0 && !bytes.Equal(trimmed, raw) {
+		if err := json.Unmarshal(trimmed, &decoded); err == nil {
+			return decoded, true, nil
+		}
+	}
+
+	if len(trimmed) > 0 {
+		start := bytes.IndexByte(trimmed, '{')
+		end := bytes.LastIndexByte(trimmed, '}')
+		if start >= 0 && end > start {
+			candidate := trimmed[start : end+1]
+			if err := json.Unmarshal(candidate, &decoded); err == nil {
+				return decoded, true, nil
+			}
+		}
+	}
+
+	dense := bytes.ReplaceAll(raw, []byte{0}, nil)
+	if len(dense) > 0 && !bytes.Equal(dense, raw) {
+		if err := json.Unmarshal(dense, &decoded); err == nil {
+			return decoded, true, nil
+		}
+	}
+
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		return Data{}, false, err
+	}
+	return decoded, false, nil
+}
+
+func backupCorruptStateFile(path string, payload []byte) (string, error) {
+	dir := filepath.Dir(path)
+	base := filepath.Base(path)
+	backupName := fmt.Sprintf("%s.corrupt-%s", base, time.Now().UTC().Format("20060102T150405Z"))
+	backupPath := filepath.Join(dir, backupName)
+	if err := os.Rename(path, backupPath); err == nil {
+		return backupPath, nil
+	}
+
+	if err := os.WriteFile(backupPath, payload, 0o600); err != nil {
+		return "", err
+	}
+	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return "", err
+	}
+	return backupPath, nil
 }
 
 func (s *Store) Save() error {
@@ -453,10 +519,17 @@ func (s *Store) write(snapshot Data) error {
 		_ = tmp.Close()
 		return err
 	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return err
+	}
 	if err := tmp.Close(); err != nil {
 		return err
 	}
 	if err := os.Rename(tmpPath, s.path); err != nil {
+		return err
+	}
+	if err := syncDirectory(dir); err != nil {
 		return err
 	}
 
@@ -503,4 +576,20 @@ func isKnownUpdateStatus(status string) bool {
 	default:
 		return false
 	}
+}
+
+func syncDirectory(path string) error {
+	dir, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer dir.Close()
+	if err := dir.Sync(); err != nil {
+		// Some filesystems may not support directory sync.
+		if errors.Is(err, os.ErrInvalid) {
+			return nil
+		}
+		return err
+	}
+	return nil
 }

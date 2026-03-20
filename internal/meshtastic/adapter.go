@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	goruntime "runtime"
+	"runtime/debug"
 	"sort"
 	"strings"
 	"sync"
@@ -167,7 +168,22 @@ func (s *Service) Start(ctx context.Context) (<-chan Event, error) {
 	events := s.events
 	s.mu.Unlock()
 
-	go s.run(ctx, events)
+	go func() {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				s.setSnapshot(func(snap *Snapshot) {
+					snap.State = StateDegraded
+					snap.LastError = fmt.Sprintf("meshtastic adapter panic recovered: %v", recovered)
+				})
+				s.logger.Error(
+					"meshtastic adapter panic recovered",
+					"panic", recovered,
+					"stack", string(debug.Stack()),
+				)
+			}
+		}()
+		s.run(ctx, events)
+	}()
 	return events, nil
 }
 

@@ -226,6 +226,43 @@ func TestServiceDegradedWhenNativeSerialUnreadable(t *testing.T) {
 	t.Fatalf("expected degraded native serial state, got state=%q err=%q", snap.State, snap.LastError)
 }
 
+func TestServiceRecoversAdapterPanic(t *testing.T) {
+	t.Parallel()
+
+	adapter := NewAdapter(config.MeshtasticConfig{Transport: "serial"}, nil).(*Service)
+	adapter.detectFn = func(_ config.MeshtasticConfig) (DetectionResult, error) {
+		panic("boom")
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	events, err := adapter.Start(ctx)
+	if err != nil {
+		t.Fatalf("Start returned error: %v", err)
+	}
+
+	select {
+	case _, ok := <-events:
+		if ok {
+			t.Fatal("expected event channel to close after panic recovery")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for event channel to close")
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		snap := adapter.Snapshot()
+		if snap.State == StateDegraded && strings.Contains(snap.LastError, "panic recovered") {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	snap := adapter.Snapshot()
+	t.Fatalf("expected degraded panic recovery snapshot, got state=%q err=%q", snap.State, snap.LastError)
+}
+
 func TestDetectDeviceWithConfiguredPath(t *testing.T) {
 	t.Parallel()
 

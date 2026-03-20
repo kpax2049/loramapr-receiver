@@ -3,6 +3,7 @@ package state
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -275,5 +276,67 @@ func TestOpenMigratesSchemaV6ToCurrent(t *testing.T) {
 	}
 	if snapshot.HomeAutoSession.DesiredConfigMode == "" {
 		t.Fatal("expected migrated desired_config_mode")
+	}
+}
+
+func TestOpenRecoversStateWithLeadingNullBytes(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "receiver-state.json")
+	payload := "\x00\x00{\n  \"schema_version\": 7,\n  \"installation\": {\"id\":\"abc123\",\"created_at\":\"2026-03-20T00:00:00Z\",\"last_started_at\":\"2026-03-20T00:00:00Z\"},\n  \"pairing\": {\"phase\":\"steady_state\"},\n  \"cloud\": {\"endpoint_url\":\"https://api.example.com\"},\n  \"runtime\": {\"profile\":\"linux-service\",\"mode\":\"service\"},\n  \"update\": {\"status\":\"unknown\"},\n  \"metadata\": {}\n}\x00"
+	if err := os.WriteFile(path, []byte(payload), 0o600); err != nil {
+		t.Fatalf("write recoverable state: %v", err)
+	}
+
+	store, err := Open(path)
+	if err != nil {
+		t.Fatalf("open recoverable state: %v", err)
+	}
+
+	snapshot := store.Snapshot()
+	if snapshot.Installation.ID != "abc123" {
+		t.Fatalf("expected recovered installation id abc123, got %q", snapshot.Installation.ID)
+	}
+	if snapshot.Pairing.Phase != PairingSteadyState {
+		t.Fatalf("expected recovered pairing phase %q, got %q", PairingSteadyState, snapshot.Pairing.Phase)
+	}
+
+	rewritten, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read rewritten state: %v", err)
+	}
+	if strings.HasPrefix(string(rewritten), "\x00") {
+		t.Fatal("expected rewritten state without leading null bytes")
+	}
+}
+
+func TestOpenBacksUpAndResetsUnrecoverableCorruptState(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "receiver-state.json")
+	if err := os.WriteFile(path, []byte("\x00\x00\x00\x00"), 0o600); err != nil {
+		t.Fatalf("write corrupt state: %v", err)
+	}
+
+	store, err := Open(path)
+	if err != nil {
+		t.Fatalf("open corrupt state: %v", err)
+	}
+
+	snapshot := store.Snapshot()
+	if snapshot.Installation.ID == "" {
+		t.Fatal("expected reset state to initialize installation id")
+	}
+	if snapshot.Pairing.Phase != PairingUnpaired {
+		t.Fatalf("expected reset pairing phase %q, got %q", PairingUnpaired, snapshot.Pairing.Phase)
+	}
+
+	matches, err := filepath.Glob(filepath.Join(dir, "receiver-state.json.corrupt-*"))
+	if err != nil {
+		t.Fatalf("glob corrupt backups: %v", err)
+	}
+	if len(matches) != 1 {
+		t.Fatalf("expected one corrupt backup file, got %d (%v)", len(matches), matches)
 	}
 }

@@ -121,6 +121,15 @@ Common first-run issue codes include:
 - `usb_serial_permission_denied`
 - `packets_not_ingesting`
 
+State-store safety notes:
+
+- If `/var/lib/loramapr/receiver-state.json` is corrupted (for example after an
+  unclean power loss), receiver now auto-recovers on startup.
+- The corrupt file is backed up as
+  `/var/lib/loramapr/receiver-state.json.corrupt-<timestamp>`.
+- Receiver then regenerates a clean state file so portal/service can come back
+  instead of crash-looping.
+
 These are surfaced on:
 
 - Portal **Welcome**, **Progress**, and **Troubleshooting**
