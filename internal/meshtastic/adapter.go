@@ -140,6 +140,10 @@ func NewAdapter(cfg config.MeshtasticConfig, logger *slog.Logger) Adapter {
 	cfg.Transport = transport
 
 	now := time.Now().UTC()
+	openStream := openReadWriteCloser
+	if cfg.Transport == "serial" && !cfg.BootstrapWrite {
+		openStream = openReadOnlyCloser
+	}
 	return &Service{
 		cfg:    cfg,
 		logger: logger.With("component", "meshtastic"),
@@ -150,7 +154,7 @@ func NewAdapter(cfg config.MeshtasticConfig, logger *slog.Logger) Adapter {
 			UpdatedAt: now,
 		},
 		detectFn:          DetectDevice,
-		openFn:            openReadWriteCloser,
+		openFn:            openStream,
 		detectionInterval: 3 * time.Second,
 		reconnectDelay:    2 * time.Second,
 	}
@@ -268,7 +272,7 @@ func (s *Service) run(ctx context.Context, out chan Event) {
 
 		// Issue a throttled best-effort bootstrap request to encourage native API frames.
 		// Failures are non-fatal so serial streams can still run in passive mode.
-		if s.cfg.Transport == "serial" && shouldBootstrapDevice(bootstrapLast, detection.Device, time.Now().UTC()) {
+		if s.cfg.Transport == "serial" && s.cfg.BootstrapWrite && shouldBootstrapDevice(bootstrapLast, detection.Device, time.Now().UTC()) {
 			if err := s.bootstrapNativeSession(stream); err != nil {
 				s.logger.Warn(
 					"native serial bootstrap write failed; continuing in passive mode",

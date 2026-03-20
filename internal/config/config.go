@@ -73,9 +73,10 @@ type UpdateConfig struct {
 }
 
 type MeshtasticConfig struct {
-	Transport string `json:"transport,omitempty"`
-	Device    string `json:"device,omitempty"`
-	Network   string `json:"network,omitempty"`
+	Transport      string `json:"transport,omitempty"`
+	Device         string `json:"device,omitempty"`
+	Network        string `json:"network,omitempty"`
+	BootstrapWrite bool   `json:"bootstrap_write,omitempty"`
 }
 
 type HomeAutoSessionMode string

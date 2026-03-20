@@ -26,7 +26,8 @@
   },
   "meshtastic": {
     "transport": "serial",
-    "device": ""
+    "device": "",
+    "bootstrap_write": false
   },
   "home_auto_session": {
     "enabled": false,

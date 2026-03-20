@@ -21,8 +21,9 @@ Configured via `meshtastic.transport`:
   - auto-detects likely serial devices on Linux/macOS
   - connects directly to native Meshtastic serial protocol frames on the
     selected device path
-  - sends an initial receiver-side config bootstrap request to move the node
-    into API/config stream behavior
+  - passive/read-only by default (`meshtastic.bootstrap_write=false`)
+  - optional throttled startup bootstrap request when
+    `meshtastic.bootstrap_write=true`
 - `json_stream`
   - reads newline-delimited JSON events from `meshtastic.device`
   - compatibility/test mode for sidecar-proxy pipes or fixture files

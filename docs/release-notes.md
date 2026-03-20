@@ -1,5 +1,8 @@
 # LoRaMapr Receiver Release Notes
 
+For passive-serial safety hotfix notes targeting `v2.16.8`, see
+`docs/release-notes-v2.16.8.md`.
+
 For serial-stability and portal auto-refresh notes targeting `v2.16.7`, see
 `docs/release-notes-v2.16.7.md`.
 

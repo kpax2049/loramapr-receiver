@@ -55,7 +55,8 @@ Example (local-dev defaults):
     "min_supported_version": ""
   },
   "meshtastic": {
-    "transport": "serial"
+    "transport": "serial",
+    "bootstrap_write": false
   },
   "home_auto_session": {
     "enabled": false,
@@ -93,6 +94,7 @@ Packaged Linux/Pi defaults (`/etc/loramapr/receiver.json`) are:
 - `portal.bind_address = "0.0.0.0:8080"`
 - `cloud.base_url = "https://loramapr.com"`
 - `meshtastic.transport = "serial"` (auto-detect device if not pinned)
+- `meshtastic.bootstrap_write = false` (passive serial by default)
 
 Packaged config source template:
 
@@ -148,6 +150,13 @@ Transport behavior:
 - `json_stream`: newline-delimited JSON compatibility mode for fixtures/tests or
   explicit sidecar feeds.
 - `disabled`: Meshtastic adapter remains inactive.
+
+### `meshtastic.bootstrap_write`
+
+- `false` (default): passive serial mode; receiver does not write bootstrap
+  frames to the attached node on startup.
+- `true`: receiver may send a throttled startup bootstrap request to encourage
+  native config/status streaming on compatible nodes.
 
 ### `home_auto_session` block
 
