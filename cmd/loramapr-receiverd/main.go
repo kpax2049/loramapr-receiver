@@ -51,6 +51,8 @@ func main() {
 		resetPairingCommand(args[1:])
 	case "configure-cloud":
 		configureCloudCommand(args[1:])
+	case "meshtastic-bridge":
+		meshtasticBridgeCommand(args[1:])
 	default:
 		if strings.HasPrefix(cmd, "-") {
 			runCommand(args)
@@ -58,6 +60,26 @@ func main() {
 		}
 		printUsage()
 		os.Exit(2)
+	}
+}
+
+func meshtasticBridgeCommand(args []string) {
+	flags := flag.NewFlagSet("meshtastic-bridge", flag.ExitOnError)
+	device := flags.String("device", "", "Meshtastic serial device path")
+	_ = flags.Parse(args)
+
+	if strings.TrimSpace(*device) == "" {
+		slog.Error("meshtastic bridge failed: -device is required")
+		os.Exit(2)
+	}
+
+	ctx, cancel := signalNotifyContext()
+	defer cancel()
+
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	if err := meshtastic.RunNativeBridge(ctx, *device, os.Stdout, logger.With("component", "meshtastic-bridge")); err != nil {
+		logger.Error("meshtastic bridge failed", "device", *device, "err", err)
+		os.Exit(1)
 	}
 }
 
@@ -771,6 +793,7 @@ func printUsage() {
 	fmt.Println("  loramapr-receiverd support-snapshot [flags]  Export redacted support bundle")
 	fmt.Println("  loramapr-receiverd reset-pairing [flags]     Clear local receiver credentials and pair again")
 	fmt.Println("  loramapr-receiverd configure-cloud [flags]   Update cloud.base_url in config")
+	fmt.Println("  loramapr-receiverd meshtastic-bridge [flags] Emit NDJSON Meshtastic events (internal bridge helper)")
 	fmt.Println("")
 	fmt.Println("If no subcommand is provided, run mode is used.")
 	fmt.Println("For install guides, see docs/linux-pi-distribution.md (recommended) and docs/raspberry-pi-appliance.md (deprecated).")

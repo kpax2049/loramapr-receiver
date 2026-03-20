@@ -1,5 +1,8 @@
 # LoRaMapr Receiver Release Notes
 
+For bridge-default + SSE portal notes targeting `v3.0.0`, see
+`docs/release-notes-v3.0.0.md`.
+
 For passive-serial safety hotfix notes targeting `v2.16.8`, see
 `docs/release-notes-v2.16.8.md`.
 

@@ -18,12 +18,19 @@ The adapter is intentionally isolated from cloud posting logic and provides:
 Configured via `meshtastic.transport`:
 
 - `serial` (default)
-  - auto-detects likely serial devices on Linux/macOS
-  - connects directly to native Meshtastic serial protocol frames on the
-    selected device path
+  - direct native Meshtastic serial protocol path (advanced/compat mode)
   - passive/read-only by default (`meshtastic.bootstrap_write=false`)
   - optional throttled startup bootstrap request when
     `meshtastic.bootstrap_write=true`
+- `bridge` (packaged Linux/Pi default)
+  - auto-detects likely serial devices on Linux/macOS
+  - runs a supervised bridge subprocess that emits NDJSON
+  - receiver consumes bridge output through the same normalization pipeline used
+    for `json_stream`
+  - default bridge command is internal:
+    `loramapr-receiverd meshtastic-bridge -device <detected-device>`
+  - optional override via `meshtastic.bridge_command` and
+    `meshtastic.bridge_args`
 - `json_stream`
   - reads newline-delimited JSON events from `meshtastic.device`
   - compatibility/test mode for sidecar-proxy pipes or fixture files
@@ -34,7 +41,7 @@ Configured via `meshtastic.transport`:
 
 If `meshtastic.device` is explicitly configured and exists, it is used directly.
 
-Otherwise, for `serial` mode:
+Otherwise, for `serial` and `bridge` modes:
 
 - Linux patterns:
   - `/dev/serial/by-id/*`
@@ -75,7 +82,10 @@ Two event kinds:
     - LoRa share settings (if present)
     - Meshtastic share URL text (if present)
 
-`serial` mode normalizes native `FromRadio` protobuf frames.
+`serial` mode normalizes native `FromRadio` protobuf frames directly.
+
+`bridge` mode uses the same normalized model, but frames are decoded in a
+separate bridge subprocess and sent as NDJSON.
 
 `json_stream` mode expects newline-delimited JSON records containing
 `type: "packet"` or `type: "status"`.

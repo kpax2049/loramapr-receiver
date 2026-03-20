@@ -56,7 +56,9 @@ Example (local-dev defaults):
   },
   "meshtastic": {
     "transport": "serial",
-    "bootstrap_write": false
+    "bootstrap_write": false,
+    "bridge_command": "",
+    "bridge_args": []
   },
   "home_auto_session": {
     "enabled": false,
@@ -93,8 +95,8 @@ Packaged Linux/Pi defaults (`/etc/loramapr/receiver.json`) are:
 - `paths.state_file = "/var/lib/loramapr/receiver-state.json"`
 - `portal.bind_address = "0.0.0.0:8080"`
 - `cloud.base_url = "https://loramapr.com"`
-- `meshtastic.transport = "serial"` (auto-detect device if not pinned)
-- `meshtastic.bootstrap_write = false` (passive serial by default)
+- `meshtastic.transport = "bridge"` (auto-detect device if not pinned)
+- `meshtastic.bootstrap_write = false` (serial-mode startup writes disabled)
 
 Packaged config source template:
 
@@ -140,16 +142,31 @@ This logic is informational only; no self-update actions are performed.
 ### `meshtastic.transport`
 
 - `serial`
+- `bridge`
 - `json_stream`
 - `disabled`
 
 Transport behavior:
 
-- `serial` (default): native Meshtastic USB serial framing/protobuf path used for
-  supported Pi/Linux installs.
+- `bridge` (packaged default): supervised subprocess bridge feeding
+  newline-delimited JSON events into the receiver runtime.
+- `serial`: direct native Meshtastic USB serial framing/protobuf path.
 - `json_stream`: newline-delimited JSON compatibility mode for fixtures/tests or
   explicit sidecar feeds.
 - `disabled`: Meshtastic adapter remains inactive.
+
+### `meshtastic.bridge_command` and `meshtastic.bridge_args`
+
+Optional override for bridge process command/args:
+
+- `bridge_command`: executable path
+- `bridge_args`: argument list
+
+Supported token substitution in command and args:
+
+- `{{device}}`
+- `${MESHTASTIC_PORT}`
+- `$MESHTASTIC_PORT`
 
 ### `meshtastic.bootstrap_write`
 

@@ -122,6 +122,7 @@ type Service struct {
 
 	detectFn          func(config.MeshtasticConfig) (DetectionResult, error)
 	openFn            func(path string) (io.ReadWriteCloser, error)
+	startBridgeFn     func(context.Context, config.MeshtasticConfig, string, *slog.Logger) (*bridgeCommandSession, error)
 	detectionInterval time.Duration
 	reconnectDelay    time.Duration
 }
@@ -155,6 +156,7 @@ func NewAdapter(cfg config.MeshtasticConfig, logger *slog.Logger) Adapter {
 		},
 		detectFn:          DetectDevice,
 		openFn:            openStream,
+		startBridgeFn:     startBridgeCommand,
 		detectionInterval: 3 * time.Second,
 		reconnectDelay:    2 * time.Second,
 	}
@@ -258,44 +260,16 @@ func (s *Service) run(ctx context.Context, out chan Event) {
 		s.setSnapshot(func(snap *Snapshot) {
 			snap.State = StateConnecting
 		})
-		stream, err := s.openFn(detection.Device)
-		if err != nil {
-			s.setSnapshot(func(snap *Snapshot) {
-				snap.State = StateDegraded
-				snap.LastError = err.Error()
-			})
-			if !waitOrDone(ctx, s.reconnectDelay) {
-				return
-			}
-			continue
+		nextReconnectDelay := s.reconnectDelay
+		if strings.EqualFold(s.cfg.Transport, "bridge") {
+			nextReconnectDelay, err = s.consumeBridge(ctx, detection, out)
+		} else {
+			nextReconnectDelay, err = s.consumeDirect(ctx, detection, bootstrapLast, out)
 		}
-
-		// Issue a throttled best-effort bootstrap request to encourage native API frames.
-		// Failures are non-fatal so serial streams can still run in passive mode.
-		if s.cfg.Transport == "serial" && s.cfg.BootstrapWrite && shouldBootstrapDevice(bootstrapLast, detection.Device, time.Now().UTC()) {
-			if err := s.bootstrapNativeSession(stream); err != nil {
-				s.logger.Warn(
-					"native serial bootstrap write failed; continuing in passive mode",
-					"device",
-					detection.Device,
-					"err",
-					err,
-				)
-			}
-		}
-
-		s.setSnapshot(func(snap *Snapshot) {
-			snap.State = StateConnected
-			snap.DetectedDevice = detection.Device
-			snap.LastError = ""
-		})
-
-		err = s.consumeStream(ctx, detection.Device, stream, out)
-		_ = stream.Close()
 		if ctx.Err() != nil {
 			return
 		}
-		nextReconnectDelay := s.reconnectDelay
+
 		if err != nil && !errors.Is(err, io.EOF) {
 			s.setSnapshot(func(snap *Snapshot) {
 				snap.State = StateDegraded
@@ -314,6 +288,70 @@ func (s *Service) run(ctx context.Context, out chan Event) {
 			return
 		}
 	}
+}
+
+func (s *Service) consumeDirect(ctx context.Context, detection DetectionResult, bootstrapLast map[string]time.Time, out chan<- Event) (time.Duration, error) {
+	stream, err := s.openFn(detection.Device)
+	if err != nil {
+		return s.reconnectDelay, err
+	}
+	defer stream.Close()
+
+	// Issue a throttled best-effort bootstrap request to encourage native API frames.
+	// Failures are non-fatal so serial streams can still run in passive mode.
+	if s.cfg.Transport == "serial" && s.cfg.BootstrapWrite && shouldBootstrapDevice(bootstrapLast, detection.Device, time.Now().UTC()) {
+		if err := s.bootstrapNativeSession(stream); err != nil {
+			s.logger.Warn(
+				"native serial bootstrap write failed; continuing in passive mode",
+				"device",
+				detection.Device,
+				"err",
+				err,
+			)
+		}
+	}
+
+	s.setSnapshot(func(snap *Snapshot) {
+		snap.State = StateConnected
+		snap.DetectedDevice = detection.Device
+		snap.LastError = ""
+	})
+	err = s.consumeStream(ctx, detection.Device, stream, out)
+	return s.reconnectDelay, err
+}
+
+func (s *Service) consumeBridge(ctx context.Context, detection DetectionResult, out chan<- Event) (time.Duration, error) {
+	startedAt := time.Now().UTC()
+	session, err := s.startBridgeFn(ctx, s.cfg, detection.Device, s.logger)
+	if err != nil {
+		return s.reconnectDelay, err
+	}
+	defer session.stop()
+
+	s.setSnapshot(func(snap *Snapshot) {
+		snap.State = StateConnected
+		snap.DetectedDevice = detection.Device
+		snap.LastError = ""
+	})
+
+	consumeErr := s.consumeJSONStream(ctx, detection.Device, session.stdout, out)
+	waitErr := session.stop()
+
+	if ctx.Err() != nil {
+		return s.reconnectDelay, ctx.Err()
+	}
+	if consumeErr == nil || errors.Is(consumeErr, io.EOF) {
+		if waitErr != nil && !errors.Is(waitErr, context.Canceled) {
+			consumeErr = fmt.Errorf("meshtastic bridge command exited: %w", waitErr)
+		}
+	}
+	if consumeErr != nil && !errors.Is(consumeErr, io.EOF) {
+		if time.Since(startedAt) < 3*time.Second {
+			return maxDuration(s.reconnectDelay, 8*time.Second), consumeErr
+		}
+		return s.reconnectDelay, consumeErr
+	}
+	return s.reconnectDelay, consumeErr
 }
 
 func shouldBootstrapDevice(history map[string]time.Time, device string, now time.Time) bool {
@@ -546,7 +584,7 @@ func mergeNodeIDs(existing, incoming []string) []string {
 
 func isSupportedTransport(value string) bool {
 	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "serial", "json_stream", "disabled":
+	case "serial", "bridge", "json_stream", "disabled":
 		return true
 	default:
 		return false

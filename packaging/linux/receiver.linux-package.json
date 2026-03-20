@@ -25,9 +25,11 @@
     "min_supported_version": ""
   },
   "meshtastic": {
-    "transport": "serial",
+    "transport": "bridge",
     "device": "",
-    "bootstrap_write": false
+    "bootstrap_write": false,
+    "bridge_command": "",
+    "bridge_args": []
   },
   "home_auto_session": {
     "enabled": false,

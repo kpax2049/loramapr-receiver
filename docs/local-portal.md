@@ -55,6 +55,7 @@ API routes:
 - `GET /healthz`
 - `GET /readyz`
 - `GET /api/status`
+- `GET /api/events/status` (SSE status stream)
 - `GET /api/ops`
 - `POST /api/pairing/code`
 - `POST /api/lifecycle/reset`
@@ -64,6 +65,10 @@ API routes:
 - coarse operational check summary
 - derived attention object (`state/category/code/summary/hint`)
 - `setup_issues[]` root-cause list for first-run blockers
+
+Portal pages (`/`, `/progress`, `/troubleshooting`, `/advanced`) subscribe to
+`/api/events/status` and auto-refresh only when status changes. Fallback refresh
+is low-rate and only used if SSE is unavailable.
 
 ## Attention States (User Meaning)
 

@@ -175,6 +175,44 @@ func TestOpsAPI(t *testing.T) {
 	}
 }
 
+func TestStatusEventsAPI(t *testing.T) {
+	t.Parallel()
+
+	srv := newTestServer(t)
+	req := httptest.NewRequest(http.MethodGet, "/api/events/status", nil)
+	ctx, cancel := context.WithCancel(req.Context())
+	req = req.WithContext(ctx)
+	rec := httptest.NewRecorder()
+
+	done := make(chan struct{})
+	go func() {
+		srv.Handler().ServeHTTP(rec, req)
+		close(done)
+	}()
+	time.Sleep(60 * time.Millisecond)
+	cancel()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for SSE handler to return")
+	}
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	if got := rec.Header().Get("Content-Type"); !strings.Contains(got, "text/event-stream") {
+		t.Fatalf("expected event-stream content type, got %q", got)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "event: status") {
+		t.Fatalf("expected SSE status event payload")
+	}
+	if !strings.Contains(body, "\"installation_id\":\"install-1\"") {
+		t.Fatalf("expected serialized status snapshot payload")
+	}
+}
+
 func TestOpsAPIIncludesSetupIssues(t *testing.T) {
 	t.Parallel()
 

@@ -171,17 +171,65 @@
       if (!autoRefreshPaths.has(window.location.pathname)) {
         return;
       }
-      const refreshIntervalMs = 5000;
+
+      function shouldDelayReload() {
+        if (document.hidden) {
+          return true;
+        }
+        const active = document.activeElement;
+        return !!(active && (active.tagName === "INPUT" || active.tagName === "TEXTAREA"));
+      }
+
+      function reloadWhenSafe() {
+        if (shouldDelayReload()) {
+          setTimeout(reloadWhenSafe, 800);
+          return;
+        }
+        window.location.reload();
+      }
+
+      if (typeof window.EventSource !== "function") {
+        setInterval(function() {
+          reloadWhenSafe();
+        }, 15000);
+        return;
+      }
+
+      let lastUpdatedAt = null;
+      const source = new EventSource("/api/events/status");
+      source.addEventListener("status", function(event) {
+        if (!event || !event.data) {
+          return;
+        }
+        let payload;
+        try {
+          payload = JSON.parse(event.data);
+        } catch (_) {
+          return;
+        }
+        const nextUpdatedAt = (payload && payload.updated_at) || null;
+        if (!nextUpdatedAt) {
+          return;
+        }
+        if (lastUpdatedAt === null) {
+          lastUpdatedAt = nextUpdatedAt;
+          return;
+        }
+        if (nextUpdatedAt !== lastUpdatedAt) {
+          lastUpdatedAt = nextUpdatedAt;
+          reloadWhenSafe();
+        }
+      });
+      source.onerror = function() {
+        // EventSource retries automatically. Keep a low-rate fallback refresh.
+      };
+
       setInterval(function() {
         if (document.hidden) {
           return;
         }
-        const active = document.activeElement;
-        if (active && (active.tagName === "INPUT" || active.tagName === "TEXTAREA")) {
-          return;
-        }
-        window.location.reload();
-      }, refreshIntervalMs);
+        reloadWhenSafe();
+      }, 30000);
     })();
   </script>
 </body>

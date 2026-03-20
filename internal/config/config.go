@@ -73,10 +73,12 @@ type UpdateConfig struct {
 }
 
 type MeshtasticConfig struct {
-	Transport      string `json:"transport,omitempty"`
-	Device         string `json:"device,omitempty"`
-	Network        string `json:"network,omitempty"`
-	BootstrapWrite bool   `json:"bootstrap_write,omitempty"`
+	Transport      string   `json:"transport,omitempty"`
+	Device         string   `json:"device,omitempty"`
+	Network        string   `json:"network,omitempty"`
+	BootstrapWrite bool     `json:"bootstrap_write,omitempty"`
+	BridgeCommand  string   `json:"bridge_command,omitempty"`
+	BridgeArgs     []string `json:"bridge_args,omitempty"`
 }
 
 type HomeAutoSessionMode string
@@ -296,7 +298,7 @@ func (c Config) Validate() error {
 	}
 
 	switch strings.ToLower(strings.TrimSpace(c.Meshtastic.Transport)) {
-	case "serial", "json_stream", "disabled":
+	case "serial", "bridge", "json_stream", "disabled":
 	default:
 		return fmt.Errorf("invalid meshtastic.transport %q", c.Meshtastic.Transport)
 	}
@@ -371,6 +373,8 @@ func (c *Config) applyDefaults() {
 	if c.Meshtastic.Transport == "" {
 		c.Meshtastic.Transport = defaults.Meshtastic.Transport
 	}
+	c.Meshtastic.BridgeCommand = strings.TrimSpace(c.Meshtastic.BridgeCommand)
+	c.Meshtastic.BridgeArgs = normalizeStringSlice(c.Meshtastic.BridgeArgs)
 	if c.HomeAutoSession.Mode == "" {
 		c.HomeAutoSession.Mode = defaults.HomeAutoSession.Mode
 	}
@@ -480,6 +484,18 @@ func normalizeNodeIDs(input []string) []string {
 			continue
 		}
 		seen[lower] = struct{}{}
+		out = append(out, value)
+	}
+	return out
+}
+
+func normalizeStringSlice(input []string) []string {
+	out := make([]string, 0, len(input))
+	for _, raw := range input {
+		value := strings.TrimSpace(raw)
+		if value == "" {
+			continue
+		}
 		out = append(out, value)
 	}
 	return out

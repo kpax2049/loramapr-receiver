@@ -92,6 +92,10 @@ if ! grep -Fq '"base_url": "https://loramapr.com"' "${CONFIG_PATH}"; then
   echo "packaged config missing production cloud base_url default" >&2
   exit 1
 fi
+if ! grep -Fq '"transport": "bridge"' "${CONFIG_PATH}"; then
+  echo "packaged config missing bridge transport default" >&2
+  exit 1
+fi
 
 for required_control in postinst prerm postrm conffiles; do
   if [[ ! -f "${CONTROL_DIR}/${required_control}" ]]; then

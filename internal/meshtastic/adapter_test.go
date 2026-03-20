@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -172,6 +173,54 @@ func TestServiceJSONStreamCompatibility(t *testing.T) {
 		select {
 		case <-timeout:
 			t.Fatal("timed out waiting for json_stream events")
+		case event := <-events:
+			switch event.Kind {
+			case EventStatus:
+				seenStatus = true
+			case EventPacket:
+				seenPacket = true
+			}
+		}
+	}
+}
+
+func TestServiceBridgeTransportCompatibility(t *testing.T) {
+	t.Parallel()
+
+	adapter := NewAdapter(config.MeshtasticConfig{Transport: "bridge"}, nil).(*Service)
+	adapter.detectFn = func(_ config.MeshtasticConfig) (DetectionResult, error) {
+		return DetectionResult{Device: "/tmp/ttyACM0", Candidates: []string{"/tmp/ttyACM0"}}, nil
+	}
+	adapter.startBridgeFn = func(_ context.Context, _ config.MeshtasticConfig, _ string, _ *slog.Logger) (*bridgeCommandSession, error) {
+		waitCh := make(chan error, 1)
+		waitCh <- nil
+		close(waitCh)
+		return &bridgeCommandSession{
+			stdout: io.NopCloser(strings.NewReader(strings.Join([]string{
+				`{"type":"status","local_node_id":"!home","observed_node_ids":["!node-1"]}`,
+				`{"type":"packet","from":"!node-1","payload":"hello","port":1}`,
+				"",
+			}, "\n"))),
+			waitCh: waitCh,
+		}, nil
+	}
+	adapter.detectionInterval = 5 * time.Millisecond
+	adapter.reconnectDelay = 5 * time.Millisecond
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	events, err := adapter.Start(ctx)
+	if err != nil {
+		t.Fatalf("Start returned error: %v", err)
+	}
+
+	seenStatus := false
+	seenPacket := false
+	timeout := time.After(2 * time.Second)
+	for !(seenStatus && seenPacket) {
+		select {
+		case <-timeout:
+			t.Fatal("timed out waiting for bridge events")
 		case event := <-events:
 			switch event.Kind {
 			case EventStatus:

@@ -67,6 +67,36 @@ func TestLoadRejectsInvalidMeshtasticTransport(t *testing.T) {
 	}
 }
 
+func TestLoadAcceptsBridgeMeshtasticTransport(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "receiver.json")
+	raw := `{
+  "meshtastic": {
+    "transport": "bridge",
+    "bridge_command": "meshtastic-json-bridge",
+    "bridge_args": ["--port", "{{device}}"]
+  }
+}`
+	if err := os.WriteFile(path, []byte(raw), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+	if cfg.Meshtastic.Transport != "bridge" {
+		t.Fatalf("expected bridge transport, got %q", cfg.Meshtastic.Transport)
+	}
+	if cfg.Meshtastic.BridgeCommand != "meshtastic-json-bridge" {
+		t.Fatalf("unexpected bridge command: %q", cfg.Meshtastic.BridgeCommand)
+	}
+	if len(cfg.Meshtastic.BridgeArgs) != 2 {
+		t.Fatalf("unexpected bridge args: %#v", cfg.Meshtastic.BridgeArgs)
+	}
+}
+
 func TestLoadRejectsInvalidRuntimeProfile(t *testing.T) {
 	t.Parallel()
 
@@ -175,6 +205,9 @@ func TestSaveAndLoadRoundTrip(t *testing.T) {
 	cfg.Update.Enabled = true
 	cfg.Update.ManifestURL = "https://downloads.loramapr.com/receiver/stable/latest/cloud-manifest.fragment.json"
 	cfg.Update.MinSupportedVersion = "v2.2.0"
+	cfg.Meshtastic.Transport = "bridge"
+	cfg.Meshtastic.BridgeCommand = "meshtastic-json-bridge"
+	cfg.Meshtastic.BridgeArgs = []string{"--port", "{{device}}", ""}
 	cfg.HomeAutoSession.Enabled = true
 	cfg.HomeAutoSession.Mode = HomeAutoSessionModeObserve
 	cfg.HomeAutoSession.Home = HomeGeofenceConfig{
@@ -223,6 +256,15 @@ func TestSaveAndLoadRoundTrip(t *testing.T) {
 	}
 	if loaded.Update.MinSupportedVersion != "v2.2.0" {
 		t.Fatalf("unexpected update min supported version: %s", loaded.Update.MinSupportedVersion)
+	}
+	if loaded.Meshtastic.Transport != "bridge" {
+		t.Fatalf("unexpected meshtastic transport: %s", loaded.Meshtastic.Transport)
+	}
+	if loaded.Meshtastic.BridgeCommand != "meshtastic-json-bridge" {
+		t.Fatalf("unexpected bridge command: %s", loaded.Meshtastic.BridgeCommand)
+	}
+	if len(loaded.Meshtastic.BridgeArgs) != 2 {
+		t.Fatalf("unexpected bridge args: %#v", loaded.Meshtastic.BridgeArgs)
 	}
 	if !loaded.HomeAutoSession.Enabled || loaded.HomeAutoSession.Mode != HomeAutoSessionModeObserve {
 		t.Fatalf("unexpected home_auto_session config: %#v", loaded.HomeAutoSession)

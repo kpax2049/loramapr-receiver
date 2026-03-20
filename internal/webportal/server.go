@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"html/template"
+	"io"
 	"log/slog"
 	"net/http"
 	goruntime "runtime"
@@ -111,6 +112,7 @@ func New(addr string, statusProvider StatusProvider, pairing PairingCodeSubmitte
 	mux.HandleFunc("/healthz", s.handleHealth)
 	mux.HandleFunc("/readyz", s.handleReady)
 	mux.HandleFunc("/api/status", s.handleStatus)
+	mux.HandleFunc("/api/events/status", s.handleStatusEvents)
 	mux.HandleFunc("/api/ops", s.handleOps)
 	mux.HandleFunc("/api/pairing/code", s.handlePairingCode)
 	mux.HandleFunc("/api/lifecycle/reset", s.handleLifecycleReset)
@@ -192,6 +194,75 @@ func (s *Server) handleStatus(w http.ResponseWriter, _ *http.Request) {
 		return
 	}
 	_, _ = w.Write(payload)
+}
+
+func (s *Server) handleStatusEvents(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", http.MethodGet)
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.status == nil {
+		http.Error(w, "status unavailable", http.StatusServiceUnavailable)
+		return
+	}
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
+
+	send := func(snap status.Snapshot) bool {
+		payload, err := json.Marshal(snap)
+		if err != nil {
+			s.logger.Error("status event encoding failed", "err", err)
+			return false
+		}
+		if _, err := fmt.Fprintf(w, "event: status\ndata: %s\n\n", payload); err != nil {
+			return false
+		}
+		flusher.Flush()
+		return true
+	}
+
+	initial := s.status.CurrentStatus()
+	lastUpdated := initial.UpdatedAt.UTC().Format(time.RFC3339Nano)
+	if !send(initial) {
+		return
+	}
+
+	updateTicker := time.NewTicker(1 * time.Second)
+	defer updateTicker.Stop()
+	keepaliveTicker := time.NewTicker(15 * time.Second)
+	defer keepaliveTicker.Stop()
+
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case <-updateTicker.C:
+			snap := s.status.CurrentStatus()
+			nextUpdated := snap.UpdatedAt.UTC().Format(time.RFC3339Nano)
+			if nextUpdated == lastUpdated {
+				continue
+			}
+			lastUpdated = nextUpdated
+			if !send(snap) {
+				return
+			}
+		case <-keepaliveTicker.C:
+			if _, err := io.WriteString(w, ": keepalive\n\n"); err != nil {
+				return
+			}
+			flusher.Flush()
+		}
+	}
 }
 
 func (s *Server) handleOps(w http.ResponseWriter, _ *http.Request) {
