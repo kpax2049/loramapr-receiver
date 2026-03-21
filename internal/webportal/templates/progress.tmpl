@@ -6,21 +6,20 @@
   <div class="hint {{.FlashClass}}">{{.Flash}}</div>
   {{end}}
   <div class="status-grid">
-    <div class="status-chip"><div class="label">Local Receiver Name</div><div class="value">{{if .Snapshot.LocalName}}{{.Snapshot.LocalName}}{{else}}unnamed{{end}}</div></div>
-    <div class="status-chip"><div class="label">Cloud Receiver</div><div class="value">{{if .Snapshot.CloudReceiverLabel}}{{.Snapshot.CloudReceiverLabel}}{{else if .Snapshot.CloudReceiverID}}{{.Snapshot.CloudReceiverID}}{{else}}not assigned{{end}}</div></div>
-    <div class="status-chip"><div class="label">Pairing State</div><div class="value mono">{{.Snapshot.PairingPhase}}</div></div>
-    <div class="status-chip"><div class="label">Cloud Connectivity</div><div class="value">{{.Snapshot.CloudStatus}}</div></div>
-    <div class="status-chip"><div class="label">Network</div><div class="value">{{.NetworkState}}</div></div>
-    <div class="status-chip"><div class="label">Service State</div><div class="value">{{.Snapshot.Lifecycle}}</div></div>
-    <div class="status-chip"><div class="label">Meshtastic Status</div><div class="value">{{.MeshtasticState}}</div></div>
-    <div class="status-chip"><div class="label">Update Status</div><div class="value mono">{{if .Snapshot.UpdateStatus}}{{.Snapshot.UpdateStatus}}{{else}}unknown{{end}}</div></div>
-    <div class="status-chip"><div class="label">Issue Code</div><div class="value mono">{{if .Snapshot.FailureCode}}{{.Snapshot.FailureCode}}{{else}}none{{end}}</div></div>
+    <div class="status-chip"><div class="label">Local Receiver Name</div><div class="value" data-status-key="local_name">{{if .Snapshot.LocalName}}{{.Snapshot.LocalName}}{{else}}unnamed{{end}}</div></div>
+    <div class="status-chip"><div class="label">Cloud Receiver</div><div class="value" data-status-key="cloud_receiver_display">{{if .Snapshot.CloudReceiverLabel}}{{.Snapshot.CloudReceiverLabel}}{{else if .Snapshot.CloudReceiverID}}{{.Snapshot.CloudReceiverID}}{{else}}not assigned{{end}}</div></div>
+    <div class="status-chip"><div class="label">Pairing State</div><div class="value mono" data-status-key="pairing_phase">{{.Snapshot.PairingPhase}}</div></div>
+    <div class="status-chip"><div class="label">Cloud Connectivity</div><div class="value" data-status-key="cloud_status">{{.Snapshot.CloudStatus}}</div></div>
+    <div class="status-chip"><div class="label">Network</div><div class="value" data-status-key="network_state">{{.NetworkState}}</div></div>
+    <div class="status-chip"><div class="label">Service State</div><div class="value" data-status-key="lifecycle">{{.Snapshot.Lifecycle}}</div></div>
+    <div class="status-chip"><div class="label">Meshtastic Status</div><div class="value" data-status-key="meshtastic_state">{{.MeshtasticState}}</div></div>
+    <div class="status-chip"><div class="label">Update Status</div><div class="value mono" data-status-key="update_status">{{if .Snapshot.UpdateStatus}}{{.Snapshot.UpdateStatus}}{{else}}unknown{{end}}</div></div>
+    <div class="status-chip"><div class="label">Issue Code</div><div class="value mono" data-status-key="failure_code">{{if .Snapshot.FailureCode}}{{.Snapshot.FailureCode}}{{else}}none{{end}}</div></div>
     <div class="status-chip">
       <div class="label">Attention</div>
-      <div class="value">
+      <div class="value mono" data-status-key="attention_state_code">
         {{if and .Attention.State (ne .Attention.State "none")}}
-          <span class="badge {{.Attention.State}}">{{.Attention.State}}</span>
-          {{if .Attention.Code}} <span class="mono">{{.Attention.Code}}</span>{{end}}
+          {{.Attention.State}}{{if .Attention.Code}} {{.Attention.Code}}{{end}}
         {{else}}
           none
         {{end}}

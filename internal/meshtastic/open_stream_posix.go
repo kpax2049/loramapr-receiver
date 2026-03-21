@@ -13,6 +13,7 @@ func openReadOnlyCloser(path string) (io.ReadWriteCloser, error) {
 	if err != nil {
 		return nil, err
 	}
+	configureSerialFile(readOnly)
 	return &readOnlyStream{ReadCloser: readOnly}, nil
 }
 
@@ -20,6 +21,7 @@ func openReadWriteCloser(path string) (io.ReadWriteCloser, error) {
 	flags := os.O_RDWR | syscall.O_NOCTTY
 	file, err := os.OpenFile(path, flags, 0)
 	if err == nil {
+		configureSerialFile(file)
 		return file, nil
 	}
 	readOnly, readOnlyErr := openReadOnlyCloser(path)

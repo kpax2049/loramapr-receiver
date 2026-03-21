@@ -25,6 +25,8 @@ Configured via `meshtastic.transport`:
 - `bridge` (packaged Linux/Pi default)
   - auto-detects likely serial devices on Linux/macOS
   - runs a supervised bridge subprocess that emits NDJSON
+  - bridge startup performs a best-effort native `want_config` bootstrap write
+    to prompt status/packet stream on nodes that stay quiet until requested
   - receiver consumes bridge output through the same normalization pipeline used
     for `json_stream`
   - default bridge command is internal:
@@ -87,8 +89,11 @@ Two event kinds:
 `bridge` mode uses the same normalized model, but frames are decoded in a
 separate bridge subprocess and sent as NDJSON.
 
-`json_stream` mode expects newline-delimited JSON records containing
-`type: "packet"` or `type: "status"`.
+`json_stream` mode accepts newline-delimited JSON records containing either:
+
+- normalized `type: "packet"` / `type: "status"` records
+- Meshtastic packet-like compat records (for example `fromId` + `decoded`)
+  emitted by older bridge pipelines
 
 ## Known Limits
 

@@ -15,13 +15,13 @@
 <section class="panel">
   <h2>Current Receiver Status</h2>
   <table>
-    <tr><th>Local Receiver Name</th><td>{{if .Snapshot.LocalName}}{{.Snapshot.LocalName}}{{else}}unnamed{{end}}</td></tr>
-    <tr><th>Cloud Receiver</th><td>{{if .Snapshot.CloudReceiverLabel}}{{.Snapshot.CloudReceiverLabel}}{{else if .Snapshot.CloudReceiverID}}{{.Snapshot.CloudReceiverID}}{{else}}not assigned yet{{end}}</td></tr>
-    <tr><th>Cloud Endpoint</th><td class="mono">{{.Snapshot.CloudEndpoint}}</td></tr>
-    <tr><th>Pairing Phase</th><td class="mono">{{.Snapshot.PairingPhase}}</td></tr>
-    <tr><th>Cloud Status</th><td>{{.Snapshot.CloudStatus}}</td></tr>
-    <tr><th>Service Status</th><td>{{.Snapshot.Lifecycle}}</td></tr>
-    <tr><th>Last Runtime Error</th><td>{{if .Snapshot.LastError}}{{.Snapshot.LastError}}{{else}}none{{end}}</td></tr>
+    <tr><th>Local Receiver Name</th><td data-status-key="local_name">{{if .Snapshot.LocalName}}{{.Snapshot.LocalName}}{{else}}unnamed{{end}}</td></tr>
+    <tr><th>Cloud Receiver</th><td data-status-key="cloud_receiver_display">{{if .Snapshot.CloudReceiverLabel}}{{.Snapshot.CloudReceiverLabel}}{{else if .Snapshot.CloudReceiverID}}{{.Snapshot.CloudReceiverID}}{{else}}not assigned yet{{end}}</td></tr>
+    <tr><th>Cloud Endpoint</th><td class="mono" data-status-key="cloud_endpoint">{{.Snapshot.CloudEndpoint}}</td></tr>
+    <tr><th>Pairing Phase</th><td class="mono" data-status-key="pairing_phase">{{.Snapshot.PairingPhase}}</td></tr>
+    <tr><th>Cloud Status</th><td data-status-key="cloud_status">{{.Snapshot.CloudStatus}}</td></tr>
+    <tr><th>Service Status</th><td data-status-key="lifecycle">{{.Snapshot.Lifecycle}}</td></tr>
+    <tr><th>Last Runtime Error</th><td data-status-key="last_error">{{if .Snapshot.LastError}}{{.Snapshot.LastError}}{{else}}none{{end}}</td></tr>
   </table>
 </section>
 {{end}}

@@ -3,19 +3,18 @@
   <h2>Welcome to LoRaMapr Receiver</h2>
   <p>Use this local portal to pair your receiver, verify node connection, and confirm packet forwarding.</p>
   <div class="status-grid">
-    <div class="status-chip"><div class="label">Local Receiver Name</div><div class="value">{{if .Snapshot.LocalName}}{{.Snapshot.LocalName}}{{else}}unnamed{{end}}</div></div>
-    <div class="status-chip"><div class="label">Cloud Receiver</div><div class="value">{{if .Snapshot.CloudReceiverLabel}}{{.Snapshot.CloudReceiverLabel}}{{else if .Snapshot.CloudReceiverID}}{{.Snapshot.CloudReceiverID}}{{else}}not assigned{{end}}</div></div>
-    <div class="status-chip"><div class="label">Pairing Status</div><div class="value">{{.Snapshot.PairingPhase}}</div></div>
-    <div class="status-chip"><div class="label">Cloud Status</div><div class="value">{{.Snapshot.CloudStatus}}</div></div>
-    <div class="status-chip"><div class="label">Service Status</div><div class="value">{{.Snapshot.Lifecycle}}</div></div>
-    <div class="status-chip"><div class="label">Ready</div><div class="value">{{if .Snapshot.Ready}}yes{{else}}no{{end}}</div></div>
-    <div class="status-chip"><div class="label">Issue Code</div><div class="value mono">{{if .Snapshot.FailureCode}}{{.Snapshot.FailureCode}}{{else}}none{{end}}</div></div>
+    <div class="status-chip"><div class="label">Local Receiver Name</div><div class="value" data-status-key="local_name">{{if .Snapshot.LocalName}}{{.Snapshot.LocalName}}{{else}}unnamed{{end}}</div></div>
+    <div class="status-chip"><div class="label">Cloud Receiver</div><div class="value" data-status-key="cloud_receiver_display">{{if .Snapshot.CloudReceiverLabel}}{{.Snapshot.CloudReceiverLabel}}{{else if .Snapshot.CloudReceiverID}}{{.Snapshot.CloudReceiverID}}{{else}}not assigned{{end}}</div></div>
+    <div class="status-chip"><div class="label">Pairing Status</div><div class="value mono" data-status-key="pairing_phase">{{.Snapshot.PairingPhase}}</div></div>
+    <div class="status-chip"><div class="label">Cloud Status</div><div class="value" data-status-key="cloud_status">{{.Snapshot.CloudStatus}}</div></div>
+    <div class="status-chip"><div class="label">Service Status</div><div class="value" data-status-key="lifecycle">{{.Snapshot.Lifecycle}}</div></div>
+    <div class="status-chip"><div class="label">Ready</div><div class="value" data-status-key="ready">{{if .Snapshot.Ready}}yes{{else}}no{{end}}</div></div>
+    <div class="status-chip"><div class="label">Issue Code</div><div class="value mono" data-status-key="failure_code">{{if .Snapshot.FailureCode}}{{.Snapshot.FailureCode}}{{else}}none{{end}}</div></div>
     <div class="status-chip">
       <div class="label">Attention State</div>
-      <div class="value">
+      <div class="value mono" data-status-key="attention_state_code">
         {{if and .Attention.State (ne .Attention.State "none")}}
-          <span class="badge {{.Attention.State}}">{{.Attention.State}}</span>
-          {{if .Attention.Code}} <span class="mono">{{.Attention.Code}}</span>{{end}}
+          {{.Attention.State}}{{if .Attention.Code}} {{.Attention.Code}}{{end}}
         {{else}}
           none
         {{end}}

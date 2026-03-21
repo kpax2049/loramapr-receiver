@@ -25,11 +25,17 @@ func RunNativeBridge(ctx context.Context, device string, out io.Writer, logger *
 		logger = slog.Default()
 	}
 
-	stream, err := openReadOnlyCloser(device)
+	stream, err := openReadWriteCloser(device)
 	if err != nil {
 		return fmt.Errorf("meshtastic bridge open device: %w", err)
 	}
 	defer stream.Close()
+
+	// Match the legacy bridge startup behavior: request config once so nodes that
+	// stay quiet until a control request still emit status/packet frames.
+	if err := writeAll(stream, buildNativeFrame(buildToRadioWantConfigPayload(nativeSerialWantConfigID))); err != nil {
+		logger.Warn("meshtastic bridge bootstrap write skipped", "device", device, "err", err)
+	}
 
 	encoder := json.NewEncoder(out)
 	encoder.SetEscapeHTML(false)
@@ -92,23 +98,40 @@ func bridgeEventRecord(event Event) (map[string]any, bool) {
 		}
 		record := map[string]any{
 			"type":        "packet",
+			"fromId":      event.Packet.SourceNodeID,
 			"from":        event.Packet.SourceNodeID,
+			"toId":        event.Packet.DestinationNodeID,
 			"to":          event.Packet.DestinationNodeID,
 			"port":        event.Packet.PortNum,
 			"payload_b64": base64.StdEncoding.EncodeToString(event.Packet.Payload),
 			"received_at": receivedAt.UTC().Format(time.RFC3339Nano),
+		}
+		decoded := map[string]any{
+			"portnum": event.Packet.PortNum,
+		}
+		if len(event.Packet.Payload) > 0 {
+			decoded["payload"] = base64.StdEncoding.EncodeToString(event.Packet.Payload)
+			decoded["payload_encoding"] = "base64"
 		}
 		if event.Packet.Position != nil {
 			record["position"] = map[string]any{
 				"lat": event.Packet.Position.Lat,
 				"lon": event.Packet.Position.Lon,
 			}
+			decoded["position"] = map[string]any{
+				"latitude":  event.Packet.Position.Lat,
+				"longitude": event.Packet.Position.Lon,
+			}
 		}
+		record["decoded"] = decoded
 		for key, value := range event.Packet.Meta {
 			if key == "" || strings.TrimSpace(value) == "" {
 				continue
 			}
 			record[key] = value
+		}
+		if packetID := strings.TrimSpace(event.Packet.Meta["packet_id"]); packetID != "" {
+			record["id"] = packetID
 		}
 		return record, true
 	case EventStatus:

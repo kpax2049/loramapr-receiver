@@ -167,31 +167,106 @@
   </main>
   <script>
     (function() {
-      const autoRefreshPaths = new Set(["/", "/progress", "/troubleshooting", "/advanced"]);
+      const autoRefreshPaths = new Set(["/", "/pairing", "/progress", "/troubleshooting", "/advanced"]);
       if (!autoRefreshPaths.has(window.location.pathname)) {
         return;
       }
-
-      function shouldDelayReload() {
-        if (document.hidden) {
-          return true;
+      function ensureUpdateBanner() {
+        let banner = document.getElementById("status-update-banner");
+        if (banner) {
+          return banner;
         }
-        const active = document.activeElement;
-        return !!(active && (active.tagName === "INPUT" || active.tagName === "TEXTAREA"));
+        banner = document.createElement("div");
+        banner.id = "status-update-banner";
+        banner.style.position = "fixed";
+        banner.style.right = "14px";
+        banner.style.bottom = "14px";
+        banner.style.padding = "10px 12px";
+        banner.style.border = "1px solid #d5dfeb";
+        banner.style.borderRadius = "10px";
+        banner.style.background = "#ffffff";
+        banner.style.boxShadow = "0 8px 24px rgba(4, 26, 54, 0.18)";
+        banner.style.fontFamily = "\"Segoe UI\", \"Helvetica Neue\", Helvetica, Arial, sans-serif";
+        banner.style.fontSize = "0.88rem";
+        banner.style.color = "#10203a";
+        banner.style.zIndex = "9999";
+        banner.style.display = "none";
+        banner.innerHTML = '<span id="status-update-text"></span> <button id="status-update-refresh" type="button" style="margin-left:8px;margin-top:0;padding:6px 10px;border-radius:8px;border:0;background:#006aa8;color:#fff;cursor:pointer;">Refresh</button>';
+        document.body.appendChild(banner);
+        const refreshButton = document.getElementById("status-update-refresh");
+        if (refreshButton) {
+          refreshButton.addEventListener("click", function() {
+            window.location.reload();
+          });
+        }
+        return banner;
       }
 
-      function reloadWhenSafe() {
-        if (shouldDelayReload()) {
-          setTimeout(reloadWhenSafe, 800);
+      function showUpdateBanner(updatedAt) {
+        const banner = ensureUpdateBanner();
+        const text = document.getElementById("status-update-text");
+        if (text) {
+          let suffix = "";
+          if (updatedAt) {
+            const parsed = new Date(updatedAt);
+            if (!Number.isNaN(parsed.getTime())) {
+              suffix = " (" + parsed.toLocaleTimeString() + ")";
+            }
+          }
+          text.textContent = "Receiver status changed" + suffix + ".";
+        }
+        banner.style.display = "block";
+      }
+
+      function componentState(snapshot, name) {
+        if (!snapshot || !snapshot.components || !snapshot.components[name]) {
+          return "unknown";
+        }
+        return snapshot.components[name].state || "unknown";
+      }
+
+      function statusValueMap(snapshot) {
+        const cloudLabel = (snapshot && snapshot.cloud_receiver_label) || "";
+        const cloudID = (snapshot && snapshot.cloud_receiver_id) || "";
+        const attentionState = (snapshot && snapshot.attention_state) || "none";
+        const attentionCode = (snapshot && snapshot.attention_code) || "";
+        let attentionStateCode = "none";
+        if (attentionState && attentionState !== "none") {
+          attentionStateCode = attentionState + (attentionCode ? (" " + attentionCode) : "");
+        }
+        return {
+          local_name: (snapshot && snapshot.local_name) || "unnamed",
+          cloud_receiver_display: cloudLabel || cloudID || "not assigned",
+          pairing_phase: (snapshot && snapshot.pairing_phase) || "unknown",
+          cloud_status: (snapshot && snapshot.cloud_status) || "unknown",
+          cloud_endpoint: (snapshot && snapshot.cloud_endpoint) || "unknown",
+          lifecycle: (snapshot && snapshot.lifecycle) || "unknown",
+          ready: (snapshot && snapshot.ready) ? "yes" : "no",
+          failure_code: (snapshot && snapshot.failure_code) || "none",
+          update_status: (snapshot && snapshot.update_status) || "unknown",
+          meshtastic_state: componentState(snapshot, "meshtastic"),
+          network_state: componentState(snapshot, "network"),
+          attention_state_code: attentionStateCode,
+          last_error: (snapshot && snapshot.last_error) || "none"
+        };
+      }
+
+      function applyStatusSnapshot(snapshot) {
+        if (!snapshot || typeof snapshot !== "object") {
           return;
         }
-        window.location.reload();
+        const values = statusValueMap(snapshot);
+        const nodes = document.querySelectorAll("[data-status-key]");
+        nodes.forEach(function(node) {
+          const key = node.getAttribute("data-status-key");
+          if (!key || !(key in values)) {
+            return;
+          }
+          node.textContent = String(values[key]);
+        });
       }
 
       if (typeof window.EventSource !== "function") {
-        setInterval(function() {
-          reloadWhenSafe();
-        }, 15000);
         return;
       }
 
@@ -211,25 +286,16 @@
         if (!nextUpdatedAt) {
           return;
         }
+        applyStatusSnapshot(payload);
         if (lastUpdatedAt === null) {
           lastUpdatedAt = nextUpdatedAt;
           return;
         }
         if (nextUpdatedAt !== lastUpdatedAt) {
           lastUpdatedAt = nextUpdatedAt;
-          reloadWhenSafe();
+          showUpdateBanner(nextUpdatedAt);
         }
       });
-      source.onerror = function() {
-        // EventSource retries automatically. Keep a low-rate fallback refresh.
-      };
-
-      setInterval(function() {
-        if (document.hidden) {
-          return;
-        }
-        reloadWhenSafe();
-      }, 30000);
     })();
   </script>
 </body>

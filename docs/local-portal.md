@@ -66,9 +66,9 @@ API routes:
 - derived attention object (`state/category/code/summary/hint`)
 - `setup_issues[]` root-cause list for first-run blockers
 
-Portal pages (`/`, `/progress`, `/troubleshooting`, `/advanced`) subscribe to
-`/api/events/status` and auto-refresh only when status changes. Fallback refresh
-is low-rate and only used if SSE is unavailable.
+Portal pages (`/`, `/pairing`, `/progress`, `/troubleshooting`, `/advanced`)
+subscribe to `/api/events/status` and update status fields in place when status
+changes. A manual refresh button is shown for full-page refresh when needed.
 
 ## Attention States (User Meaning)
 

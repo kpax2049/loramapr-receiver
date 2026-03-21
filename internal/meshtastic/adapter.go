@@ -377,6 +377,7 @@ func (s *Service) consumeStream(ctx context.Context, device string, stream io.Re
 func (s *Service) consumeJSONStream(ctx context.Context, device string, reader io.Reader, out chan<- Event) error {
 	scanner := bufio.NewScanner(reader)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	consecutiveNormalizeFailures := 0
 
 	for scanner.Scan() {
 		line := bytes.TrimSpace(scanner.Bytes())
@@ -386,12 +387,26 @@ func (s *Service) consumeJSONStream(ctx context.Context, device string, reader i
 
 		event, err := NormalizeLine(line, time.Now().UTC())
 		if err != nil {
-			s.setSnapshot(func(snap *Snapshot) {
-				snap.State = StateDegraded
-				snap.LastError = "normalize event: " + err.Error()
-			})
+			consecutiveNormalizeFailures++
+			if consecutiveNormalizeFailures >= 8 {
+				s.setSnapshot(func(snap *Snapshot) {
+					snap.State = StateDegraded
+					snap.LastError = "normalize event: " + err.Error()
+				})
+			} else {
+				s.logger.Debug(
+					"skipping bridge line that did not normalize",
+					"device",
+					device,
+					"err",
+					err,
+					"consecutive_failures",
+					consecutiveNormalizeFailures,
+				)
+			}
 			continue
 		}
+		consecutiveNormalizeFailures = 0
 
 		event.RawLine = string(line)
 		if event.Received.IsZero() {

@@ -184,3 +184,72 @@ func TestNormalizePacketEventPosition(t *testing.T) {
 		t.Fatalf("unexpected normalized position: %#v", event.Packet.Position)
 	}
 }
+
+func TestNormalizeCompatPacketFromIDShape(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 3, 21, 13, 0, 0, 0, time.UTC)
+	line := []byte(`{
+		"fromId":"!home",
+		"toId":"!field",
+		"rxTime": 1770000000,
+		"decoded": {
+			"portnum": 3,
+			"payload":"aGVsbG8=",
+			"payload_encoding":"base64",
+			"position":{"latitudeI":493959195,"longitudeI":76103928}
+		},
+		"rxRssi": -97,
+		"rxSnr": 5.5,
+		"id": 12345
+	}`)
+
+	event, err := NormalizeLine(line, now)
+	if err != nil {
+		t.Fatalf("NormalizeLine returned error: %v", err)
+	}
+	if event.Kind != EventPacket || event.Packet == nil {
+		t.Fatalf("expected packet event")
+	}
+	if event.Packet.SourceNodeID != "!home" {
+		t.Fatalf("unexpected source node: %q", event.Packet.SourceNodeID)
+	}
+	if event.Packet.DestinationNodeID != "!field" {
+		t.Fatalf("unexpected destination node: %q", event.Packet.DestinationNodeID)
+	}
+	if event.Packet.PortNum != 3 {
+		t.Fatalf("unexpected port num: %d", event.Packet.PortNum)
+	}
+	if event.Packet.Position == nil {
+		t.Fatal("expected compat position extraction")
+	}
+	if event.Packet.Position.Lat == 0 || event.Packet.Position.Lon == 0 {
+		t.Fatalf("expected non-zero compat position: %#v", event.Packet.Position)
+	}
+	if got := event.Packet.Meta["rssi"]; got != "-97" {
+		t.Fatalf("unexpected rssi meta: %q", got)
+	}
+	if got := event.Packet.Meta["packet_id"]; got != "12345" {
+		t.Fatalf("unexpected packet id meta: %q", got)
+	}
+}
+
+func TestNormalizeCompatPacketAllowsMissingPayload(t *testing.T) {
+	t.Parallel()
+
+	line := []byte(`{
+		"fromId":"!home",
+		"decoded":{"portnum":"NODEINFO_APP","user":{"id":"!home"}}
+	}`)
+
+	event, err := NormalizeLine(line, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("NormalizeLine returned error: %v", err)
+	}
+	if event.Packet == nil {
+		t.Fatal("expected packet")
+	}
+	if len(event.Packet.Payload) != 0 {
+		t.Fatalf("expected empty payload for compat nodeinfo packet, got %d bytes", len(event.Packet.Payload))
+	}
+}

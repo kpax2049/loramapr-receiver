@@ -30,8 +30,18 @@ func TestBridgeEventRecordPacket(t *testing.T) {
 	if got := record["type"]; got != "packet" {
 		t.Fatalf("unexpected type: %#v", got)
 	}
+	if got := record["fromId"]; got != "!source" {
+		t.Fatalf("unexpected fromId: %#v", got)
+	}
 	if got := record["payload_b64"]; got != base64.StdEncoding.EncodeToString([]byte("hello")) {
 		t.Fatalf("unexpected payload_b64: %#v", got)
+	}
+	decoded, ok := record["decoded"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected decoded map in packet bridge record, got %#v", record["decoded"])
+	}
+	if got := decoded["portnum"]; got != 1 {
+		t.Fatalf("unexpected decoded portnum: %#v", got)
 	}
 	if got := record["rssi"]; got != "-70" {
 		t.Fatalf("expected packet meta in bridge record, got %#v", got)
