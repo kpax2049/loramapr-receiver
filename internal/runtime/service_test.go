@@ -270,9 +270,17 @@ func TestShapeIngestPayload(t *testing.T) {
 	payload, key := shapeIngestPayload(meshtastic.Packet{
 		SourceNodeID:      "!node-1",
 		DestinationNodeID: "!gateway",
-		PortNum:           2,
+		PortNum:           3,
 		Payload:           []byte("hello"),
 		ReceivedAt:        time.Date(2026, 3, 10, 23, 0, 0, 0, time.UTC),
+		Position: &meshtastic.Position{
+			Lat: 49.3959195,
+			Lon: 7.6103928,
+		},
+		Meta: map[string]string{
+			"rssi": "-87",
+			"snr":  "4.50",
+		},
 	})
 	if !strings.HasPrefix(key, "rx-") {
 		t.Fatalf("unexpected idempotency key: %q", key)
@@ -282,6 +290,26 @@ func TestShapeIngestPayload(t *testing.T) {
 	}
 	if payload["packetId"] != key {
 		t.Fatalf("expected payload packetId to match idempotency key")
+	}
+	if payload["portnum"] != "POSITION_APP" {
+		t.Fatalf("expected POSITION_APP port label, got %#v", payload["portnum"])
+	}
+	decoded, ok := payload["decoded"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected decoded map, got %#v", payload["decoded"])
+	}
+	if decoded["portnum"] != "POSITION_APP" {
+		t.Fatalf("expected decoded.position port label, got %#v", decoded["portnum"])
+	}
+	position, ok := decoded["position"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected decoded.position map, got %#v", decoded["position"])
+	}
+	if position["latitudeI"] != int64(493959195) {
+		t.Fatalf("unexpected latitudeI: %#v", position["latitudeI"])
+	}
+	if payload["rxRssi"] != -87 {
+		t.Fatalf("unexpected rxRssi: %#v", payload["rxRssi"])
 	}
 }
 

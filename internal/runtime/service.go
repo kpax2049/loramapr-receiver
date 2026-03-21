@@ -1082,20 +1082,38 @@ func shapeIngestPayload(packet meshtastic.Packet) (map[string]any, string) {
 		receivedAt = time.Now().UTC()
 	}
 	idempotencyKey := ingestIdempotencyKey(packet, receivedAt)
-	portLabel := fmt.Sprintf("PORT_%d", packet.PortNum)
+	portLabel := meshtasticPortnumLabel(packet.PortNum)
+
+	decoded := map[string]any{
+		"portnum": portLabel,
+	}
+	if packet.Position != nil {
+		decoded["position"] = map[string]any{
+			"latitude":   packet.Position.Lat,
+			"longitude":  packet.Position.Lon,
+			"latitudeI":  int64(packet.Position.Lat * 1e7),
+			"longitudeI": int64(packet.Position.Lon * 1e7),
+			"time":       receivedAt.Unix(),
+		}
+	}
 
 	payload := map[string]any{
-		"fromId":     packet.SourceNodeID,
-		"to":         packet.DestinationNodeID,
-		"packetId":   idempotencyKey,
-		"portnum":    portLabel,
-		"receivedAt": receivedAt.Format(time.RFC3339Nano),
-		"decoded": map[string]any{
-			"portnum": portLabel,
-		},
+		"fromId":   packet.SourceNodeID,
+		"toId":     packet.DestinationNodeID,
+		"to":       packet.DestinationNodeID,
+		"packetId": idempotencyKey,
+		"id":       idempotencyKey,
+		"portnum":  portLabel,
+		"rxTime":   receivedAt.Unix(),
+		"decoded":  decoded,
 		"payload": map[string]any{
 			"rawBase64": base64.StdEncoding.EncodeToString(packet.Payload),
 			"size":      len(packet.Payload),
+		},
+		"_forwarder": map[string]any{
+			"deviceHint": packet.SourceNodeID,
+			"receivedAt": receivedAt.Format(time.RFC3339Nano),
+			"eventId":    idempotencyKey,
 		},
 		"_receiver": map[string]any{
 			"adapter":      "meshtastic",
@@ -1104,9 +1122,63 @@ func shapeIngestPayload(packet meshtastic.Packet) (map[string]any, string) {
 		},
 	}
 	if len(packet.Meta) > 0 {
-		payload["radio"] = packet.Meta
+		radio := map[string]any{}
+		for key, value := range packet.Meta {
+			switch key {
+			case "rssi":
+				radio["rxRssi"] = parseIntOrString(value)
+				payload["rxRssi"] = parseIntOrString(value)
+			case "snr":
+				radio["rxSnr"] = parseFloatOrString(value)
+				payload["rxSnr"] = parseFloatOrString(value)
+			case "hop_limit":
+				radio["hopLimit"] = parseIntOrString(value)
+				payload["hopLimit"] = parseIntOrString(value)
+			case "packet_id":
+				payload["id"] = value
+				payload["packetId"] = value
+			default:
+				radio[key] = value
+			}
+		}
+		if len(radio) > 0 {
+			payload["radio"] = radio
+		}
 	}
 	return payload, idempotencyKey
+}
+
+func meshtasticPortnumLabel(portNum int) string {
+	switch portNum {
+	case 0:
+		return "UNKNOWN_APP"
+	case 1:
+		return "TEXT_MESSAGE_APP"
+	case 3:
+		return "POSITION_APP"
+	case 4:
+		return "NODEINFO_APP"
+	case 5:
+		return "ROUTING_APP"
+	case 67:
+		return "TELEMETRY_APP"
+	default:
+		return fmt.Sprintf("PORT_%d", portNum)
+	}
+}
+
+func parseIntOrString(value string) any {
+	if parsed, err := strconv.Atoi(strings.TrimSpace(value)); err == nil {
+		return parsed
+	}
+	return value
+}
+
+func parseFloatOrString(value string) any {
+	if parsed, err := strconv.ParseFloat(strings.TrimSpace(value), 64); err == nil {
+		return parsed
+	}
+	return value
 }
 
 func ingestIdempotencyKey(packet meshtastic.Packet, receivedAt time.Time) string {
