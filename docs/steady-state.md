@@ -44,6 +44,27 @@ Heartbeat is sent on runtime tick interval (`service.heartbeat`) and includes:
   - attention fields (`attentionState`, `attentionCategory`, `attentionCode`, `attentionHint`)
   - operational summary (`operationalStatus`, `operationalSummary`)
 
+Heartbeat scheduling is independent from packet ingest. Even with no Meshtastic
+packet traffic, runtime still sends periodic heartbeat ticks while paired in
+`steady_state` (unless pairing/lifecycle state blocks it).
+
+## Liveness and Retry Signals
+
+Runtime now emits explicit tick/recovery logs for support triage:
+
+- `status tick processed`
+- `heartbeat tick skipped`
+- `heartbeat tick sent`
+- `heartbeat tick failed`
+- `ingest retry scheduled`
+
+Home Auto Session also emits decision/recovery logs:
+
+- `home auto session decision update`
+- `home auto session retry scheduled`
+- `home auto session action blocked by lifecycle conflict`
+- `home auto session action blocked by non-retryable cloud error`
+
 ## Runtime Status Fields
 
 `/api/status` now includes cloud/forwarding observability fields:

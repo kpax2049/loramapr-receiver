@@ -1,5 +1,8 @@
 # LoRaMapr Receiver Release Notes
 
+For liveness and Home Auto idle-reliability hardening targeting `v3.0.3`, see
+`docs/release-notes-v3.0.3.md`.
+
 For bridge-default + SSE portal notes targeting `v3.0.0`, see
 `docs/release-notes-v3.0.0.md`.
 

@@ -208,6 +208,137 @@ func TestPendingStartRecoveredAcrossRestartWithoutDuplicate(t *testing.T) {
 	}
 }
 
+func TestHomeAutoPersistFingerprintIgnoresVolatileTimestamps(t *testing.T) {
+	t.Parallel()
+
+	firstDecision := time.Date(2026, 3, 22, 8, 0, 0, 0, time.UTC)
+	secondDecision := firstDecision.Add(5 * time.Second)
+	firstUpdated := firstDecision
+	secondUpdated := firstUpdated.Add(10 * time.Second)
+	base := state.HomeAutoSessionState{
+		ModuleState:         string(StateControlReady),
+		ControlState:        controlStateReady,
+		ReconciliationState: reconciliationCleanIdle,
+		LastDecisionReason:  "waiting for tracked node near home geofence",
+	}
+
+	stateOne := base
+	stateOne.LastDecisionAt = &firstDecision
+	stateOne.UpdatedAt = firstUpdated
+
+	stateTwo := base
+	stateTwo.LastDecisionAt = &secondDecision
+	stateTwo.UpdatedAt = secondUpdated
+
+	fingerprintOne := homeAutoPersistFingerprint(stateOne)
+	fingerprintTwo := homeAutoPersistFingerprint(stateTwo)
+	if fingerprintOne == "" || fingerprintTwo == "" {
+		t.Fatalf("expected non-empty fingerprints")
+	}
+	if fingerprintOne != fingerprintTwo {
+		t.Fatalf("expected identical fingerprints when only timestamps differ")
+	}
+}
+
+func TestModuleIdleLoopDoesNotRewriteStateEverySecond(t *testing.T) {
+	store, err := state.Open(filepath.Join(t.TempDir(), "receiver-state.json"))
+	if err != nil {
+		t.Fatalf("open state: %v", err)
+	}
+	if err := store.Update(func(data *state.Data) {
+		data.Pairing.Phase = state.PairingSteadyState
+		data.Cloud.IngestAPIKey = "secret"
+	}); err != nil {
+		t.Fatalf("seed state: %v", err)
+	}
+
+	statusModel := status.New()
+	module := New(homeAutoTestConfig(config.HomeAutoSessionModeControl), store, statusModel, nil, &mockSessionClient{})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer func() {
+		cancel()
+		time.Sleep(80 * time.Millisecond)
+	}()
+	module.Start(ctx)
+
+	waitForCondition(t, 5*time.Second, func() bool {
+		snap := statusModel.Snapshot().HomeAutoSession
+		return snap.State == string(StateControlReady) && snap.ReconciliationState == reconciliationCleanIdle
+	})
+
+	baseline := store.Snapshot().HomeAutoSession
+	if baseline.LastDecisionAt == nil {
+		t.Fatalf("expected baseline last decision timestamp to be persisted")
+	}
+	baselineDecision := baseline.LastDecisionAt.UTC()
+	baselineUpdated := baseline.UpdatedAt
+
+	time.Sleep(1300 * time.Millisecond)
+
+	after := store.Snapshot().HomeAutoSession
+	if after.LastDecisionAt == nil {
+		t.Fatalf("expected last decision timestamp to remain populated")
+	}
+	if !after.LastDecisionAt.UTC().Equal(baselineDecision) {
+		t.Fatalf("expected no idle churn in last decision timestamp: baseline=%s after=%s", baselineDecision, after.LastDecisionAt.UTC())
+	}
+	if !after.UpdatedAt.Equal(baselineUpdated) {
+		t.Fatalf("expected no idle churn in updated_at: baseline=%s after=%s", baselineUpdated, after.UpdatedAt)
+	}
+}
+
+func TestIdleTimeoutStopTriggersWithoutNewTraffic(t *testing.T) {
+	store, err := state.Open(filepath.Join(t.TempDir(), "receiver-state.json"))
+	if err != nil {
+		t.Fatalf("open state: %v", err)
+	}
+	if err := store.Update(func(data *state.Data) {
+		data.Pairing.Phase = state.PairingSteadyState
+		data.Cloud.IngestAPIKey = "secret"
+	}); err != nil {
+		t.Fatalf("seed state: %v", err)
+	}
+
+	cfg := homeAutoTestConfig(config.HomeAutoSessionModeControl)
+	cfg.StartDebounce = config.Duration(20 * time.Millisecond)
+	cfg.StopDebounce = config.Duration(20 * time.Millisecond)
+	cfg.IdleStopTimeout = config.Duration(80 * time.Millisecond)
+
+	statusModel := status.New()
+	cloud := &mockSessionClient{}
+	module := New(cfg, store, statusModel, nil, cloud)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer func() {
+		cancel()
+		time.Sleep(80 * time.Millisecond)
+	}()
+	module.Start(ctx)
+
+	now := time.Now().UTC()
+	module.ObserveEvent(testPacket("!nodeA", 37.3349, -122.0090, now))
+	module.ObserveEvent(testPacket("!nodeA", latOffsetMeters(37.3349, 260), -122.0090, now.Add(time.Second)))
+	module.Reevaluate()
+
+	waitForCondition(t, 5*time.Second, func() bool {
+		return statusModel.Snapshot().HomeAutoSession.State == string(StateActive)
+	})
+
+	waitForCondition(t, 6*time.Second, func() bool {
+		_, stopCalls := cloud.calls()
+		return stopCalls >= 1
+	})
+
+	snap := statusModel.Snapshot().HomeAutoSession
+	if snap.LastActionResult == "" {
+		t.Fatalf("expected last action result to be populated after idle stop")
+	}
+	if snap.State != string(StateControlReady) {
+		t.Fatalf("expected module to return to control_ready after idle stop, got %q", snap.State)
+	}
+}
+
 func TestRetryableStartFailurePersistsPendingAndCooldown(t *testing.T) {
 	store, err := state.Open(filepath.Join(t.TempDir(), "receiver-state.json"))
 	if err != nil {

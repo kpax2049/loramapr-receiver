@@ -202,3 +202,22 @@ secrets.
 Detailed runbook:
 
 - [Support and Operations Workflow](./support-operations-workflow.md)
+
+## Tick and Retry Logs
+
+For intermittent stale/online drift issues, inspect service logs for tick-level
+signals:
+
+- `status tick processed`: periodic runtime status evaluation completed
+- `heartbeat tick skipped`: heartbeat intentionally not sent (for example not in
+  `steady_state` or missing credentials)
+- `heartbeat tick sent`: periodic heartbeat request completed
+- `heartbeat tick failed`: heartbeat request failed (`retryable=true|false`)
+- `ingest retry scheduled`: retry/backoff selected for queue delivery failure
+
+Home Auto Session control loop logs:
+
+- `home auto session decision update`
+- `home auto session retry scheduled`
+- `home auto session action blocked by lifecycle conflict`
+- `home auto session action blocked by non-retryable cloud error`

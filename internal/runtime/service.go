@@ -469,6 +469,23 @@ func (s *Service) tick(ctx context.Context) {
 	}
 
 	s.updateFailureState(snap, meshSnap, networkProbe)
+
+	statusSnap := c.Status.Snapshot()
+	c.Logger.Debug(
+		"status tick processed",
+		"pairing_phase",
+		snap.Pairing.Phase,
+		"cloud_status",
+		statusSnap.CloudStatus,
+		"cloud_reachable",
+		statusSnap.CloudReachable,
+		"meshtastic_state",
+		meshSnap.State,
+		"ingest_queue_depth",
+		len(s.steady.ingestQueue),
+		"last_error",
+		statusSnap.LastError,
+	)
 }
 
 func (s *Service) onMeshtasticEvent(event meshtastic.Event) {
@@ -540,6 +557,18 @@ func (s *Service) processSteadyState(ctx context.Context, snapshot state.Data, m
 	c.Status.SetComponent("cloud_config", "compatible", cloudConfigStatusMessage(snapshot.Cloud.ConfigVersion))
 
 	if !credentialsReady(snapshot) {
+		reason := "pairing phase not steady"
+		if snapshot.Pairing.Phase == state.PairingSteadyState && strings.TrimSpace(snapshot.Cloud.IngestAPIKey) == "" {
+			reason = "ingest API key missing"
+		}
+		c.Logger.Debug(
+			"heartbeat tick skipped",
+			"reason",
+			reason,
+			"pairing_phase",
+			snapshot.Pairing.Phase,
+		)
+		c.Status.SetComponent("heartbeat", "skipped", reason)
 		fresh := isHeartbeatFresh(s.steady.lastHeartbeatAck, c.Config.Service.Heartbeat.Std())
 		c.Status.SetHeartbeat(s.steady.lastHeartbeatSent, s.steady.lastHeartbeatAck, fresh)
 		c.Status.SetPacketTelemetry(
@@ -554,6 +583,7 @@ func (s *Service) processSteadyState(ctx context.Context, snapshot state.Data, m
 
 	heartbeatErr := s.sendHeartbeat(ctx, snapshot, meshSnap)
 	if errors.Is(heartbeatErr, errLifecycleTransition) {
+		c.Status.SetComponent("heartbeat", "blocked", "heartbeat blocked by lifecycle transition")
 		fresh := isHeartbeatFresh(s.steady.lastHeartbeatAck, c.Config.Service.Heartbeat.Std())
 		c.Status.SetHeartbeat(s.steady.lastHeartbeatSent, s.steady.lastHeartbeatAck, fresh)
 		c.Status.SetPacketTelemetry(
@@ -567,11 +597,25 @@ func (s *Service) processSteadyState(ctx context.Context, snapshot state.Data, m
 		return
 	}
 	if heartbeatErr != nil {
+		c.Status.SetComponent("heartbeat", "failed", coarseCloudError(heartbeatErr))
 		if cloudclient.IsRetryable(heartbeatErr) {
-			c.Logger.Warn("heartbeat failed", "err", heartbeatErr)
+			c.Logger.Warn("heartbeat tick failed", "err", heartbeatErr, "retryable", true)
 		} else {
-			c.Logger.Error("heartbeat failed", "err", heartbeatErr)
+			c.Logger.Error("heartbeat tick failed", "err", heartbeatErr, "retryable", false)
 		}
+	} else {
+		ackText := "none"
+		if s.steady.lastHeartbeatAck != nil {
+			ackText = s.steady.lastHeartbeatAck.UTC().Format(time.RFC3339Nano)
+		}
+		c.Status.SetComponent("heartbeat", "sent", "last ack "+ackText)
+		c.Logger.Debug(
+			"heartbeat tick sent",
+			"last_heartbeat_sent",
+			s.steady.lastHeartbeatSent,
+			"last_heartbeat_ack",
+			s.steady.lastHeartbeatAck,
+		)
 	}
 	ingestErr := s.drainIngestQueue(ctx, snapshot)
 	if errors.Is(ingestErr, errLifecycleTransition) {
@@ -589,9 +633,9 @@ func (s *Service) processSteadyState(ctx context.Context, snapshot state.Data, m
 	}
 	if ingestErr != nil {
 		if cloudclient.IsRetryable(ingestErr) {
-			c.Logger.Warn("ingest delivery failed", "err", ingestErr)
+			c.Logger.Warn("ingest delivery failed", "err", ingestErr, "retryable", true)
 		} else {
-			c.Logger.Error("ingest delivery failed", "err", ingestErr)
+			c.Logger.Error("ingest delivery failed", "err", ingestErr, "retryable", false)
 		}
 	}
 	if heartbeatErr == nil && ingestErr == nil {
@@ -626,6 +670,19 @@ func (s *Service) sendHeartbeat(ctx context.Context, snapshot state.Data, meshSn
 
 	sentAt := time.Now().UTC()
 	s.steady.lastHeartbeatSent = &sentAt
+	s.container.Logger.Debug(
+		"sending heartbeat",
+		"endpoint",
+		endpoint,
+		"pairing_phase",
+		snapshot.Pairing.Phase,
+		"meshtastic_state",
+		meshSnap.State,
+		"observed_nodes",
+		len(meshSnap.ObservedNodeIDs),
+		"ingest_queue_depth",
+		len(s.steady.ingestQueue),
+	)
 
 	coarseFailure := "none"
 	if meshSnap.State != meshtastic.StateConnected {
@@ -781,6 +838,17 @@ func (s *Service) sendHeartbeat(ctx context.Context, snapshot state.Data, meshSn
 	)
 	s.applyHomeAutoCloudConfigFromAck(ack)
 	s.steady.cloudReachable = true
+	s.container.Logger.Debug(
+		"heartbeat acknowledged",
+		"receiver_agent_id",
+		strings.TrimSpace(ack.ReceiverAgentID),
+		"last_heartbeat_at",
+		ackAt.Format(time.RFC3339Nano),
+		"node_count",
+		ack.NodeCount,
+		"config_version",
+		strings.TrimSpace(ack.ConfigVersion),
+	)
 	return nil
 }
 
@@ -1053,10 +1121,22 @@ func (s *Service) drainIngestQueue(ctx context.Context, snapshot state.Data) err
 
 		if cloudclient.IsRetryable(err) {
 			item.attempts++
-			item.nextAttemptAt = now.Add(deliveryRetryDelay(item.attempts))
+			retryDelay := deliveryRetryDelay(item.attempts)
+			item.nextAttemptAt = now.Add(retryDelay)
 			s.steady.cloudReachable = false
 			s.container.Status.SetComponent("ingest", "retrying", fmt.Sprintf("retrying in %s", time.Until(item.nextAttemptAt).Round(time.Second)))
 			s.container.Status.SetLastError(coarseCloudError(err))
+			s.container.Logger.Warn(
+				"ingest retry scheduled",
+				"attempt",
+				item.attempts,
+				"retry_in",
+				retryDelay.Round(time.Second),
+				"queue_depth",
+				len(s.steady.ingestQueue),
+				"err",
+				err,
+			)
 			return err
 		}
 

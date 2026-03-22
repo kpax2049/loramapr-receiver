@@ -497,6 +497,96 @@ func TestSendHeartbeatPayloadShaping(t *testing.T) {
 	}
 }
 
+func TestProcessSteadyStateSendsHeartbeatDuringIdle(t *testing.T) {
+	t.Parallel()
+
+	mockCloud := &mockCloudClient{}
+	statusModel := status.New()
+	svc := &Service{
+		container: &Container{
+			Config: config.Default(),
+			Logger: slog.Default(),
+			Status: statusModel,
+			Cloud:  mockCloud,
+		},
+		mode: config.ModeService,
+	}
+
+	svc.processSteadyState(context.Background(), state.Data{
+		Pairing: state.PairingState{Phase: state.PairingSteadyState},
+		Cloud: state.CloudState{
+			HeartbeatEndpoint: "/api/receiver/heartbeat",
+			IngestAPIKey:      "secret",
+		},
+	}, meshtastic.Snapshot{State: meshtastic.StateConnected})
+
+	if mockCloud.heartbeatCalls != 1 {
+		t.Fatalf("expected heartbeat call during idle tick, got %d", mockCloud.heartbeatCalls)
+	}
+	if svc.steady.lastHeartbeatSent == nil || svc.steady.lastHeartbeatAck == nil {
+		t.Fatalf("expected heartbeat send+ack timestamps to be tracked")
+	}
+	component, ok := statusModel.Snapshot().Components["heartbeat"]
+	if !ok {
+		t.Fatalf("expected heartbeat component status")
+	}
+	if component.State != "sent" {
+		t.Fatalf("expected heartbeat component state sent, got %q", component.State)
+	}
+}
+
+func TestProcessSteadyStateHeartbeatRecoversAfterRetryableFailure(t *testing.T) {
+	t.Parallel()
+
+	mockCloud := &mockCloudClient{
+		heartbeatErr: &cloudclient.APIError{StatusCode: 503, Message: "outage", Retryable: true},
+	}
+	statusModel := status.New()
+	svc := &Service{
+		container: &Container{
+			Config: config.Default(),
+			Logger: slog.Default(),
+			Status: statusModel,
+			Cloud:  mockCloud,
+		},
+		mode: config.ModeService,
+	}
+
+	snapshot := state.Data{
+		Pairing: state.PairingState{Phase: state.PairingSteadyState},
+		Cloud: state.CloudState{
+			HeartbeatEndpoint: "/api/receiver/heartbeat",
+			IngestAPIKey:      "secret",
+		},
+	}
+	meshSnap := meshtastic.Snapshot{State: meshtastic.StateConnected}
+
+	svc.processSteadyState(context.Background(), snapshot, meshSnap)
+	firstHeartbeatStatus, ok := statusModel.Snapshot().Components["heartbeat"]
+	if !ok {
+		t.Fatalf("expected heartbeat component after failed tick")
+	}
+	if firstHeartbeatStatus.State != "failed" {
+		t.Fatalf("expected heartbeat component state failed, got %q", firstHeartbeatStatus.State)
+	}
+	if svc.steady.lastHeartbeatAck != nil {
+		t.Fatalf("expected no heartbeat ack after retryable failure")
+	}
+
+	mockCloud.heartbeatErr = nil
+	svc.processSteadyState(context.Background(), snapshot, meshSnap)
+	if mockCloud.heartbeatCalls != 2 {
+		t.Fatalf("expected two heartbeat attempts across recovery, got %d", mockCloud.heartbeatCalls)
+	}
+	if svc.steady.lastHeartbeatAck == nil {
+		t.Fatalf("expected heartbeat ack after recovery")
+	}
+	secondHeartbeatStatus := statusModel.Snapshot().Components["heartbeat"]
+	if secondHeartbeatStatus.State != "sent" {
+		t.Fatalf("expected heartbeat component state sent after recovery, got %q", secondHeartbeatStatus.State)
+	}
+}
+
 func TestSendHeartbeatAppliesCloudManagedHomeAutoConfig(t *testing.T) {
 	t.Parallel()
 

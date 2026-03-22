@@ -181,6 +181,14 @@ type Module struct {
 	events     chan meshtastic.Event
 	reevaluate chan struct{}
 	started    bool
+
+	lastPersistFingerprint string
+	lastLoggedState        string
+	lastLoggedControlState string
+	lastLoggedDecision     string
+	lastLoggedAction       string
+	lastLoggedResult       string
+	lastLoggedSummary      string
 }
 
 type pendingAction struct {
@@ -383,6 +391,7 @@ func (m *Module) bootstrapFromStateLocked() {
 	}
 
 	snap := m.store.Snapshot().HomeAutoSession
+	m.lastPersistFingerprint = homeAutoPersistFingerprint(snap)
 	m.activeSessionID = strings.TrimSpace(snap.ActiveSessionID)
 	m.activeTriggerNode = strings.TrimSpace(snap.ActiveTriggerNode)
 	m.controlState = strings.TrimSpace(snap.ControlState)
@@ -1220,6 +1229,15 @@ func (m *Module) handleCloudErrorLocked(now time.Time, action pendingActionKind,
 			m.reconciliationState = reconciliationConflictStateMismatch
 			m.markConflictBlockedLocked(now, "lifecycle conflict", "home auto control blocked by lifecycle conflict")
 		}
+		m.logger.Error(
+			"home auto session action blocked by lifecycle conflict",
+			"action",
+			actionName,
+			"lifecycle",
+			lifecycle,
+			"blocked_reason",
+			m.blockedReason,
+		)
 		return
 	}
 
@@ -1231,6 +1249,13 @@ func (m *Module) handleCloudErrorLocked(now time.Time, action pendingActionKind,
 		m.reconciliationState = reconciliationConflictAlreadyActive
 		m.activeStateSource = activeStateSourceConflict
 		m.markConflictBlockedLocked(now, "cloud reports an active session already exists", "start blocked: cloud/local state disagreement")
+		m.logger.Warn(
+			"home auto session start blocked by cloud/local conflict",
+			"action",
+			actionName,
+			"blocked_reason",
+			m.blockedReason,
+		)
 		return
 	}
 
@@ -1242,6 +1267,13 @@ func (m *Module) handleCloudErrorLocked(now time.Time, action pendingActionKind,
 		m.reconciliationState = reconciliationConflictStateMismatch
 		m.activeStateSource = activeStateSourceConflict
 		m.markConflictBlockedLocked(now, "cloud rejected stop because local and cloud session state disagree", "stop blocked: cloud/local state disagreement")
+		m.logger.Warn(
+			"home auto session stop blocked by cloud/local conflict",
+			"action",
+			actionName,
+			"blocked_reason",
+			m.blockedReason,
+		)
 		return
 	}
 
@@ -1255,6 +1287,17 @@ func (m *Module) handleCloudErrorLocked(now time.Time, action pendingActionKind,
 		m.lastActionResult = "retry_scheduled"
 		m.summary = "cloud/session API unavailable, retrying after cooldown"
 		m.lastDecision = fmt.Sprintf("%s action retry scheduled after %s", actionName, delay.Round(time.Second))
+		m.logger.Warn(
+			"home auto session retry scheduled",
+			"action",
+			actionName,
+			"attempt",
+			m.consecutiveFailures,
+			"retry_in",
+			delay.Round(time.Second),
+			"cooldown_until",
+			cooldown.Format(time.RFC3339Nano),
+		)
 		m.publishLocked()
 		m.persistLocked()
 		return
@@ -1264,6 +1307,15 @@ func (m *Module) handleCloudErrorLocked(now time.Time, action pendingActionKind,
 	decision := fmt.Sprintf("%s action blocked by non-retryable cloud error", actionName)
 	m.lastActionResult = "failed_non_retryable"
 	m.markDegradedLocked(now, blocked, decision)
+	m.logger.Error(
+		"home auto session action blocked by non-retryable cloud error",
+		"action",
+		actionName,
+		"blocked_reason",
+		m.blockedReason,
+		"err",
+		err,
+	)
 }
 
 func (m *Module) markDegradedLocked(now time.Time, blockedReason, decision string) {
@@ -1377,52 +1429,67 @@ func (m *Module) persistLocked() {
 		pendingSince = cloneTime(m.pendingAction.Since)
 	}
 
-	_ = m.store.Update(func(data *state.Data) {
-		data.HomeAutoSession.ModuleState = stateCode
-		data.HomeAutoSession.ControlState = controlState
-		data.HomeAutoSession.ActiveStateSource = activeStateSource
-		data.HomeAutoSession.ReconciliationState = reconciliation
-		data.HomeAutoSession.EffectiveConfigSource = effectiveConfigSource
-		data.HomeAutoSession.EffectiveConfigVersion = effectiveConfigVersion
-		data.HomeAutoSession.CloudConfigPresent = cloudConfigPresent
-		data.HomeAutoSession.LastFetchedConfigVer = lastFetchedConfigVer
-		data.HomeAutoSession.LastAppliedConfigVer = lastAppliedConfigVer
-		data.HomeAutoSession.LastConfigApplyResult = lastConfigApplyResult
-		data.HomeAutoSession.LastConfigApplyError = lastConfigApplyError
-		data.HomeAutoSession.DesiredConfigEnabled = &desiredConfigEnabled
-		data.HomeAutoSession.DesiredConfigMode = desiredConfigMode
-		data.HomeAutoSession.ActiveSessionID = activeID
-		data.HomeAutoSession.ActiveTriggerNode = activeNode
-		data.HomeAutoSession.PendingAction = pendingActionCode
-		data.HomeAutoSession.PendingTriggerNode = pendingNode
-		data.HomeAutoSession.PendingReason = pendingReason
-		data.HomeAutoSession.PendingDedupeKey = pendingDedupe
-		data.HomeAutoSession.PendingSince = pendingSince
-		data.HomeAutoSession.LastDecisionReason = decision
-		data.HomeAutoSession.LastStartDedupeKey = lastStart
-		data.HomeAutoSession.LastStopDedupeKey = lastStop
-		data.HomeAutoSession.LastAction = lastAction
-		data.HomeAutoSession.LastActionResult = lastActionResult
-		data.HomeAutoSession.LastActionAt = lastActionAt
-		data.HomeAutoSession.LastSuccessfulAction = lastSuccessAction
-		data.HomeAutoSession.LastSuccessfulActionAt = lastSuccessAt
-		data.HomeAutoSession.LastError = lastErr
-		data.HomeAutoSession.BlockedReason = blockedReason
-		data.HomeAutoSession.ConsecutiveFailures = consecutiveFailures
-		data.HomeAutoSession.LastDecisionAt = cloneTime(now)
-		data.HomeAutoSession.LastEventAt = lastEventAt
-		data.HomeAutoSession.CooldownUntil = cooldown
-		data.HomeAutoSession.DecisionCooldownUntil = decisionCooldown
-		data.HomeAutoSession.GPSStatus = gpsStatus
-		data.HomeAutoSession.GPSReason = gpsReason
-		data.HomeAutoSession.GPSNodeID = gpsNode
-		data.HomeAutoSession.GPSUpdatedAt = gpsUpdatedAt
-		data.HomeAutoSession.GPSDistanceM = gpsDistance
-		data.HomeAutoSession.ObservedDropped = observedDropped
-		if !now.IsZero() {
-			data.HomeAutoSession.UpdatedAt = now
-		}
-	})
+	nextState := state.HomeAutoSessionState{
+		ModuleState:            stateCode,
+		ControlState:           controlState,
+		ActiveStateSource:      activeStateSource,
+		ReconciliationState:    reconciliation,
+		EffectiveConfigSource:  effectiveConfigSource,
+		EffectiveConfigVersion: effectiveConfigVersion,
+		CloudConfigPresent:     cloudConfigPresent,
+		LastFetchedConfigVer:   lastFetchedConfigVer,
+		LastAppliedConfigVer:   lastAppliedConfigVer,
+		LastConfigApplyResult:  lastConfigApplyResult,
+		LastConfigApplyError:   lastConfigApplyError,
+		DesiredConfigEnabled:   &desiredConfigEnabled,
+		DesiredConfigMode:      desiredConfigMode,
+		ActiveSessionID:        activeID,
+		ActiveTriggerNode:      activeNode,
+		PendingAction:          pendingActionCode,
+		PendingTriggerNode:     pendingNode,
+		PendingReason:          pendingReason,
+		PendingDedupeKey:       pendingDedupe,
+		PendingSince:           pendingSince,
+		LastDecisionReason:     decision,
+		LastStartDedupeKey:     lastStart,
+		LastStopDedupeKey:      lastStop,
+		LastAction:             lastAction,
+		LastActionResult:       lastActionResult,
+		LastActionAt:           lastActionAt,
+		LastSuccessfulAction:   lastSuccessAction,
+		LastSuccessfulActionAt: lastSuccessAt,
+		LastError:              lastErr,
+		BlockedReason:          blockedReason,
+		ConsecutiveFailures:    consecutiveFailures,
+		LastEventAt:            lastEventAt,
+		CooldownUntil:          cooldown,
+		DecisionCooldownUntil:  decisionCooldown,
+		GPSStatus:              gpsStatus,
+		GPSReason:              gpsReason,
+		GPSNodeID:              gpsNode,
+		GPSUpdatedAt:           gpsUpdatedAt,
+		GPSDistanceM:           gpsDistance,
+		ObservedDropped:        observedDropped,
+	}
+
+	fingerprint := homeAutoPersistFingerprint(nextState)
+	if fingerprint != "" && fingerprint == m.lastPersistFingerprint {
+		return
+	}
+
+	nextState.LastDecisionAt = cloneTime(now)
+	if !now.IsZero() {
+		nextState.UpdatedAt = now
+	}
+	if err := m.store.Update(func(data *state.Data) {
+		data.HomeAutoSession = nextState
+	}); err != nil {
+		m.logger.Warn("persist home auto session state failed", "err", err)
+		return
+	}
+	if fingerprint != "" {
+		m.lastPersistFingerprint = fingerprint
+	}
 }
 
 func (m *Module) publishLocked() {
@@ -1519,6 +1586,33 @@ func (m *Module) publishLocked() {
 		ObservedDropped:       m.observedDropped,
 	})
 	m.status.SetComponent("home_auto_session", string(m.state), summary)
+
+	currentState := string(m.state)
+	currentDecision := strings.TrimSpace(m.lastDecision)
+	currentAction := strings.TrimSpace(m.lastAction)
+	currentResult := strings.TrimSpace(m.lastActionResult)
+	if m.lastLoggedState != currentState ||
+		m.lastLoggedControlState != controlState ||
+		m.lastLoggedDecision != currentDecision ||
+		m.lastLoggedAction != currentAction ||
+		m.lastLoggedResult != currentResult ||
+		m.lastLoggedSummary != summary {
+		m.logger.Info(
+			"home auto session decision update",
+			"state", currentState,
+			"control_state", controlState,
+			"decision", currentDecision,
+			"action", currentAction,
+			"result", currentResult,
+			"summary", summary,
+		)
+		m.lastLoggedState = currentState
+		m.lastLoggedControlState = controlState
+		m.lastLoggedDecision = currentDecision
+		m.lastLoggedAction = currentAction
+		m.lastLoggedResult = currentResult
+		m.lastLoggedSummary = summary
+	}
 }
 
 func normalizeConfig(cfg config.HomeAutoSessionConfig) config.HomeAutoSessionConfig {
@@ -1547,6 +1641,17 @@ func normalizeConfig(cfg config.HomeAutoSessionConfig) config.HomeAutoSessionCon
 
 func configHash(cfg config.HomeAutoSessionConfig) string {
 	payload, err := json.Marshal(cfg)
+	if err != nil {
+		return ""
+	}
+	sum := sha256.Sum256(payload)
+	return hex.EncodeToString(sum[:12])
+}
+
+func homeAutoPersistFingerprint(value state.HomeAutoSessionState) string {
+	value.LastDecisionAt = nil
+	value.UpdatedAt = time.Time{}
+	payload, err := json.Marshal(value)
 	if err != nil {
 		return ""
 	}
