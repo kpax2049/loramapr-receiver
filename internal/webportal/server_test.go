@@ -315,6 +315,29 @@ func TestProgressPage(t *testing.T) {
 	}
 }
 
+func TestProgressPageSubmittedFlashTracksPairingPhase(t *testing.T) {
+	t.Parallel()
+
+	snap := sampleSnapshot()
+	snap.PairingPhase = "steady_state"
+	srv := New("127.0.0.1:0", staticStatusProvider{snapshot: snap}, &recordingPairingSubmitter{}, nil)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/progress?submitted=1", nil)
+	srv.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "Pairing completed.") {
+		t.Fatalf("expected completed pairing message after steady_state, got %q", body)
+	}
+	if strings.Contains(body, "Pairing code submitted. Progress updates will appear here.") {
+		t.Fatalf("expected submitted progress message to clear once pairing is complete")
+	}
+}
+
 func TestProgressPageShowsUpdateStatus(t *testing.T) {
 	t.Parallel()
 

@@ -538,10 +538,8 @@ func (s *Server) renderPairing(w http.ResponseWriter, _ *http.Request, flash, fl
 func (s *Server) handleProgress(w http.ResponseWriter, r *http.Request) {
 	snap := s.currentSnapshot()
 	data := s.basePageData("Progress", snap)
-	if r.URL.Query().Get("submitted") == "1" {
-		data.Flash = "Pairing code submitted. Progress updates will appear here."
-		data.FlashClass = "ok"
-	}
+	submitted := strings.TrimSpace(r.URL.Query().Get("submitted")) == "1"
+	data.Flash, data.FlashClass = progressFlash(snap, submitted)
 	data.MeshtasticState = componentState(snap, "meshtastic")
 	data.NetworkState = componentState(snap, "network")
 	ops := evaluateOperationalFromSnapshot(snap)
@@ -731,6 +729,25 @@ func summaryHint(snap status.Snapshot) (string, string) {
 		}
 		return "Receiver status is initializing.", "warn"
 	}
+}
+
+func progressFlash(snap status.Snapshot, submitted bool) (string, string) {
+	switch strings.TrimSpace(snap.PairingPhase) {
+	case "steady_state", "activated":
+		return "Pairing completed. Receiver is linked and ready for node connection and packet forwarding checks.", "ok"
+	case "pairing_code_entered", "bootstrap_exchanged":
+		if submitted {
+			return "Pairing code submitted. Progress updates will appear here.", "ok"
+		}
+		return "Pairing is in progress. Keep this page open while the receiver activates.", "warn"
+	case "unpaired":
+		return "Receiver pairing is not completed yet. Open Pairing and enter a valid code from LoRaMapr Cloud.", "warn"
+	default:
+		if submitted {
+			return "Pairing code submitted. Progress updates will appear here.", "ok"
+		}
+	}
+	return "", ""
 }
 
 func nextAction(snap status.Snapshot) string {
