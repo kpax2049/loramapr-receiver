@@ -62,8 +62,35 @@ jobs:
       - name: Run Tests
         run: go test ./...
 
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install Node Dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Install Packaging Tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y dpkg-dev
+
       - name: Build Artifacts
         run: packaging/release/build-artifacts.sh "${{ steps.release.outputs.version }}" "${{ steps.release.outputs.channel }}"
+
+      - name: Validate .deb Artifacts
+        run: |
+          packaging/debian/validate-deb.sh dist/${{ steps.release.outputs.version }}/artifacts/loramapr-receiver_${{ steps.release.outputs.version }}_linux_amd64.deb
+          packaging/debian/validate-deb.sh dist/${{ steps.release.outputs.version }}/artifacts/loramapr-receiver_${{ steps.release.outputs.version }}_linux_arm64.deb
+          packaging/debian/validate-deb.sh dist/${{ steps.release.outputs.version }}/artifacts/loramapr-receiver_${{ steps.release.outputs.version }}_linux_armv7.deb
+
+      - name: Validate Package Lifecycle Policy
+        run: |
+          packaging/debian/validate-lifecycle.sh dist/${{ steps.release.outputs.version }}/artifacts/loramapr-receiver_${{ steps.release.outputs.version }}_linux_amd64.deb
 
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4

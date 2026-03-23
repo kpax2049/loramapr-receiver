@@ -34,6 +34,20 @@ packaging/release/publish-github-release-assets.sh <version>
 
 Outputs are written to `dist/<version>/artifacts/` with `SHA256SUMS`.
 
+## Minimum Release Discipline
+
+1. Ensure `main` CI is green (`Lint` + `Distribution Validate`).
+2. Create and push a version tag:
+
+```bash
+git tag -a vX.Y.Z -m "vX.Y.Z"
+git push origin vX.Y.Z
+```
+
+3. Tag push runs `Receiver Release Artifacts` and publishes versioned assets to
+   the GitHub release `vX.Y.Z`.
+4. Use workflow dispatch only for controlled/manual rebuilds.
+
 ## Naming Conventions
 
 General binary archives:

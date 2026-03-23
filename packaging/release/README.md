@@ -40,6 +40,13 @@ Publish built artifacts to GitHub release assets:
 packaging/release/publish-github-release-assets.sh v1.0.0
 ```
 
+If custom release notes are needed during release creation:
+
+```bash
+RELEASE_NOTES_FILE=docs/release-notes-template.md \
+  packaging/release/publish-github-release-assets.sh v1.0.0
+```
+
 Note:
 
 - deprecated Pi image artifacts are excluded from normal release uploads
@@ -49,6 +56,25 @@ Outputs are written to:
 
 - `dist/<version>/build/`
 - `dist/<version>/artifacts/`
+
+## Minimum Release Flow
+
+1. Prepare version and tag:
+
+```bash
+git tag -a vX.Y.Z -m "vX.Y.Z"
+git push origin vX.Y.Z
+```
+
+2. CI on `main`/PR validates lint, tests, and package/release skeleton checks.
+3. Tag push triggers `Receiver Release Artifacts` workflow:
+   - lint + tests
+   - artifact build
+   - `.deb` and lifecycle validation
+   - artifact upload to GitHub Release assets
+4. Optional manual release:
+   - run `Receiver Release Artifacts` (`workflow_dispatch`) with `version` and
+     `channel`.
 
 Receiver binaries are stamped with build metadata via `ldflags`:
 

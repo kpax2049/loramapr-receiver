@@ -14,6 +14,10 @@ Usage:
 Examples:
   packaging/release/publish-github-release-assets.sh v2.12.0
   packaging/release/publish-github-release-assets.sh v2.12.0 dist/v2.12.0/artifacts kpax2049/loramapr-receiver
+
+Optional environment:
+  RELEASE_NOTES_FILE=<path>  Use explicit release notes file when creating a new
+                             GitHub release (otherwise --generate-notes is used).
 EOF
 }
 
@@ -66,7 +70,20 @@ if [[ "${#files[@]}" -eq 0 ]]; then
 fi
 
 if ! gh release view "${VERSION}" --repo "${REPO}" >/dev/null 2>&1; then
-  gh release create "${VERSION}" --repo "${REPO}" --title "${VERSION}" --notes ""
+  release_create_args=(
+    --repo "${REPO}"
+    --title "${VERSION}"
+  )
+  if [[ -n "${RELEASE_NOTES_FILE:-}" ]]; then
+    if [[ ! -f "${RELEASE_NOTES_FILE}" ]]; then
+      echo "release notes file not found: ${RELEASE_NOTES_FILE}" >&2
+      exit 1
+    fi
+    release_create_args+=(--notes-file "${RELEASE_NOTES_FILE}")
+  else
+    release_create_args+=(--generate-notes)
+  fi
+  gh release create "${VERSION}" "${release_create_args[@]}"
 fi
 
 gh release upload "${VERSION}" "${files[@]}" --repo "${REPO}" --clobber
