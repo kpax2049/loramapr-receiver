@@ -3,6 +3,9 @@ const globals = require("globals");
 
 module.exports = [
   {
+    linterOptions: {
+      reportUnusedDisableDirectives: "error"
+    },
     ignores: [
       "**/dist/**",
       "**/build/**",
@@ -24,7 +27,10 @@ module.exports = [
       }
     },
     rules: {
-      "no-console": "off"
+      "no-console": "off",
+      eqeqeq: ["error", "always", { null: "ignore" }],
+      "no-implicit-coercion": "error",
+      "no-unneeded-ternary": "error"
     }
   },
   {
