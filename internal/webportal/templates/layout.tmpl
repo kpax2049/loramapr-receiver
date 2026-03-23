@@ -30,10 +30,26 @@
       color: #fff;
       padding: 16px;
     }
+    .header-top {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
     header h1 {
       margin: 0;
       font-size: 1.15rem;
       letter-spacing: 0.02em;
+    }
+    .header-version {
+      margin: 0;
+      color: #cddbf0;
+      font-size: 0.86rem;
+    }
+    .header-version .value {
+      color: #ffffff;
+      font-weight: 600;
     }
     nav {
       margin-top: 10px;
@@ -152,7 +168,10 @@
 </head>
 <body>
   <header>
-    <h1>LoRaMapr Receiver Setup Portal</h1>
+    <div class="header-top">
+      <h1>LoRaMapr Receiver Setup Portal</h1>
+      <p class="header-version">App version: <span class="mono value">{{if .RuntimeVersion}}{{.RuntimeVersion}}{{else}}unknown{{end}}{{if .ReleaseChannel}} ({{.ReleaseChannel}}){{end}}</span></p>
+    </div>
     <nav>
       <a href="/">Welcome</a>
       <a href="/pairing">Pairing</a>
