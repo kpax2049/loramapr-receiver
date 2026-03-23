@@ -477,6 +477,8 @@ func (c *HTTPClient) postJSON(
 	headers map[string]string,
 	response any,
 ) error {
+	ctx, requestID := EnsureRequestID(ctx)
+
 	requestURL, err := c.resolveURL(pathOrURL)
 	if err != nil {
 		return err
@@ -492,6 +494,9 @@ func (c *HTTPClient) postJSON(
 		return err
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
+	if requestID != "" {
+		httpReq.Header.Set("X-Request-Id", requestID)
+	}
 	for key, value := range headers {
 		httpReq.Header.Set(key, value)
 	}

@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"path/filepath"
 	goruntime "runtime"
 	"strconv"
@@ -694,7 +695,10 @@ func (s *Service) sendHeartbeat(ctx context.Context, snapshot state.Data, meshSn
 	updateSnap := s.container.Status.Snapshot()
 	ops := s.deriveOperational(updateSnap, snapshot, meshSnap)
 
-	ack, err := s.container.Cloud.SendReceiverHeartbeat(ctx, endpoint, apiKey, cloudclient.ReceiverHeartbeat{
+	callCtx, requestID := cloudclient.EnsureRequestID(ctx)
+	receiverID := strings.TrimSpace(snapshot.Cloud.ReceiverID)
+
+	ack, err := s.container.Cloud.SendReceiverHeartbeat(callCtx, endpoint, apiKey, cloudclient.ReceiverHeartbeat{
 		RuntimeVersion:  s.build.Version,
 		Platform:        goruntime.GOOS,
 		Arch:            goruntime.GOARCH,
@@ -761,6 +765,17 @@ func (s *Service) sendHeartbeat(ctx context.Context, snapshot state.Data, meshSn
 		},
 	})
 	if err != nil {
+		statusCode, errorCode := outboundCallResult(err)
+		s.container.Logger.Warn(
+			"cloud outbound call failed",
+			"requestId", requestID,
+			"receiverId", receiverID,
+			"operation", "heartbeat.send",
+			"statusCode", statusCode,
+			"errorCode", errorCode,
+			"route", endpoint,
+			"err", err,
+		)
 		if change, ok := lifecycleChangeFromCloudError(err); ok {
 			if applyErr := s.handleLifecycleCloudError(change, err); applyErr != nil {
 				return applyErr
@@ -838,6 +853,15 @@ func (s *Service) sendHeartbeat(ctx context.Context, snapshot state.Data, meshSn
 	)
 	s.applyHomeAutoCloudConfigFromAck(ack)
 	s.steady.cloudReachable = true
+	s.container.Logger.Info(
+		"cloud outbound call succeeded",
+		"requestId", requestID,
+		"receiverId", receiverID,
+		"operation", "heartbeat.send",
+		"statusCode", http.StatusOK,
+		"errorCode", "",
+		"route", endpoint,
+	)
 	s.container.Logger.Debug(
 		"heartbeat acknowledged",
 		"receiver_agent_id",
@@ -1102,15 +1126,38 @@ func (s *Service) drainIngestQueue(ctx context.Context, snapshot state.Data) err
 
 		sentAt := time.Now().UTC()
 		s.steady.lastPacketSent = &sentAt
-		err := s.container.Cloud.PostIngestEvent(ctx, endpoint, apiKey, item.payload, item.idempotencyKey)
+		callCtx, requestID := cloudclient.EnsureRequestID(ctx)
+		receiverID := strings.TrimSpace(snapshot.Cloud.ReceiverID)
+		err := s.container.Cloud.PostIngestEvent(callCtx, endpoint, apiKey, item.payload, item.idempotencyKey)
 		if err == nil {
 			ackAt := time.Now().UTC()
 			s.steady.lastPacketAck = &ackAt
 			s.steady.cloudReachable = true
 			s.steady.ingestQueue = s.steady.ingestQueue[1:]
 			s.container.Status.SetComponent("ingest", "delivered", fmt.Sprintf("queue depth %d", len(s.steady.ingestQueue)))
+			s.container.Logger.Debug(
+				"cloud outbound call succeeded",
+				"requestId", requestID,
+				"receiverId", receiverID,
+				"operation", "ingest.post",
+				"statusCode", http.StatusOK,
+				"errorCode", "",
+				"route", endpoint,
+			)
 			continue
 		}
+
+		statusCode, errorCode := outboundCallResult(err)
+		s.container.Logger.Warn(
+			"cloud outbound call failed",
+			"requestId", requestID,
+			"receiverId", receiverID,
+			"operation", "ingest.post",
+			"statusCode", statusCode,
+			"errorCode", errorCode,
+			"route", endpoint,
+			"err", err,
+		)
 
 		if change, ok := lifecycleChangeFromCloudError(err); ok {
 			if applyErr := s.handleLifecycleCloudError(change, err); applyErr != nil {
@@ -1625,6 +1672,40 @@ func coarseCloudError(err error) string {
 		return "cloud endpoint unreachable"
 	}
 	return "cloud request failed"
+}
+
+func outboundCallResult(err error) (int, string) {
+	if err == nil {
+		return http.StatusOK, ""
+	}
+	var apiErr *cloudclient.APIError
+	if errors.As(err, &apiErr) {
+		code := apiErr.StatusCode
+		if code <= 0 {
+			code = http.StatusBadGateway
+		}
+		switch apiErr.StatusCode {
+		case http.StatusUnauthorized:
+			return code, "unauthorized"
+		case http.StatusForbidden:
+			return code, "forbidden"
+		case http.StatusConflict:
+			return code, "conflict"
+		case http.StatusTooManyRequests:
+			return code, "rate_limited"
+		case http.StatusServiceUnavailable:
+			return code, "service_unavailable"
+		default:
+			return code, "cloud_api_error"
+		}
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return http.StatusGatewayTimeout, "timeout"
+	}
+	if errors.Is(err, context.Canceled) {
+		return 499, "canceled"
+	}
+	return http.StatusBadGateway, "transport_error"
 }
 
 func (s *Service) handleLifecycleCloudError(change pairing.LifecycleChange, err error) error {

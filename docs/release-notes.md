@@ -1,5 +1,8 @@
 # LoRaMapr Receiver Release Notes
 
+For minimum structured logging + request-ID correlation notes targeting
+`v3.1.0`, see `docs/release-notes-v3.1.0.md`.
+
 For liveness and Home Auto idle-reliability hardening targeting `v3.0.3`, see
 `docs/release-notes-v3.0.3.md`.
 

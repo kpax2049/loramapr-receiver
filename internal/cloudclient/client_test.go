@@ -182,6 +182,9 @@ func TestPostIngestEventSendsHeaders(t *testing.T) {
 			if req.Header.Get("x-idempotency-key") != "event-1" {
 				t.Fatalf("missing x-idempotency-key header")
 			}
+			if strings.TrimSpace(req.Header.Get("X-Request-Id")) == "" {
+				t.Fatalf("missing X-Request-Id header")
+			}
 			return jsonResponse(http.StatusOK, `{"status":"ok"}`), nil
 		})},
 	}
@@ -189,6 +192,28 @@ func TestPostIngestEventSendsHeaders(t *testing.T) {
 	err := client.PostIngestEvent(context.Background(), "/api/meshtastic/event", "ingest-secret", map[string]any{
 		"fromId": "node-1",
 	}, "event-1")
+	if err != nil {
+		t.Fatalf("PostIngestEvent returned error: %v", err)
+	}
+}
+
+func TestPostIngestEventReusesRequestIDFromContext(t *testing.T) {
+	t.Parallel()
+
+	client := &HTTPClient{
+		baseURL: "https://api.example.com",
+		client: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			if req.Header.Get("X-Request-Id") != "req-context-123" {
+				t.Fatalf("unexpected X-Request-Id header: %q", req.Header.Get("X-Request-Id"))
+			}
+			return jsonResponse(http.StatusOK, `{"status":"ok"}`), nil
+		})},
+	}
+
+	ctx := WithRequestID(context.Background(), "req-context-123")
+	err := client.PostIngestEvent(ctx, "/api/meshtastic/event", "ingest-secret", map[string]any{
+		"fromId": "node-2",
+	}, "event-2")
 	if err != nil {
 		t.Fatalf("PostIngestEvent returned error: %v", err)
 	}
@@ -205,6 +230,9 @@ func TestSendReceiverHeartbeat(t *testing.T) {
 			}
 			if req.Header.Get("x-api-key") != "ingest-secret" {
 				t.Fatalf("missing x-api-key header")
+			}
+			if strings.TrimSpace(req.Header.Get("X-Request-Id")) == "" {
+				t.Fatalf("missing X-Request-Id header")
 			}
 
 			var payload map[string]any
@@ -268,6 +296,27 @@ func TestSendReceiverHeartbeat(t *testing.T) {
 	}
 	if ack.HomeAutoSessionConfig.Mode != "control" {
 		t.Fatalf("unexpected heartbeat ack home auto mode: %q", ack.HomeAutoSessionConfig.Mode)
+	}
+}
+
+func TestEnsureRequestID(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	nextCtx, generated := EnsureRequestID(ctx)
+	if strings.TrimSpace(generated) == "" {
+		t.Fatalf("expected generated request ID")
+	}
+	if got := RequestIDFromContext(nextCtx); got != generated {
+		t.Fatalf("expected request ID in context, got %q", got)
+	}
+
+	reusedCtx, reused := EnsureRequestID(WithRequestID(ctx, "req-fixed"))
+	if reused != "req-fixed" {
+		t.Fatalf("expected reused request ID req-fixed, got %q", reused)
+	}
+	if got := RequestIDFromContext(reusedCtx); got != "req-fixed" {
+		t.Fatalf("expected request ID req-fixed in context, got %q", got)
 	}
 }
 

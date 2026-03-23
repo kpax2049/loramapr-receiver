@@ -27,6 +27,10 @@ import (
 )
 
 func main() {
+	if bootstrapLogger, err := logging.New(config.Default().Logging); err == nil {
+		slog.SetDefault(bootstrapLogger)
+	}
+
 	args := os.Args[1:]
 	if len(args) == 0 {
 		runCommand(nil)
@@ -76,7 +80,12 @@ func meshtasticBridgeCommand(args []string) {
 	ctx, cancel := signalNotifyContext()
 	defer cancel()
 
-	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	logger, err := logging.NewWithWriter(config.Default().Logging, os.Stderr)
+	if err != nil {
+		slog.Error("meshtastic bridge failed: initialize logger", "err", err)
+		os.Exit(1)
+	}
+	logger = logger.With("operation", "meshtastic-bridge")
 	if err := meshtastic.RunNativeBridge(ctx, *device, os.Stdout, logger.With("component", "meshtastic-bridge")); err != nil {
 		logger.Error("meshtastic bridge failed", "device", *device, "err", err)
 		os.Exit(1)
