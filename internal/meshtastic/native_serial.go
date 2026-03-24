@@ -22,6 +22,7 @@ const (
 	nativePortNumPositionApp       = 3
 	nativeNoFrameHoldDelay         = 10 * time.Second
 	nativeDecodeHoldDelay          = 5 * time.Second
+	nativeMaxAcceptedRXSkew        = 15 * time.Minute
 )
 
 var errNoNativeFrames = errors.New("no Meshtastic native serial frames detected")
@@ -461,12 +462,17 @@ func decodeNativePacket(payload []byte, now time.Time) (Packet, error) {
 		}
 	}
 
-	receivedAt := now.UTC()
-	if rxTime > 0 {
-		receivedAt = time.Unix(int64(rxTime), 0).UTC()
-	}
+	receivedAt := normalizedNativeRXTime(now.UTC(), rxTime)
 	if channelNum > 0 {
 		meta["channel"] = strconv.FormatUint(channelNum, 10)
+	}
+	if rxTime > 0 {
+		meta["rx_time_unix"] = strconv.FormatUint(uint64(rxTime), 10)
+		candidate := time.Unix(int64(rxTime), 0).UTC()
+		if !candidate.Equal(receivedAt) {
+			meta["rx_time_rejected"] = "true"
+			meta["rx_time_rejected_reason"] = "clock_skew"
+		}
 	}
 	if packetID > 0 {
 		meta["packet_id"] = strconv.FormatUint(uint64(packetID), 10)
@@ -498,6 +504,18 @@ func decodeNativePacket(payload []byte, now time.Time) (Packet, error) {
 		packet.Position = decodeNativePositionPayload(decoded.Payload)
 	}
 	return packet, nil
+}
+
+func normalizedNativeRXTime(now time.Time, rxTime uint32) time.Time {
+	ref := now.UTC()
+	if rxTime == 0 {
+		return ref
+	}
+	candidate := time.Unix(int64(rxTime), 0).UTC()
+	if candidate.Before(ref.Add(-nativeMaxAcceptedRXSkew)) || candidate.After(ref.Add(nativeMaxAcceptedRXSkew)) {
+		return ref
+	}
+	return candidate
 }
 
 type nativeDecodedData struct {

@@ -159,6 +159,27 @@ func TestBuildNativeFrameAndDecodeRoundTrip(t *testing.T) {
 	}
 }
 
+func TestNormalizedNativeRXTimeUsesNowWhenClockSkewed(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 3, 24, 10, 30, 0, 0, time.UTC)
+
+	inRange := uint32(now.Add(-5 * time.Minute).Unix())
+	if got := normalizedNativeRXTime(now, inRange); !got.Equal(time.Unix(int64(inRange), 0).UTC()) {
+		t.Fatalf("expected in-range rx_time to be used, got %s", got.Format(time.RFC3339))
+	}
+
+	tooOld := uint32(now.Add(-2 * time.Hour).Unix())
+	if got := normalizedNativeRXTime(now, tooOld); !got.Equal(now.UTC()) {
+		t.Fatalf("expected old rx_time fallback to now, got %s", got.Format(time.RFC3339))
+	}
+
+	tooFarFuture := uint32(now.Add(2 * time.Hour).Unix())
+	if got := normalizedNativeRXTime(now, tooFarFuture); !got.Equal(now.UTC()) {
+		t.Fatalf("expected future rx_time fallback to now, got %s", got.Format(time.RFC3339))
+	}
+}
+
 func bufioFromBytes(payload []byte) *bufio.Reader {
 	return bufioFromReader(bytes.NewReader(payload))
 }

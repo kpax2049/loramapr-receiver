@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"os"
 	"path/filepath"
 	goruntime "runtime"
 	"strconv"
@@ -32,6 +33,7 @@ import (
 const (
 	maxIngestQueueDepth = 512
 	maxIngestBatchTick  = 32
+	ingestTickInterval  = 2 * time.Second
 )
 
 var errLifecycleTransition = errors.New("receiver lifecycle transition")
@@ -70,11 +72,13 @@ type CloudClient interface {
 }
 
 type Service struct {
-	container *Container
-	mode      config.RunMode
-	steady    steadyState
-	build     buildinfo.Info
-	updater   *update.Checker
+	container   *Container
+	mode        config.RunMode
+	steady      steadyState
+	build       buildinfo.Info
+	updater     *update.Checker
+	ingestWake  chan struct{}
+	ingestTrace bool
 }
 
 type Container struct {
@@ -103,6 +107,7 @@ type steadyState struct {
 type queuedIngestEvent struct {
 	payload        map[string]any
 	idempotencyKey string
+	capturedAt     time.Time
 	enqueuedAt     time.Time
 	nextAttemptAt  time.Time
 	attempts       int
@@ -202,6 +207,8 @@ func New(cfg config.Config, logger *slog.Logger) (*Service, error) {
 	svc.steady = steadyState{
 		ingestQueue: make([]queuedIngestEvent, 0, 64),
 	}
+	svc.ingestWake = make(chan struct{}, 1)
+	svc.ingestTrace = envFlagEnabled("LORAMAPR_INGEST_TRACE")
 
 	cloud := cloudclient.NewHTTPClient(cfg.Cloud.BaseURL, 10*time.Second)
 	mesh := meshtastic.NewAdapter(cfg.Meshtastic, logger.With("component", "meshtastic"))
@@ -262,6 +269,7 @@ func (s *Service) Run(ctx context.Context) error {
 		"profile", c.Status.Snapshot().RuntimeProfile,
 		"state_file", c.State.Path(),
 		"portal_bind", c.Config.Portal.BindAddress,
+		"ingest_trace_enabled", s.ingestTrace,
 	)
 
 	c.Status.SetLifecycle(status.LifecycleRunning)
@@ -285,6 +293,8 @@ func (s *Service) Run(ctx context.Context) error {
 
 	ticker := time.NewTicker(c.Config.Service.Heartbeat.Std())
 	defer ticker.Stop()
+	ingestTicker := time.NewTicker(ingestTickInterval)
+	defer ingestTicker.Stop()
 	s.tick(ctx)
 
 	for {
@@ -316,6 +326,10 @@ func (s *Service) Run(ctx context.Context) error {
 				continue
 			}
 			s.onMeshtasticEvent(event)
+		case <-s.ingestWake:
+			s.processIngestDispatch(ctx, "event")
+		case <-ingestTicker.C:
+			s.processIngestDispatch(ctx, "interval")
 		case <-ticker.C:
 			s.tick(ctx)
 		}
@@ -496,8 +510,9 @@ func (s *Service) onMeshtasticEvent(event meshtastic.Event) {
 	switch event.Kind {
 	case meshtastic.EventPacket:
 		if event.Packet != nil {
-			payload, idempotencyKey := shapeIngestPayload(*event.Packet)
-			s.enqueueIngestEvent(payload, idempotencyKey, now)
+			payload, idempotencyKey, capturedAt := shapeIngestPayload(*event.Packet)
+			s.enqueueIngestEvent(payload, idempotencyKey, capturedAt, now)
+			s.signalIngestDrain()
 			c.Status.SetComponent(
 				"meshtastic",
 				"connected",
@@ -519,9 +534,12 @@ func (s *Service) onMeshtasticEvent(event meshtastic.Event) {
 	}
 }
 
-func (s *Service) enqueueIngestEvent(payload map[string]any, idempotencyKey string, now time.Time) {
+func (s *Service) enqueueIngestEvent(payload map[string]any, idempotencyKey string, capturedAt time.Time, now time.Time) {
 	if idempotencyKey == "" {
 		idempotencyKey = fmt.Sprintf("rx-%d", now.UnixNano())
+	}
+	if capturedAt.IsZero() {
+		capturedAt = now
 	}
 
 	if len(s.steady.ingestQueue) >= maxIngestQueueDepth {
@@ -532,10 +550,20 @@ func (s *Service) enqueueIngestEvent(payload map[string]any, idempotencyKey stri
 	s.steady.ingestQueue = append(s.steady.ingestQueue, queuedIngestEvent{
 		payload:        payload,
 		idempotencyKey: idempotencyKey,
+		capturedAt:     capturedAt,
 		enqueuedAt:     now,
 		nextAttemptAt:  now,
 	})
 	s.steady.lastPacketQueued = cloneTime(now)
+
+	item := s.steady.ingestQueue[len(s.steady.ingestQueue)-1]
+	s.logIngestPipelineStage(
+		"enqueued",
+		item,
+		now,
+		"queueDepth", len(s.steady.ingestQueue),
+		"lagCapturedToEnqueuedMs", lagMillis(item.capturedAt, item.enqueuedAt),
+	)
 
 	s.container.Status.SetPacketTelemetry(
 		s.steady.lastPacketQueued,
@@ -544,6 +572,67 @@ func (s *Service) enqueueIngestEvent(payload map[string]any, idempotencyKey stri
 		len(s.steady.ingestQueue),
 	)
 	s.container.Status.SetComponent("ingest", "queued", fmt.Sprintf("queue depth %d", len(s.steady.ingestQueue)))
+}
+
+func (s *Service) signalIngestDrain() {
+	if s.ingestWake == nil {
+		return
+	}
+	select {
+	case s.ingestWake <- struct{}{}:
+	default:
+	}
+}
+
+func (s *Service) processIngestDispatch(ctx context.Context, trigger string) {
+	c := s.container
+	if c == nil || c.State == nil {
+		return
+	}
+	if len(s.steady.ingestQueue) == 0 {
+		return
+	}
+
+	snapshot := c.State.Snapshot()
+	if issue := cloudConfigCompatibilityIssue(snapshot.Cloud.ConfigVersion); issue != "" {
+		if s.ingestTrace {
+			c.Logger.Debug("ingest dispatch skipped", "trigger", trigger, "reason", "cloud config incompatible", "detail", issue)
+		}
+		return
+	}
+	if !credentialsReady(snapshot) {
+		if s.ingestTrace {
+			c.Logger.Debug("ingest dispatch skipped", "trigger", trigger, "reason", "credentials not ready", "pairing_phase", snapshot.Pairing.Phase)
+		}
+		return
+	}
+
+	err := s.drainIngestQueue(ctx, snapshot)
+	if errors.Is(err, errLifecycleTransition) {
+		c.Status.SetCloudReachable(false)
+		c.Status.SetCloud(snapshot.Cloud.EndpointURL, "lifecycle_blocked")
+		return
+	}
+	if err != nil {
+		if cloudclient.IsRetryable(err) {
+			c.Logger.Warn("ingest dispatch failed", "trigger", trigger, "err", err, "retryable", true)
+		} else {
+			c.Logger.Error("ingest dispatch failed", "trigger", trigger, "err", err, "retryable", false)
+		}
+	}
+
+	c.Status.SetPacketTelemetry(
+		s.steady.lastPacketQueued,
+		s.steady.lastPacketSent,
+		s.steady.lastPacketAck,
+		len(s.steady.ingestQueue),
+	)
+	c.Status.SetCloudReachable(s.steady.cloudReachable)
+	if s.steady.cloudReachable {
+		c.Status.SetCloud(snapshot.Cloud.EndpointURL, "reachable")
+	} else {
+		c.Status.SetCloud(snapshot.Cloud.EndpointURL, "unreachable")
+	}
 }
 
 func (s *Service) processSteadyState(ctx context.Context, snapshot state.Data, meshSnap meshtastic.Snapshot) {
@@ -640,7 +729,16 @@ func (s *Service) processSteadyState(ctx context.Context, snapshot state.Data, m
 		}
 	}
 	if heartbeatErr == nil && ingestErr == nil {
-		c.Status.SetLastError("")
+		clearLastError := true
+		if ingestComponent, ok := c.Status.Snapshot().Components["ingest"]; ok {
+			switch ingestComponent.State {
+			case "retrying", "failed", "dropped", "blocked":
+				clearLastError = false
+			}
+		}
+		if clearLastError {
+			c.Status.SetLastError("")
+		}
 	}
 
 	fresh := isHeartbeatFresh(s.steady.lastHeartbeatAck, c.Config.Service.Heartbeat.Std())
@@ -1121,20 +1219,55 @@ func (s *Service) drainIngestQueue(ctx context.Context, snapshot state.Data) err
 		now := time.Now().UTC()
 		item := &s.steady.ingestQueue[0]
 		if now.Before(item.nextAttemptAt) {
+			s.logIngestPipelineStage(
+				"waiting_retry_window",
+				*item,
+				now,
+				"queueDepth", len(s.steady.ingestQueue),
+				"nextAttemptAt", formatTime(item.nextAttemptAt),
+				"waitMs", item.nextAttemptAt.Sub(now).Milliseconds(),
+				"attempt", item.attempts,
+			)
 			break
 		}
 
+		dequeuedAt := now
 		sentAt := time.Now().UTC()
 		s.steady.lastPacketSent = &sentAt
+		s.logIngestPipelineStage(
+			"send_attempt",
+			*item,
+			sentAt,
+			"queueDepth", len(s.steady.ingestQueue),
+			"attempt", item.attempts+1,
+			"dequeuedAt", formatTime(dequeuedAt),
+			"sendAttemptAt", formatTime(sentAt),
+			"lagCapturedToDequeuedMs", lagMillis(item.capturedAt, dequeuedAt),
+			"lagEnqueuedToDequeuedMs", lagMillis(item.enqueuedAt, dequeuedAt),
+		)
 		callCtx, requestID := cloudclient.EnsureRequestID(ctx)
 		receiverID := strings.TrimSpace(snapshot.Cloud.ReceiverID)
 		err := s.container.Cloud.PostIngestEvent(callCtx, endpoint, apiKey, item.payload, item.idempotencyKey)
 		if err == nil {
 			ackAt := time.Now().UTC()
+			ackedItem := *item
 			s.steady.lastPacketAck = &ackAt
 			s.steady.cloudReachable = true
 			s.steady.ingestQueue = s.steady.ingestQueue[1:]
 			s.container.Status.SetComponent("ingest", "delivered", fmt.Sprintf("queue depth %d", len(s.steady.ingestQueue)))
+			s.logIngestPipelineStage(
+				"acked",
+				ackedItem,
+				ackAt,
+				"queueDepth", len(s.steady.ingestQueue),
+				"statusCode", http.StatusOK,
+				"dequeuedAt", formatTime(dequeuedAt),
+				"sendAttemptAt", formatTime(sentAt),
+				"ackedAt", formatTime(ackAt),
+				"lagCapturedToAckedMs", lagMillis(ackedItem.capturedAt, ackAt),
+				"lagEnqueuedToAckedMs", lagMillis(ackedItem.enqueuedAt, ackAt),
+				"lagSendAttemptToAckedMs", lagMillis(sentAt, ackAt),
+			)
 			s.container.Logger.Debug(
 				"cloud outbound call succeeded",
 				"requestId", requestID,
@@ -1171,6 +1304,21 @@ func (s *Service) drainIngestQueue(ctx context.Context, snapshot state.Data) err
 			retryDelay := deliveryRetryDelay(item.attempts)
 			item.nextAttemptAt = now.Add(retryDelay)
 			s.steady.cloudReachable = false
+			s.logIngestPipelineStage(
+				"send_failed",
+				*item,
+				now,
+				"queueDepth", len(s.steady.ingestQueue),
+				"attempt", item.attempts,
+				"statusCode", statusCode,
+				"errorCode", errorCode,
+				"error", coarseCloudError(err),
+				"retryable", true,
+				"nextAttemptAt", formatTime(item.nextAttemptAt),
+				"retryInMs", retryDelay.Milliseconds(),
+				"dequeuedAt", formatTime(dequeuedAt),
+				"sendAttemptAt", formatTime(sentAt),
+			)
 			s.container.Status.SetComponent("ingest", "retrying", fmt.Sprintf("retrying in %s", time.Until(item.nextAttemptAt).Round(time.Second)))
 			s.container.Status.SetLastError(coarseCloudError(err))
 			s.container.Logger.Warn(
@@ -1188,12 +1336,70 @@ func (s *Service) drainIngestQueue(ctx context.Context, snapshot state.Data) err
 		}
 
 		s.container.Logger.Warn("dropping non-retryable ingest event", "err", err)
+		s.logIngestPipelineStage(
+			"dropped_non_retryable",
+			*item,
+			now,
+			"queueDepth", len(s.steady.ingestQueue),
+			"statusCode", statusCode,
+			"errorCode", errorCode,
+			"error", coarseCloudError(err),
+			"retryable", false,
+			"dequeuedAt", formatTime(dequeuedAt),
+			"sendAttemptAt", formatTime(sentAt),
+		)
 		s.steady.ingestQueue = s.steady.ingestQueue[1:]
 		s.container.Status.SetComponent("ingest", "dropped", "non-retryable ingest failure")
 		s.container.Status.SetLastError(coarseCloudError(err))
 	}
 
 	return nil
+}
+
+func (s *Service) logIngestPipelineStage(stage string, item queuedIngestEvent, now time.Time, attrs ...any) {
+	if s.container == nil || s.container.Logger == nil {
+		return
+	}
+	base := []any{
+		"operation", "ingest.pipeline",
+		"stage", stage,
+		"idempotencyKey", item.idempotencyKey,
+		"capturedAt", formatTime(item.capturedAt),
+		"enqueuedAt", formatTime(item.enqueuedAt),
+		"observedAt", formatTime(now),
+		"lagCapturedToObservedMs", lagMillis(item.capturedAt, now),
+		"lagEnqueuedToObservedMs", lagMillis(item.enqueuedAt, now),
+	}
+	base = append(base, attrs...)
+	if s.ingestTrace {
+		s.container.Logger.Info("ingest pipeline trace", base...)
+		return
+	}
+	s.container.Logger.Debug("ingest pipeline trace", base...)
+}
+
+func lagMillis(from, to time.Time) int64 {
+	if from.IsZero() || to.IsZero() {
+		return 0
+	}
+	return to.Sub(from).Milliseconds()
+}
+
+func formatTime(value time.Time) string {
+	if value.IsZero() {
+		return ""
+	}
+	return value.UTC().Format(time.RFC3339Nano)
+}
+
+func envFlagEnabled(name string) bool {
+	raw := strings.ToLower(strings.TrimSpace(os.Getenv(name)))
+	switch raw {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
 }
 
 func credentialsReady(snapshot state.Data) bool {
@@ -1203,7 +1409,7 @@ func credentialsReady(snapshot state.Data) bool {
 	return strings.TrimSpace(snapshot.Cloud.IngestAPIKey) != ""
 }
 
-func shapeIngestPayload(packet meshtastic.Packet) (map[string]any, string) {
+func shapeIngestPayload(packet meshtastic.Packet) (map[string]any, string, time.Time) {
 	receivedAt := packet.ReceivedAt.UTC()
 	if receivedAt.IsZero() {
 		receivedAt = time.Now().UTC()
@@ -1272,7 +1478,7 @@ func shapeIngestPayload(packet meshtastic.Packet) (map[string]any, string) {
 			payload["radio"] = radio
 		}
 	}
-	return payload, idempotencyKey
+	return payload, idempotencyKey, receivedAt
 }
 
 func meshtasticPortnumLabel(portNum int) string {

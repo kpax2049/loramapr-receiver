@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"path/filepath"
 	"strings"
@@ -267,7 +268,7 @@ func boolPtr(v bool) *bool {
 func TestShapeIngestPayload(t *testing.T) {
 	t.Parallel()
 
-	payload, key := shapeIngestPayload(meshtastic.Packet{
+	payload, key, capturedAt := shapeIngestPayload(meshtastic.Packet{
 		SourceNodeID:      "!node-1",
 		DestinationNodeID: "!gateway",
 		PortNum:           3,
@@ -284,6 +285,9 @@ func TestShapeIngestPayload(t *testing.T) {
 	})
 	if !strings.HasPrefix(key, "rx-") {
 		t.Fatalf("unexpected idempotency key: %q", key)
+	}
+	if capturedAt.IsZero() {
+		t.Fatal("expected capturedAt timestamp")
 	}
 	if payload["fromId"] != "!node-1" {
 		t.Fatalf("unexpected payload source: %#v", payload)
@@ -386,6 +390,276 @@ func TestDrainIngestQueueSuccess(t *testing.T) {
 	}
 	if svc.steady.lastPacketAck == nil {
 		t.Fatalf("expected last packet ack timestamp")
+	}
+}
+
+func TestOnMeshtasticEventSignalsIngestDispatch(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now().UTC()
+	svc := &Service{
+		container: &Container{
+			Logger: slog.Default(),
+			Status: status.New(),
+		},
+		ingestWake: make(chan struct{}, 1),
+		steady: steadyState{
+			ingestQueue: make([]queuedIngestEvent, 0, 4),
+		},
+	}
+
+	svc.onMeshtasticEvent(meshtastic.Event{
+		Kind: meshtastic.EventPacket,
+		Packet: &meshtastic.Packet{
+			SourceNodeID:      "!nodeA",
+			DestinationNodeID: "!nodeB",
+			PortNum:           3,
+			Payload:           []byte("hello"),
+			ReceivedAt:        now,
+		},
+		Received: now,
+	})
+
+	if len(svc.steady.ingestQueue) != 1 {
+		t.Fatalf("expected one queued ingest event, got %d", len(svc.steady.ingestQueue))
+	}
+	select {
+	case <-svc.ingestWake:
+	default:
+		t.Fatal("expected ingest wake signal after packet enqueue")
+	}
+}
+
+func TestProcessIngestDispatchDeliversImmediatelyWhenReachable(t *testing.T) {
+	t.Parallel()
+
+	statePath := filepath.Join(t.TempDir(), "receiver-state.json")
+	store, err := state.Open(statePath)
+	if err != nil {
+		t.Fatalf("open state: %v", err)
+	}
+	if err := store.Update(func(data *state.Data) {
+		data.Pairing.Phase = state.PairingSteadyState
+		data.Cloud.EndpointURL = "https://api.example.com"
+		data.Cloud.IngestEndpoint = "/api/meshtastic/event"
+		data.Cloud.IngestAPIKey = "secret"
+	}); err != nil {
+		t.Fatalf("seed state: %v", err)
+	}
+
+	mockCloud := &mockCloudClient{}
+	statusModel := status.New()
+	now := time.Now().UTC()
+	svc := &Service{
+		container: &Container{
+			Logger: slog.Default(),
+			Status: statusModel,
+			State:  store,
+			Cloud:  mockCloud,
+		},
+		steady: steadyState{
+			ingestQueue: []queuedIngestEvent{
+				{
+					payload:        map[string]any{"fromId": "node-1"},
+					idempotencyKey: "evt-1",
+					capturedAt:     now.Add(-200 * time.Millisecond),
+					enqueuedAt:     now,
+					nextAttemptAt:  now.Add(-10 * time.Millisecond),
+				},
+			},
+		},
+	}
+
+	svc.processIngestDispatch(context.Background(), "test")
+
+	if mockCloud.postCalls != 1 {
+		t.Fatalf("expected immediate ingest post call, got %d", mockCloud.postCalls)
+	}
+	if len(svc.steady.ingestQueue) != 0 {
+		t.Fatalf("expected queue to be drained, got %d", len(svc.steady.ingestQueue))
+	}
+	if svc.steady.lastPacketAck == nil || svc.steady.lastPacketSent == nil {
+		t.Fatal("expected packet send/ack telemetry after dispatch")
+	}
+	capturedAt := now.Add(-200 * time.Millisecond)
+	lagToAck := svc.steady.lastPacketAck.Sub(capturedAt)
+	if lagToAck < 0 || lagToAck > 2*time.Second {
+		t.Fatalf("expected near-real-time ack lag, got %s", lagToAck)
+	}
+	lagSendToAck := svc.steady.lastPacketAck.Sub(*svc.steady.lastPacketSent)
+	if lagSendToAck < 0 || lagSendToAck > time.Second {
+		t.Fatalf("expected quick send->ack lag, got %s", lagSendToAck)
+	}
+	t.Logf("ingest lag captured->ack=%s send->ack=%s", lagToAck, lagSendToAck)
+	if statusModel.Snapshot().CloudStatus != "reachable" {
+		t.Fatalf("expected cloud status reachable, got %q", statusModel.Snapshot().CloudStatus)
+	}
+}
+
+func TestProcessIngestDispatchRecoversAfterRetryableOutage(t *testing.T) {
+	t.Parallel()
+
+	statePath := filepath.Join(t.TempDir(), "receiver-state.json")
+	store, err := state.Open(statePath)
+	if err != nil {
+		t.Fatalf("open state: %v", err)
+	}
+	if err := store.Update(func(data *state.Data) {
+		data.Pairing.Phase = state.PairingSteadyState
+		data.Cloud.EndpointURL = "https://api.example.com"
+		data.Cloud.IngestEndpoint = "/api/meshtastic/event"
+		data.Cloud.IngestAPIKey = "secret"
+	}); err != nil {
+		t.Fatalf("seed state: %v", err)
+	}
+
+	mockCloud := &mockCloudClient{
+		postErr: &cloudclient.APIError{StatusCode: 503, Message: "outage", Retryable: true},
+	}
+	statusModel := status.New()
+	now := time.Now().UTC()
+	svc := &Service{
+		container: &Container{
+			Logger: slog.Default(),
+			Status: statusModel,
+			State:  store,
+			Cloud:  mockCloud,
+		},
+		steady: steadyState{
+			ingestQueue: []queuedIngestEvent{
+				{
+					payload:        map[string]any{"fromId": "node-2"},
+					idempotencyKey: "evt-2",
+					capturedAt:     now.Add(-time.Second),
+					enqueuedAt:     now.Add(-500 * time.Millisecond),
+					nextAttemptAt:  now.Add(-10 * time.Millisecond),
+				},
+			},
+		},
+	}
+
+	svc.processIngestDispatch(context.Background(), "test")
+	if mockCloud.postCalls != 1 {
+		t.Fatalf("expected first post attempt, got %d", mockCloud.postCalls)
+	}
+	if len(svc.steady.ingestQueue) != 1 {
+		t.Fatalf("expected queue item to remain after retryable outage")
+	}
+	if svc.steady.ingestQueue[0].attempts != 1 {
+		t.Fatalf("expected retry attempts=1, got %d", svc.steady.ingestQueue[0].attempts)
+	}
+
+	mockCloud.postErr = nil
+	svc.processIngestDispatch(context.Background(), "test")
+	if mockCloud.postCalls != 1 {
+		t.Fatalf("expected no immediate reattempt before retry window, got %d calls", mockCloud.postCalls)
+	}
+
+	svc.steady.ingestQueue[0].nextAttemptAt = time.Now().UTC().Add(-10 * time.Millisecond)
+	svc.processIngestDispatch(context.Background(), "test")
+	if mockCloud.postCalls != 2 {
+		t.Fatalf("expected retry attempt after retry window, got %d", mockCloud.postCalls)
+	}
+	if len(svc.steady.ingestQueue) != 0 {
+		t.Fatalf("expected queue drained after recovery, got %d", len(svc.steady.ingestQueue))
+	}
+}
+
+func TestProcessSteadyStateDoesNotMaskIngestRetryState(t *testing.T) {
+	t.Parallel()
+
+	mockCloud := &mockCloudClient{}
+	statusModel := status.New()
+	statusModel.SetLastError("cloud endpoint unreachable")
+	statusModel.SetComponent("ingest", "retrying", "retrying in 30s")
+
+	svc := &Service{
+		container: &Container{
+			Config: config.Default(),
+			Logger: slog.Default(),
+			Status: statusModel,
+			Cloud:  mockCloud,
+		},
+		mode: config.ModeService,
+		steady: steadyState{
+			ingestQueue: []queuedIngestEvent{
+				{
+					payload:        map[string]any{"fromId": "node-3"},
+					idempotencyKey: "evt-3",
+					nextAttemptAt:  time.Now().UTC().Add(2 * time.Minute),
+				},
+			},
+		},
+	}
+
+	svc.processSteadyState(context.Background(), state.Data{
+		Pairing: state.PairingState{Phase: state.PairingSteadyState},
+		Cloud: state.CloudState{
+			HeartbeatEndpoint: "/api/receiver/heartbeat",
+			IngestEndpoint:    "/api/meshtastic/event",
+			IngestAPIKey:      "secret",
+		},
+	}, meshtastic.Snapshot{State: meshtastic.StateConnected})
+
+	if got := statusModel.Snapshot().LastError; strings.TrimSpace(got) == "" {
+		t.Fatal("expected ingest retry failure context to remain visible")
+	}
+}
+
+func TestProcessIngestDispatchDrainsBacklogWhenCloudRecovered(t *testing.T) {
+	t.Parallel()
+
+	statePath := filepath.Join(t.TempDir(), "receiver-state.json")
+	store, err := state.Open(statePath)
+	if err != nil {
+		t.Fatalf("open state: %v", err)
+	}
+	if err := store.Update(func(data *state.Data) {
+		data.Pairing.Phase = state.PairingSteadyState
+		data.Cloud.EndpointURL = "https://api.example.com"
+		data.Cloud.IngestEndpoint = "/api/meshtastic/event"
+		data.Cloud.IngestAPIKey = "secret"
+	}); err != nil {
+		t.Fatalf("seed state: %v", err)
+	}
+
+	mockCloud := &mockCloudClient{}
+	statusModel := status.New()
+	now := time.Now().UTC()
+	queue := make([]queuedIngestEvent, 0, 3)
+	for i := 0; i < 3; i++ {
+		queue = append(queue, queuedIngestEvent{
+			payload:        map[string]any{"fromId": fmt.Sprintf("node-%d", i+1)},
+			idempotencyKey: fmt.Sprintf("evt-%d", i+1),
+			capturedAt:     now.Add(-time.Duration(i+1) * time.Second),
+			enqueuedAt:     now.Add(-time.Duration(i+1) * 400 * time.Millisecond),
+			nextAttemptAt:  now.Add(-10 * time.Millisecond),
+			attempts:       1,
+		})
+	}
+
+	svc := &Service{
+		container: &Container{
+			Logger: slog.Default(),
+			Status: statusModel,
+			State:  store,
+			Cloud:  mockCloud,
+		},
+		steady: steadyState{
+			ingestQueue: queue,
+		},
+	}
+
+	svc.processIngestDispatch(context.Background(), "interval")
+
+	if mockCloud.postCalls != 3 {
+		t.Fatalf("expected all queued events to flush after recovery, got %d calls", mockCloud.postCalls)
+	}
+	if len(svc.steady.ingestQueue) != 0 {
+		t.Fatalf("expected backlog drained, got %d remaining", len(svc.steady.ingestQueue))
+	}
+	if svc.steady.lastPacketAck == nil {
+		t.Fatal("expected ack timestamp after backlog drain")
 	}
 }
 

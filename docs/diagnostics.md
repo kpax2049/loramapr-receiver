@@ -215,6 +215,30 @@ signals:
 - `heartbeat tick failed`: heartbeat request failed (`retryable=true|false`)
 - `ingest retry scheduled`: retry/backoff selected for queue delivery failure
 
+### Temporary Ingest Timing Trace
+
+Enable detailed per-event ingest timing logs (for root-cause analysis only):
+
+```bash
+sudo systemctl edit loramapr-receiverd
+# add:
+# [Service]
+# Environment=LORAMAPR_INGEST_TRACE=1
+sudo systemctl daemon-reload
+sudo systemctl restart loramapr-receiverd
+sudo journalctl -u loramapr-receiverd -f --no-pager | grep "ingest pipeline trace"
+```
+
+Trace fields include:
+
+- `capturedAt`
+- `enqueuedAt`
+- `dequeuedAt` / `sendAttemptAt`
+- `ackedAt`
+- `statusCode` / `errorCode`
+- `lagCapturedTo*Ms`, `lagEnqueuedTo*Ms`
+- `queueDepth`
+
 Home Auto Session control loop logs:
 
 - `home auto session decision update`
