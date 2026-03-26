@@ -565,6 +565,85 @@ func TestProcessIngestDispatchRecoversAfterRetryableOutage(t *testing.T) {
 	}
 }
 
+func TestDrainIngestQueueBypassesRetryWaitingHead(t *testing.T) {
+	t.Parallel()
+
+	mockCloud := &mockCloudClient{}
+	now := time.Now().UTC()
+	svc := &Service{
+		container: &Container{
+			Logger: slog.Default(),
+			Status: status.New(),
+			Cloud:  mockCloud,
+		},
+		steady: steadyState{
+			ingestQueue: []queuedIngestEvent{
+				{
+					payload:        map[string]any{"fromId": "head"},
+					idempotencyKey: "evt-head",
+					nextAttemptAt:  now.Add(2 * time.Minute),
+					attempts:       4,
+				},
+				{
+					payload:        map[string]any{"fromId": "due"},
+					idempotencyKey: "evt-due",
+					nextAttemptAt:  now.Add(-10 * time.Millisecond),
+				},
+			},
+		},
+	}
+
+	err := svc.drainIngestQueue(context.Background(), state.Data{
+		Pairing: state.PairingState{Phase: state.PairingSteadyState},
+		Cloud: state.CloudState{
+			IngestEndpoint: "/api/meshtastic/event",
+			IngestAPIKey:   "secret",
+		},
+	})
+	if err != nil {
+		t.Fatalf("expected successful drain, got %v", err)
+	}
+	if mockCloud.postCalls != 1 {
+		t.Fatalf("expected one post call for due item, got %d", mockCloud.postCalls)
+	}
+	if mockCloud.lastEventKey != "evt-due" {
+		t.Fatalf("expected due item to be delivered first, got %q", mockCloud.lastEventKey)
+	}
+	if len(svc.steady.ingestQueue) != 1 {
+		t.Fatalf("expected waiting head to remain queued, got %d items", len(svc.steady.ingestQueue))
+	}
+	if svc.steady.ingestQueue[0].idempotencyKey != "evt-head" {
+		t.Fatalf("expected remaining queue head evt-head, got %q", svc.steady.ingestQueue[0].idempotencyKey)
+	}
+}
+
+func TestNextDispatchableIngestIndex(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now().UTC()
+	idx, next := nextDispatchableIngestIndex([]queuedIngestEvent{
+		{nextAttemptAt: now.Add(90 * time.Second)},
+		{nextAttemptAt: now.Add(-time.Second)},
+	}, now)
+	if idx != 1 {
+		t.Fatalf("expected index 1, got %d", idx)
+	}
+	if next.IsZero() {
+		t.Fatal("expected next attempt timestamp for due item")
+	}
+
+	idx, next = nextDispatchableIngestIndex([]queuedIngestEvent{
+		{nextAttemptAt: now.Add(30 * time.Second)},
+		{nextAttemptAt: now.Add(10 * time.Second)},
+	}, now)
+	if idx != -1 {
+		t.Fatalf("expected no dispatchable index, got %d", idx)
+	}
+	if next.IsZero() {
+		t.Fatal("expected earliest retry timestamp when all items are waiting")
+	}
+}
+
 func TestProcessSteadyStateDoesNotMaskIngestRetryState(t *testing.T) {
 	t.Parallel()
 

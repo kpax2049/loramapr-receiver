@@ -1213,20 +1213,26 @@ func (s *Service) drainIngestQueue(ctx context.Context, snapshot state.Data) err
 
 	for i := 0; i < maxIngestBatchTick && len(s.steady.ingestQueue) > 0; i++ {
 		now := time.Now().UTC()
-		item := &s.steady.ingestQueue[0]
-		if now.Before(item.nextAttemptAt) {
+		dispatchIndex, nextAttemptAt := nextDispatchableIngestIndex(s.steady.ingestQueue, now)
+		if dispatchIndex < 0 {
+			item := s.steady.ingestQueue[0]
+			waitMs := int64(0)
+			if !nextAttemptAt.IsZero() {
+				waitMs = nextAttemptAt.Sub(now).Milliseconds()
+			}
 			s.logIngestPipelineStage(
 				"waiting_retry_window",
-				*item,
+				item,
 				now,
 				"queueDepth", len(s.steady.ingestQueue),
-				"nextAttemptAt", formatTime(item.nextAttemptAt),
-				"waitMs", item.nextAttemptAt.Sub(now).Milliseconds(),
+				"nextAttemptAt", formatTime(nextAttemptAt),
+				"waitMs", waitMs,
 				"attempt", item.attempts,
 			)
 			break
 		}
 
+		item := &s.steady.ingestQueue[dispatchIndex]
 		dequeuedAt := now
 		sentAt := time.Now().UTC()
 		s.steady.lastPacketSent = &sentAt
@@ -1234,6 +1240,7 @@ func (s *Service) drainIngestQueue(ctx context.Context, snapshot state.Data) err
 			"send_attempt",
 			*item,
 			sentAt,
+			"queueIndex", dispatchIndex,
 			"queueDepth", len(s.steady.ingestQueue),
 			"attempt", item.attempts+1,
 			"dequeuedAt", formatTime(dequeuedAt),
@@ -1249,12 +1256,13 @@ func (s *Service) drainIngestQueue(ctx context.Context, snapshot state.Data) err
 			ackedItem := *item
 			s.steady.lastPacketAck = &ackAt
 			s.steady.cloudReachable = true
-			s.steady.ingestQueue = s.steady.ingestQueue[1:]
+			s.steady.ingestQueue = removeIngestQueueIndex(s.steady.ingestQueue, dispatchIndex)
 			s.container.Status.SetComponent("ingest", "delivered", fmt.Sprintf("queue depth %d", len(s.steady.ingestQueue)))
 			s.logIngestPipelineStage(
 				"acked",
 				ackedItem,
 				ackAt,
+				"queueIndex", dispatchIndex,
 				"queueDepth", len(s.steady.ingestQueue),
 				"statusCode", http.StatusOK,
 				"dequeuedAt", formatTime(dequeuedAt),
@@ -1304,6 +1312,7 @@ func (s *Service) drainIngestQueue(ctx context.Context, snapshot state.Data) err
 				"send_failed",
 				*item,
 				now,
+				"queueIndex", dispatchIndex,
 				"queueDepth", len(s.steady.ingestQueue),
 				"attempt", item.attempts,
 				"statusCode", statusCode,
@@ -1336,6 +1345,7 @@ func (s *Service) drainIngestQueue(ctx context.Context, snapshot state.Data) err
 			"dropped_non_retryable",
 			*item,
 			now,
+			"queueIndex", dispatchIndex,
 			"queueDepth", len(s.steady.ingestQueue),
 			"statusCode", statusCode,
 			"errorCode", errorCode,
@@ -1344,12 +1354,38 @@ func (s *Service) drainIngestQueue(ctx context.Context, snapshot state.Data) err
 			"dequeuedAt", formatTime(dequeuedAt),
 			"sendAttemptAt", formatTime(sentAt),
 		)
-		s.steady.ingestQueue = s.steady.ingestQueue[1:]
+		s.steady.ingestQueue = removeIngestQueueIndex(s.steady.ingestQueue, dispatchIndex)
 		s.container.Status.SetComponent("ingest", "dropped", "non-retryable ingest failure")
 		s.container.Status.SetLastError(coarseCloudError(err))
 	}
 
 	return nil
+}
+
+func nextDispatchableIngestIndex(queue []queuedIngestEvent, now time.Time) (int, time.Time) {
+	if len(queue) == 0 {
+		return -1, time.Time{}
+	}
+	earliestRetry := time.Time{}
+	for idx, item := range queue {
+		next := item.nextAttemptAt
+		if next.IsZero() || !now.Before(next) {
+			return idx, next
+		}
+		if earliestRetry.IsZero() || next.Before(earliestRetry) {
+			earliestRetry = next
+		}
+	}
+	return -1, earliestRetry
+}
+
+func removeIngestQueueIndex(queue []queuedIngestEvent, idx int) []queuedIngestEvent {
+	if idx < 0 || idx >= len(queue) {
+		return queue
+	}
+	copy(queue[idx:], queue[idx+1:])
+	queue[len(queue)-1] = queuedIngestEvent{}
+	return queue[:len(queue)-1]
 }
 
 func (s *Service) logIngestPipelineStage(stage string, item queuedIngestEvent, now time.Time, attrs ...any) {
