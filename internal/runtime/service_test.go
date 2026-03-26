@@ -1166,25 +1166,30 @@ func TestSendHeartbeatLifecycleTransitionRevoked(t *testing.T) {
 	}
 }
 
-func TestProcessSteadyStateBlocksOnUnsupportedCloudConfig(t *testing.T) {
+func TestProcessSteadyStateContinuesHeartbeatOnUnsupportedCloudConfig(t *testing.T) {
 	t.Parallel()
 
 	statusModel := status.New()
+	mockCloud := &mockCloudClient{}
 	svc := &Service{
 		container: &Container{
 			Config: config.Default(),
 			Logger: slog.Default(),
 			Status: statusModel,
+			Cloud:  mockCloud,
 		},
+		mode: config.ModeService,
 	}
 
 	svc.processSteadyState(context.Background(), state.Data{
 		Pairing: state.PairingState{Phase: state.PairingSteadyState},
 		Cloud: state.CloudState{
-			EndpointURL:   "https://api.example.com",
-			ConfigVersion: "v2.0",
+			EndpointURL:       "https://api.example.com",
+			ConfigVersion:     "v2.0",
+			HeartbeatEndpoint: "/api/receiver/heartbeat",
+			IngestAPIKey:      "secret",
 		},
-	}, meshtastic.Snapshot{})
+	}, meshtastic.Snapshot{State: meshtastic.StateConnected})
 
 	snap := statusModel.Snapshot()
 	if snap.LastError != "cloud config version unsupported" {
@@ -1196,5 +1201,58 @@ func TestProcessSteadyStateBlocksOnUnsupportedCloudConfig(t *testing.T) {
 	}
 	if component.State != "unsupported" {
 		t.Fatalf("expected cloud_config state unsupported, got %q", component.State)
+	}
+	if mockCloud.heartbeatCalls != 1 {
+		t.Fatalf("expected heartbeat to continue despite unsupported config version, got %d calls", mockCloud.heartbeatCalls)
+	}
+}
+
+func TestProcessIngestDispatchContinuesOnUnsupportedCloudConfig(t *testing.T) {
+	t.Parallel()
+
+	statePath := filepath.Join(t.TempDir(), "receiver-state.json")
+	store, err := state.Open(statePath)
+	if err != nil {
+		t.Fatalf("open state: %v", err)
+	}
+	if err := store.Update(func(data *state.Data) {
+		data.Pairing.Phase = state.PairingSteadyState
+		data.Cloud.EndpointURL = "https://api.example.com"
+		data.Cloud.ConfigVersion = "v2.0"
+		data.Cloud.IngestEndpoint = "/api/meshtastic/event"
+		data.Cloud.IngestAPIKey = "secret"
+	}); err != nil {
+		t.Fatalf("seed state: %v", err)
+	}
+
+	mockCloud := &mockCloudClient{}
+	statusModel := status.New()
+	now := time.Now().UTC()
+	svc := &Service{
+		container: &Container{
+			Logger: slog.Default(),
+			Status: statusModel,
+			State:  store,
+			Cloud:  mockCloud,
+		},
+		steady: steadyState{
+			ingestQueue: []queuedIngestEvent{
+				{
+					payload:        map[string]any{"fromId": "node-compat"},
+					idempotencyKey: "evt-compat",
+					capturedAt:     now.Add(-250 * time.Millisecond),
+					enqueuedAt:     now,
+					nextAttemptAt:  now.Add(-10 * time.Millisecond),
+				},
+			},
+		},
+	}
+
+	svc.processIngestDispatch(context.Background(), "compat-test")
+	if mockCloud.postCalls != 1 {
+		t.Fatalf("expected ingest dispatch to run despite unsupported config version, got %d calls", mockCloud.postCalls)
+	}
+	if len(svc.steady.ingestQueue) != 0 {
+		t.Fatalf("expected queue drained, got %d remaining", len(svc.steady.ingestQueue))
 	}
 }

@@ -594,12 +594,6 @@ func (s *Service) processIngestDispatch(ctx context.Context, trigger string) {
 	}
 
 	snapshot := c.State.Snapshot()
-	if issue := cloudConfigCompatibilityIssue(snapshot.Cloud.ConfigVersion); issue != "" {
-		if s.ingestTrace {
-			c.Logger.Debug("ingest dispatch skipped", "trigger", trigger, "reason", "cloud config incompatible", "detail", issue)
-		}
-		return
-	}
 	if !credentialsReady(snapshot) {
 		if s.ingestTrace {
 			c.Logger.Debug("ingest dispatch skipped", "trigger", trigger, "reason", "credentials not ready", "pairing_phase", snapshot.Pairing.Phase)
@@ -637,14 +631,13 @@ func (s *Service) processIngestDispatch(ctx context.Context, trigger string) {
 
 func (s *Service) processSteadyState(ctx context.Context, snapshot state.Data, meshSnap meshtastic.Snapshot) {
 	c := s.container
-	if issue := cloudConfigCompatibilityIssue(snapshot.Cloud.ConfigVersion); issue != "" {
-		c.Status.SetComponent("cloud_config", "unsupported", issue)
+	cloudConfigIssue := cloudConfigCompatibilityIssue(snapshot.Cloud.ConfigVersion)
+	if cloudConfigIssue != "" {
+		c.Status.SetComponent("cloud_config", "unsupported", cloudConfigIssue)
 		c.Status.SetLastError("cloud config version unsupported")
-		c.Status.SetCloud(snapshot.Cloud.EndpointURL, "config_incompatible")
-		c.Status.SetCloudReachable(false)
-		return
+	} else {
+		c.Status.SetComponent("cloud_config", "compatible", cloudConfigStatusMessage(snapshot.Cloud.ConfigVersion))
 	}
-	c.Status.SetComponent("cloud_config", "compatible", cloudConfigStatusMessage(snapshot.Cloud.ConfigVersion))
 
 	if !credentialsReady(snapshot) {
 		reason := "pairing phase not steady"
@@ -730,6 +723,9 @@ func (s *Service) processSteadyState(ctx context.Context, snapshot state.Data, m
 	}
 	if heartbeatErr == nil && ingestErr == nil {
 		clearLastError := true
+		if cloudConfigIssue != "" {
+			clearLastError = false
+		}
 		if ingestComponent, ok := c.Status.Snapshot().Components["ingest"]; ok {
 			switch ingestComponent.State {
 			case "retrying", "failed", "dropped", "blocked":

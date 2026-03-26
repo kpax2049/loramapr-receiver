@@ -13,6 +13,7 @@ import (
 )
 
 const bridgeDecodeFailureThreshold = 16
+const bridgeKeepaliveInterval = 45 * time.Second
 
 // RunNativeBridge reads native Meshtastic serial frames from a device path and
 // emits normalized NDJSON events to out.
@@ -36,6 +37,9 @@ func RunNativeBridge(ctx context.Context, device string, out io.Writer, logger *
 	if err := writeAll(stream, buildNativeFrame(buildToRadioWantConfigPayload(nativeSerialWantConfigID))); err != nil {
 		logger.Warn("meshtastic bridge bootstrap write skipped", "device", device, "err", err)
 	}
+	keepaliveCtx, cancelKeepalive := context.WithCancel(ctx)
+	defer cancelKeepalive()
+	go runBridgeKeepalive(keepaliveCtx, stream, logger, device)
 
 	encoder := json.NewEncoder(out)
 	encoder.SetEscapeHTML(false)
@@ -79,6 +83,23 @@ func RunNativeBridge(ctx context.Context, device string, out io.Writer, logger *
 		}
 		if err := encoder.Encode(record); err != nil {
 			return fmt.Errorf("meshtastic bridge write event: %w", err)
+		}
+	}
+}
+
+func runBridgeKeepalive(ctx context.Context, stream io.Writer, logger *slog.Logger, device string) {
+	ticker := time.NewTicker(bridgeKeepaliveInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if err := writeAll(stream, buildNativeFrame(buildToRadioWantConfigPayload(nativeSerialWantConfigID))); err != nil {
+				logger.Warn("meshtastic bridge keepalive write skipped", "device", device, "err", err)
+				continue
+			}
+			logger.Debug("meshtastic bridge keepalive sent", "device", device)
 		}
 	}
 }

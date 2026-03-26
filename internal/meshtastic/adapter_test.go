@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -230,6 +231,109 @@ func TestServiceBridgeTransportCompatibility(t *testing.T) {
 			}
 		}
 	}
+}
+
+func TestServiceBridgeTransportRecoversWhenBridgeIdleAfterStartup(t *testing.T) {
+	t.Parallel()
+
+	adapter := NewAdapter(config.MeshtasticConfig{Transport: "bridge"}, nil).(*Service)
+	adapter.detectFn = func(_ config.MeshtasticConfig) (DetectionResult, error) {
+		return DetectionResult{Device: "/tmp/ttyACM0", Candidates: []string{"/tmp/ttyACM0"}}, nil
+	}
+	adapter.detectionInterval = 5 * time.Millisecond
+	adapter.reconnectDelay = 5 * time.Millisecond
+	adapter.bridgeStartupTime = 40 * time.Millisecond
+	adapter.bridgeIdleTimeout = 30 * time.Millisecond
+	adapter.bridgeIdleProbe = 5 * time.Millisecond
+
+	var starts atomic.Int32
+	adapter.startBridgeFn = func(ctx context.Context, _ config.MeshtasticConfig, _ string, _ *slog.Logger) (*bridgeCommandSession, error) {
+		starts.Add(1)
+		bridgeCtx, bridgeCancel := context.WithCancel(ctx)
+		reader, writer := io.Pipe()
+		waitCh := make(chan error, 1)
+		go func() {
+			defer func() {
+				waitCh <- nil
+				close(waitCh)
+			}()
+			_, _ = io.WriteString(writer, `{"type":"status","local_node_id":"!home","observed_node_ids":["!node-1"]}`+"\n")
+			<-bridgeCtx.Done()
+			_ = writer.Close()
+		}()
+		return &bridgeCommandSession{
+			stdout: reader,
+			cancel: func() {
+				bridgeCancel()
+				_ = reader.Close()
+				_ = writer.Close()
+			},
+			waitCh: waitCh,
+		}, nil
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if _, err := adapter.Start(ctx); err != nil {
+		t.Fatalf("Start returned error: %v", err)
+	}
+
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		if starts.Load() >= 2 {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	t.Fatalf("expected bridge session restart after idle timeout; starts=%d", starts.Load())
+}
+
+func TestServiceBridgeTransportRecoversWhenBridgeProducesNoStartupOutput(t *testing.T) {
+	t.Parallel()
+
+	adapter := NewAdapter(config.MeshtasticConfig{Transport: "bridge"}, nil).(*Service)
+	adapter.detectFn = func(_ config.MeshtasticConfig) (DetectionResult, error) {
+		return DetectionResult{Device: "/tmp/ttyACM0", Candidates: []string{"/tmp/ttyACM0"}}, nil
+	}
+	adapter.detectionInterval = 5 * time.Millisecond
+	adapter.reconnectDelay = 5 * time.Millisecond
+	adapter.bridgeStartupTime = 40 * time.Millisecond
+	adapter.bridgeIdleTimeout = 30 * time.Millisecond
+	adapter.bridgeIdleProbe = 5 * time.Millisecond
+
+	var starts atomic.Int32
+	adapter.startBridgeFn = func(_ context.Context, _ config.MeshtasticConfig, _ string, _ *slog.Logger) (*bridgeCommandSession, error) {
+		starts.Add(1)
+		reader, writer := io.Pipe()
+		waitCh := make(chan error, 1)
+		return &bridgeCommandSession{
+			stdout: reader,
+			cancel: func() {
+				_ = reader.Close()
+				_ = writer.Close()
+				waitCh <- nil
+				close(waitCh)
+			},
+			waitCh: waitCh,
+		}, nil
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if _, err := adapter.Start(ctx); err != nil {
+		t.Fatalf("Start returned error: %v", err)
+	}
+
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		if starts.Load() >= 2 {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	t.Fatalf("expected bridge session restart after startup timeout; starts=%d", starts.Load())
 }
 
 func TestServiceDegradedWhenNativeSerialUnreadable(t *testing.T) {

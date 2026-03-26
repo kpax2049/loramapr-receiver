@@ -15,6 +15,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/loramapr/loramapr-receiver/internal/config"
@@ -125,10 +126,19 @@ type Service struct {
 	startBridgeFn     func(context.Context, config.MeshtasticConfig, string, *slog.Logger) (*bridgeCommandSession, error)
 	detectionInterval time.Duration
 	reconnectDelay    time.Duration
+	bridgeStartupTime time.Duration
+	bridgeIdleTimeout time.Duration
+	bridgeIdleProbe   time.Duration
 }
 
 const nativeNoFrameReconnectDelay = 15 * time.Second
 const nativeBootstrapCooldown = 5 * time.Minute
+const bridgeSessionStartupTimeout = 45 * time.Second
+const bridgeSessionIdleTimeout = 90 * time.Second
+const bridgeSessionIdleCheckInterval = 5 * time.Second
+
+var errBridgeStartupTimeout = errors.New("meshtastic bridge startup timeout")
+var errBridgeIdleTimeout = errors.New("meshtastic bridge output idle timeout")
 
 func NewAdapter(cfg config.MeshtasticConfig, logger *slog.Logger) Adapter {
 	if logger == nil {
@@ -159,6 +169,9 @@ func NewAdapter(cfg config.MeshtasticConfig, logger *slog.Logger) Adapter {
 		startBridgeFn:     startBridgeCommand,
 		detectionInterval: 3 * time.Second,
 		reconnectDelay:    2 * time.Second,
+		bridgeStartupTime: bridgeSessionStartupTimeout,
+		bridgeIdleTimeout: bridgeSessionIdleTimeout,
+		bridgeIdleProbe:   bridgeSessionIdleCheckInterval,
 	}
 }
 
@@ -334,7 +347,72 @@ func (s *Service) consumeBridge(ctx context.Context, detection DetectionResult, 
 		snap.LastError = ""
 	})
 
-	consumeErr := s.consumeJSONStream(ctx, detection.Device, session.stdout, out)
+	tracker := newStreamActivityReader(session.stdout)
+	consumeErrCh := make(chan error, 1)
+	go func() {
+		consumeErrCh <- s.consumeJSONStream(ctx, detection.Device, tracker, out)
+	}()
+
+	startupTimeout := s.bridgeStartupTime
+	if startupTimeout <= 0 {
+		startupTimeout = bridgeSessionStartupTimeout
+	}
+	idleTimeout := s.bridgeIdleTimeout
+	if idleTimeout <= 0 {
+		idleTimeout = bridgeSessionIdleTimeout
+	}
+	idleProbe := s.bridgeIdleProbe
+	if idleProbe <= 0 {
+		idleProbe = bridgeSessionIdleCheckInterval
+	}
+	idleTicker := time.NewTicker(idleProbe)
+	defer idleTicker.Stop()
+
+	var consumeErr error
+bridgeConsumeLoop:
+	for {
+		select {
+		case <-ctx.Done():
+			consumeErr = ctx.Err()
+			break bridgeConsumeLoop
+		case consumeErr = <-consumeErrCh:
+			break bridgeConsumeLoop
+		case <-idleTicker.C:
+			now := time.Now().UTC()
+			if tracker.BytesRead() == 0 {
+				if now.Sub(startedAt) >= startupTimeout {
+					consumeErr = fmt.Errorf("%w: no output for %s", errBridgeStartupTimeout, startupTimeout)
+					s.logger.Warn(
+						"meshtastic bridge startup timeout; restarting session",
+						"device",
+						detection.Device,
+						"timeout",
+						startupTimeout,
+					)
+					_ = session.stop()
+					break bridgeConsumeLoop
+				}
+				continue
+			}
+
+			lastRead := tracker.LastReadAt()
+			if !lastRead.IsZero() && now.Sub(lastRead) >= idleTimeout {
+				consumeErr = fmt.Errorf("%w: idle for %s", errBridgeIdleTimeout, idleTimeout)
+				s.logger.Warn(
+					"meshtastic bridge idle timeout; restarting session",
+					"device",
+					detection.Device,
+					"idle_for",
+					now.Sub(lastRead),
+					"timeout",
+					idleTimeout,
+				)
+				_ = session.stop()
+				break bridgeConsumeLoop
+			}
+		}
+	}
+
 	waitErr := session.stop()
 
 	if ctx.Err() != nil {
@@ -346,7 +424,9 @@ func (s *Service) consumeBridge(ctx context.Context, detection DetectionResult, 
 		}
 	}
 	if consumeErr != nil && !errors.Is(consumeErr, io.EOF) {
-		if time.Since(startedAt) < 3*time.Second {
+		if time.Since(startedAt) < 3*time.Second &&
+			!errors.Is(consumeErr, errBridgeStartupTimeout) &&
+			!errors.Is(consumeErr, errBridgeIdleTimeout) {
 			return maxDuration(s.reconnectDelay, 8*time.Second), consumeErr
 		}
 		return s.reconnectDelay, consumeErr
@@ -559,6 +639,39 @@ func maxDuration(a, b time.Duration) time.Duration {
 		return b
 	}
 	return a
+}
+
+type streamActivityReader struct {
+	reader   io.Reader
+	lastRead atomic.Int64
+	bytes    atomic.Int64
+}
+
+func newStreamActivityReader(reader io.Reader) *streamActivityReader {
+	tracker := &streamActivityReader{reader: reader}
+	tracker.lastRead.Store(time.Now().UTC().UnixNano())
+	return tracker
+}
+
+func (r *streamActivityReader) Read(p []byte) (int, error) {
+	n, err := r.reader.Read(p)
+	if n > 0 {
+		r.bytes.Add(int64(n))
+		r.lastRead.Store(time.Now().UTC().UnixNano())
+	}
+	return n, err
+}
+
+func (r *streamActivityReader) LastReadAt() time.Time {
+	value := r.lastRead.Load()
+	if value <= 0 {
+		return time.Time{}
+	}
+	return time.Unix(0, value).UTC()
+}
+
+func (r *streamActivityReader) BytesRead() int64 {
+	return r.bytes.Load()
 }
 
 func mergeNodeIDs(existing, incoming []string) []string {
