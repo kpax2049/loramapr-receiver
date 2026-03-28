@@ -1184,14 +1184,24 @@ func (m *Module) shouldStopByIdleLocked(now time.Time, cfg config.HomeAutoSessio
 	if m.activeTriggerNode == "" {
 		return false
 	}
-	fact, ok := m.nodeFacts[strings.ToLower(m.activeTriggerNode)]
-	if ok && !fact.LastSeenAt.IsZero() {
-		return now.Sub(fact.LastSeenAt) >= cfg.IdleStopTimeout.Std()
-	}
-	if m.lastEventAt == nil {
+	timeout := cfg.IdleStopTimeout.Std()
+	if timeout <= 0 {
 		return false
 	}
-	return now.Sub(m.lastEventAt.UTC()) >= cfg.IdleStopTimeout.Std()
+	fact, ok := m.nodeFacts[strings.ToLower(strings.TrimSpace(m.activeTriggerNode))]
+	if !ok || !fact.HasPosition {
+		// Keep active session running when trigger-node position state is unknown.
+		return false
+	}
+	if !fact.InsideGeofence {
+		// Do not auto-stop just because trigger-node updates are temporarily missing
+		// while it was last seen outside home.
+		return false
+	}
+	if fact.LastSeenAt.IsZero() {
+		return false
+	}
+	return now.Sub(fact.LastSeenAt) >= timeout
 }
 
 func (m *Module) handleCloudErrorLocked(now time.Time, action pendingActionKind, err error) {

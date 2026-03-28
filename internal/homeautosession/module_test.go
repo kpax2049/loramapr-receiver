@@ -3,6 +3,7 @@ package homeautosession
 import (
 	"context"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -325,6 +326,16 @@ func TestIdleTimeoutStopTriggersWithoutNewTraffic(t *testing.T) {
 		return statusModel.Snapshot().HomeAutoSession.State == string(StateActive)
 	})
 
+	module.mu.Lock()
+	fact := module.nodeFacts[strings.ToLower("!nodeA")]
+	fact.HasPosition = true
+	fact.InsideGeofence = true
+	fact.LastSeenAt = time.Now().UTC().Add(-2 * cfg.IdleStopTimeout.Std())
+	module.nodeFacts[strings.ToLower("!nodeA")] = fact
+	module.stopCandidate = nil
+	module.mu.Unlock()
+	module.Reevaluate()
+
 	waitForCondition(t, 6*time.Second, func() bool {
 		_, stopCalls := cloud.calls()
 		return stopCalls >= 1
@@ -336,6 +347,65 @@ func TestIdleTimeoutStopTriggersWithoutNewTraffic(t *testing.T) {
 	}
 	if snap.State != string(StateControlReady) {
 		t.Fatalf("expected module to return to control_ready after idle stop, got %q", snap.State)
+	}
+}
+
+func TestIdleTimeoutStopDoesNotTriggerWhenTriggerNodeLastSeenOutside(t *testing.T) {
+	store, err := state.Open(filepath.Join(t.TempDir(), "receiver-state.json"))
+	if err != nil {
+		t.Fatalf("open state: %v", err)
+	}
+	if err := store.Update(func(data *state.Data) {
+		data.Pairing.Phase = state.PairingSteadyState
+		data.Cloud.IngestAPIKey = "secret"
+	}); err != nil {
+		t.Fatalf("seed state: %v", err)
+	}
+
+	cfg := homeAutoTestConfig(config.HomeAutoSessionModeControl)
+	cfg.StartDebounce = config.Duration(20 * time.Millisecond)
+	cfg.StopDebounce = config.Duration(20 * time.Millisecond)
+	cfg.IdleStopTimeout = config.Duration(80 * time.Millisecond)
+
+	statusModel := status.New()
+	cloud := &mockSessionClient{}
+	module := New(cfg, store, statusModel, nil, cloud)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer func() {
+		cancel()
+		time.Sleep(80 * time.Millisecond)
+	}()
+	module.Start(ctx)
+
+	now := time.Now().UTC()
+	module.ObserveEvent(testPacket("!nodeA", 37.3349, -122.0090, now))
+	module.ObserveEvent(testPacket("!nodeA", latOffsetMeters(37.3349, 260), -122.0090, now.Add(time.Second)))
+	module.Reevaluate()
+
+	waitForCondition(t, 5*time.Second, func() bool {
+		return statusModel.Snapshot().HomeAutoSession.State == string(StateActive)
+	})
+
+	module.mu.Lock()
+	fact := module.nodeFacts[strings.ToLower("!nodeA")]
+	fact.HasPosition = true
+	fact.InsideGeofence = false
+	fact.LastSeenAt = time.Now().UTC().Add(-2 * cfg.IdleStopTimeout.Std())
+	module.nodeFacts[strings.ToLower("!nodeA")] = fact
+	module.stopCandidate = nil
+	module.mu.Unlock()
+	module.Reevaluate()
+
+	time.Sleep(1300 * time.Millisecond)
+
+	_, stopCalls := cloud.calls()
+	if stopCalls != 0 {
+		t.Fatalf("expected no idle stop call when trigger node last seen outside, got %d", stopCalls)
+	}
+	snap := statusModel.Snapshot().HomeAutoSession
+	if snap.State != string(StateActive) {
+		t.Fatalf("expected active state to remain, got %q", snap.State)
 	}
 }
 
