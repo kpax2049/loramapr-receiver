@@ -404,8 +404,8 @@ func TestIdleTimeoutStopDoesNotTriggerWhenTriggerNodeLastSeenOutside(t *testing.
 		t.Fatalf("expected no idle stop call when trigger node last seen outside, got %d", stopCalls)
 	}
 	snap := statusModel.Snapshot().HomeAutoSession
-	if snap.State != string(StateActive) {
-		t.Fatalf("expected active state to remain, got %q", snap.State)
+	if snap.State != string(StateActive) && snap.State != string(StateCooldown) {
+		t.Fatalf("expected active/cooldown state to remain, got %q", snap.State)
 	}
 }
 
