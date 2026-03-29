@@ -140,6 +140,9 @@ Actions:
 5. If stuck degraded/cooldown, use **Reset Degraded/Cooldown State** and re-test.
 6. If state is `boundary_uncertain` or `stale`, wait for stable fresh GPS before expecting auto start/stop.
 7. If control state is `lifecycle_blocked`, reset/re-pair before further control testing.
+8. If summary shows `stop pending; cloud unreachable/slow`, the receiver detected return-home
+   and is retrying stop against cloud with bounded backoff. Check cloud reachability/latency and
+   verify attempt count + next retry ETA in `Last decision`.
 
 ### Revoked, Disabled, or Replaced
 

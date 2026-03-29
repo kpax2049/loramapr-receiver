@@ -457,6 +457,154 @@ func TestRetryableStartFailurePersistsPendingAndCooldown(t *testing.T) {
 	}
 }
 
+func TestStopTimeoutRetryDelaySchedule(t *testing.T) {
+	cases := []struct {
+		failures int
+		want     time.Duration
+	}{
+		{failures: 1, want: 10 * time.Second},
+		{failures: 2, want: 20 * time.Second},
+		{failures: 3, want: 30 * time.Second},
+		{failures: 4, want: 1 * time.Minute},
+		{failures: 5, want: 2 * time.Minute},
+		{failures: 6, want: 4 * time.Minute},
+		{failures: 9, want: 4 * time.Minute},
+	}
+	for _, tc := range cases {
+		got := stopTimeoutRetryDelay(tc.failures)
+		if got != tc.want {
+			t.Fatalf("failures=%d expected %s, got %s", tc.failures, tc.want, got)
+		}
+	}
+}
+
+func TestStopTimeoutRetryUsesFastEarlyCadence(t *testing.T) {
+	store, err := state.Open(filepath.Join(t.TempDir(), "receiver-state.json"))
+	if err != nil {
+		t.Fatalf("open state: %v", err)
+	}
+	if err := store.Update(func(data *state.Data) {
+		data.Pairing.Phase = state.PairingSteadyState
+		data.Cloud.IngestAPIKey = "secret"
+	}); err != nil {
+		t.Fatalf("seed state: %v", err)
+	}
+
+	statusModel := status.New()
+	cloud := &mockSessionClient{}
+	module := New(homeAutoTestConfig(config.HomeAutoSessionModeControl), store, statusModel, nil, cloud)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer func() {
+		cancel()
+		time.Sleep(80 * time.Millisecond)
+	}()
+	module.Start(ctx)
+
+	now := time.Now().UTC()
+	module.ObserveEvent(testPacket("!nodeA", 37.3349, -122.0090, now))
+	module.ObserveEvent(testPacket("!nodeA", latOffsetMeters(37.3349, 250), -122.0090, now.Add(time.Second)))
+	module.Reevaluate()
+	waitForCondition(t, 5*time.Second, func() bool {
+		return statusModel.Snapshot().HomeAutoSession.State == string(StateActive)
+	})
+
+	cloud.mu.Lock()
+	cloud.stopErr = context.DeadlineExceeded
+	cloud.mu.Unlock()
+
+	module.ObserveEvent(testPacket("!nodeA", 37.3349, -122.0090, now.Add(3*time.Second)))
+	module.Reevaluate()
+
+	waitForCondition(t, 6*time.Second, func() bool {
+		snap := statusModel.Snapshot().HomeAutoSession
+		return snap.State == string(StateCooldown) &&
+			snap.LastAction == "stop" &&
+			snap.LastActionResult == "retry_scheduled"
+	})
+
+	snap := statusModel.Snapshot().HomeAutoSession
+	if snap.CooldownUntil == nil || snap.LastActionAt == nil {
+		t.Fatalf("expected cooldown and last action time")
+	}
+	delay := snap.CooldownUntil.Sub(*snap.LastActionAt)
+	if delay < 9*time.Second || delay > 11*time.Second {
+		t.Fatalf("expected first stop-timeout retry delay near 10s, got %s", delay)
+	}
+	if !strings.Contains(snap.Summary, "stop pending; cloud unreachable/slow") {
+		t.Fatalf("expected stop-timeout summary, got %q", snap.Summary)
+	}
+	if !strings.Contains(snap.LastDecisionReason, "attempt 1") {
+		t.Fatalf("expected attempt count in last decision, got %q", snap.LastDecisionReason)
+	}
+}
+
+func TestStopTimeoutFreshInsideBypassesCooldownAndCanRecover(t *testing.T) {
+	store, err := state.Open(filepath.Join(t.TempDir(), "receiver-state.json"))
+	if err != nil {
+		t.Fatalf("open state: %v", err)
+	}
+	if err := store.Update(func(data *state.Data) {
+		data.Pairing.Phase = state.PairingSteadyState
+		data.Cloud.IngestAPIKey = "secret"
+	}); err != nil {
+		t.Fatalf("seed state: %v", err)
+	}
+
+	statusModel := status.New()
+	cloud := &mockSessionClient{}
+	module := New(homeAutoTestConfig(config.HomeAutoSessionModeControl), store, statusModel, nil, cloud)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer func() {
+		cancel()
+		time.Sleep(80 * time.Millisecond)
+	}()
+	module.Start(ctx)
+
+	now := time.Now().UTC()
+	module.ObserveEvent(testPacket("!nodeA", 37.3349, -122.0090, now))
+	module.ObserveEvent(testPacket("!nodeA", latOffsetMeters(37.3349, 250), -122.0090, now.Add(time.Second)))
+	module.Reevaluate()
+	waitForCondition(t, 5*time.Second, func() bool {
+		return statusModel.Snapshot().HomeAutoSession.State == string(StateActive)
+	})
+
+	cloud.mu.Lock()
+	cloud.stopErr = context.DeadlineExceeded
+	cloud.mu.Unlock()
+
+	module.ObserveEvent(testPacket("!nodeA", 37.3349, -122.0090, now.Add(3*time.Second)))
+	module.Reevaluate()
+
+	waitForCondition(t, 6*time.Second, func() bool {
+		snap := statusModel.Snapshot().HomeAutoSession
+		return snap.State == string(StateCooldown) && snap.CooldownUntil != nil
+	})
+	firstCooldown := statusModel.Snapshot().HomeAutoSession.CooldownUntil.UTC()
+
+	cloud.mu.Lock()
+	cloud.stopErr = nil
+	cloud.mu.Unlock()
+
+	time.Sleep(stopRetryBypassMin + 200*time.Millisecond)
+	module.ObserveEvent(testPacket("!nodeA", 37.3349, -122.0090, time.Now().UTC()))
+	module.Reevaluate()
+
+	waitForCondition(t, 3*time.Second, func() bool {
+		_, stopCalls := cloud.calls()
+		return stopCalls >= 2
+	})
+	waitForCondition(t, 3*time.Second, func() bool {
+		snap := statusModel.Snapshot().HomeAutoSession
+		return snap.State == string(StateControlReady) && snap.LastActionResult == "stopped"
+	})
+
+	if !time.Now().UTC().Before(firstCooldown.Add(-1 * time.Second)) {
+		t.Fatalf("expected stop retry before scheduled cooldown expiry (%s)", firstCooldown.Format(time.RFC3339))
+	}
+}
+
 func TestGPSValidityAndBoundaryDoNotTriggerStart(t *testing.T) {
 	store, err := state.Open(filepath.Join(t.TempDir(), "receiver-state.json"))
 	if err != nil {
@@ -727,6 +875,12 @@ func TestStopStateMismatchConflictBlocked(t *testing.T) {
 	}
 	if snap.LastActionResult != "state_mismatch_conflict" {
 		t.Fatalf("expected last action result state_mismatch_conflict, got %q", snap.LastActionResult)
+	}
+	if snap.CooldownUntil != nil {
+		t.Fatalf("expected no retry cooldown for non-retryable stop conflict")
+	}
+	if strings.Contains(strings.ToLower(snap.Summary), "cloud unreachable/slow") {
+		t.Fatalf("expected non-retryable stop conflict summary, got %q", snap.Summary)
 	}
 }
 

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
+	"net"
 	"strings"
 	"sync"
 	"time"
@@ -104,6 +105,11 @@ const (
 	controlCallTimeout      = 8 * time.Second
 	retryCooldown           = 30 * time.Second
 	retryCooldownMax        = 4 * time.Minute
+	stopRetryQuickFirst     = 10 * time.Second
+	stopRetryQuickSecond    = 20 * time.Second
+	stopRetryQuickThird     = 30 * time.Second
+	stopRetryBypassMin      = 5 * time.Second
+	stopRetryFreshInsideMax = 45 * time.Second
 	gpsStaleFloor           = 2 * time.Minute
 	gpsStaleCeiling         = 10 * time.Minute
 	decisionCooldownFloor   = 1 * time.Second
@@ -111,6 +117,13 @@ const (
 	boundaryMarginFloorM    = 8.0
 	boundaryMarginCapM      = 75.0
 	boundaryMarginFraction  = 0.08
+)
+
+type retryableErrorClass string
+
+const (
+	retryClassGenericRetryable retryableErrorClass = "generic_retryable"
+	retryClassTimeoutNetwork   retryableErrorClass = "timeout_network"
 )
 
 type SessionClient interface {
@@ -166,6 +179,7 @@ type Module struct {
 	cooldownUntil         *time.Time
 	decisionCooldownUntil *time.Time
 	consecutiveFailures   int
+	lastRetryClass        string
 	observedDropped       int
 
 	gpsStatus    string
@@ -336,6 +350,7 @@ func (m *Module) ResetDegraded() {
 	m.startCandidate = nil
 	m.pendingAction = nil
 	m.consecutiveFailures = 0
+	m.lastRetryClass = ""
 	m.summary = "degraded state reset"
 	if m.state == StateDegraded {
 		m.state = StateControlReady
@@ -720,13 +735,31 @@ func (m *Module) evaluateLocked(ctx context.Context, now time.Time, trigger stri
 	}
 
 	if m.cooldownUntil != nil && now.Before(m.cooldownUntil.UTC()) {
-		m.state = StateCooldown
-		m.controlState = controlStateCooldown
-		m.summary = "cooldown after prior cloud/session error"
-		m.lastDecision = "waiting for cooldown window before retry"
-		m.publishLocked()
-		m.persistLocked()
-		return
+		if m.shouldBypassStopRetryCooldownLocked(now, trigger) {
+			m.cooldownUntil = nil
+			m.lastDecision = "fresh inside-geofence update received; retrying stop during cooldown"
+		} else {
+			cooldownETA := m.cooldownUntil.UTC()
+			m.state = StateCooldown
+			m.controlState = controlStateCooldown
+			if m.pendingAction != nil &&
+				m.pendingAction.Action == actionStop &&
+				m.lastActionResult == "retry_scheduled" &&
+				m.lastRetryClass == string(retryClassTimeoutNetwork) {
+				m.summary = stopRetryPendingSummary(m.consecutiveFailures, cooldownETA)
+				m.lastDecision = fmt.Sprintf(
+					"waiting for stop retry cooldown (attempt %d, next retry %s)",
+					m.consecutiveFailures,
+					cooldownETA.Format(time.RFC3339),
+				)
+			} else {
+				m.summary = "cooldown after prior cloud/session error"
+				m.lastDecision = "waiting for cooldown window before retry"
+			}
+			m.publishLocked()
+			m.persistLocked()
+			return
+		}
 	}
 	if m.decisionCooldownUntil != nil && now.Before(m.decisionCooldownUntil.UTC()) {
 		m.state = StateCooldown
@@ -939,6 +972,7 @@ func (m *Module) attemptStartLocked(ctx context.Context, now time.Time, cfg conf
 	m.blockedReason = ""
 	m.cooldownUntil = nil
 	m.consecutiveFailures = 0
+	m.lastRetryClass = ""
 	m.lastStartDedupe = candidate.DedupeKey
 	m.activeSessionID = strings.TrimSpace(result.SessionID)
 	m.activeTriggerNode = candidate.NodeID
@@ -1046,6 +1080,7 @@ func (m *Module) completeStopLocked(candidate transitionCandidate, now time.Time
 	m.blockedReason = ""
 	m.cooldownUntil = nil
 	m.consecutiveFailures = 0
+	m.lastRetryClass = ""
 	m.lastStopDedupe = candidate.DedupeKey
 	m.activeSessionID = ""
 	m.activeTriggerNode = ""
@@ -1217,6 +1252,7 @@ func (m *Module) handleCloudErrorLocked(now time.Time, action pendingActionKind,
 	m.logger.Warn("home auto session cloud action failed", "action", actionName, "err", err)
 
 	if lifecycle, ok := lifecycleConflictFromError(err); ok {
+		m.lastRetryClass = ""
 		m.lastActionResult = "rejected_" + lifecycle
 		m.pendingAction = nil
 		m.startCandidate = nil
@@ -1252,6 +1288,7 @@ func (m *Module) handleCloudErrorLocked(now time.Time, action pendingActionKind,
 	}
 
 	if action == actionStart && startAlreadyActiveConflict(err) {
+		m.lastRetryClass = ""
 		m.lastActionResult = "already_active_conflict"
 		m.pendingAction = nil
 		m.startCandidate = nil
@@ -1270,6 +1307,7 @@ func (m *Module) handleCloudErrorLocked(now time.Time, action pendingActionKind,
 	}
 
 	if action == actionStop && stopStateMismatchConflict(err) {
+		m.lastRetryClass = ""
 		m.lastActionResult = "state_mismatch_conflict"
 		m.pendingAction = nil
 		m.startCandidate = nil
@@ -1288,15 +1326,27 @@ func (m *Module) handleCloudErrorLocked(now time.Time, action pendingActionKind,
 	}
 
 	if cloudclient.IsRetryable(err) {
-		delay := retryDelay(m.consecutiveFailures)
+		retryClass := classifyRetryableCloudError(err)
+		delay := retryDelayFor(action, retryClass, m.consecutiveFailures)
 		cooldown := now.Add(delay)
 		m.cooldownUntil = &cooldown
 		m.blockedReason = ""
 		m.state = StateCooldown
 		m.controlState = controlStateCooldown
+		m.lastRetryClass = string(retryClass)
 		m.lastActionResult = "retry_scheduled"
-		m.summary = "cloud/session API unavailable, retrying after cooldown"
-		m.lastDecision = fmt.Sprintf("%s action retry scheduled after %s", actionName, delay.Round(time.Second))
+		if action == actionStop && retryClass == retryClassTimeoutNetwork {
+			m.summary = stopRetryPendingSummary(m.consecutiveFailures, cooldown.UTC())
+			m.lastDecision = fmt.Sprintf(
+				"stop retry attempt %d scheduled in %s (next retry %s)",
+				m.consecutiveFailures,
+				delay.Round(time.Second),
+				cooldown.UTC().Format(time.RFC3339),
+			)
+		} else {
+			m.summary = "cloud/session API unavailable, retrying after cooldown"
+			m.lastDecision = fmt.Sprintf("%s action retry scheduled after %s", actionName, delay.Round(time.Second))
+		}
 		m.logger.Warn(
 			"home auto session retry scheduled",
 			"action",
@@ -1305,6 +1355,8 @@ func (m *Module) handleCloudErrorLocked(now time.Time, action pendingActionKind,
 			m.consecutiveFailures,
 			"retry_in",
 			delay.Round(time.Second),
+			"retry_class",
+			string(retryClass),
 			"cooldown_until",
 			cooldown.Format(time.RFC3339Nano),
 		)
@@ -1313,6 +1365,7 @@ func (m *Module) handleCloudErrorLocked(now time.Time, action pendingActionKind,
 		return
 	}
 
+	m.lastRetryClass = ""
 	blocked := nonRetryableBlockedReason(action, err)
 	decision := fmt.Sprintf("%s action blocked by non-retryable cloud error", actionName)
 	m.lastActionResult = "failed_non_retryable"
@@ -1346,6 +1399,7 @@ func (m *Module) markDegradedLocked(now time.Time, blockedReason, decision strin
 		m.lastError = m.blockedReason
 	}
 	m.cooldownUntil = nil
+	m.lastRetryClass = ""
 	m.activeStateSource = activeStateSourceConflict
 	m.publishLocked()
 	m.persistLocked()
@@ -1795,6 +1849,86 @@ func retryDelay(failures int) time.Duration {
 		return retryCooldownMax
 	}
 	return delay
+}
+
+func retryDelayFor(action pendingActionKind, retryClass retryableErrorClass, failures int) time.Duration {
+	if action == actionStop && retryClass == retryClassTimeoutNetwork {
+		return stopTimeoutRetryDelay(failures)
+	}
+	return retryDelay(failures)
+}
+
+func stopTimeoutRetryDelay(failures int) time.Duration {
+	switch {
+	case failures <= 1:
+		return stopRetryQuickFirst
+	case failures == 2:
+		return stopRetryQuickSecond
+	case failures == 3:
+		return stopRetryQuickThird
+	default:
+		// Fall back to the existing bounded retry profile after quick early attempts.
+		return retryDelay(failures - 2)
+	}
+}
+
+func stopRetryPendingSummary(attempt int, eta time.Time) string {
+	return fmt.Sprintf("stop pending; cloud unreachable/slow (attempt %d, next retry %s)", attempt, eta.Format(time.RFC3339))
+}
+
+func classifyRetryableCloudError(err error) retryableErrorClass {
+	if err == nil {
+		return retryClassGenericRetryable
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return retryClassTimeoutNetwork
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) {
+		return retryClassTimeoutNetwork
+	}
+	lower := strings.ToLower(strings.TrimSpace(err.Error()))
+	if strings.Contains(lower, "timeout") ||
+		strings.Contains(lower, "timed out") ||
+		strings.Contains(lower, "deadline exceeded") ||
+		strings.Contains(lower, "dial tcp") ||
+		strings.Contains(lower, "connection refused") ||
+		strings.Contains(lower, "connection reset") ||
+		strings.Contains(lower, "no such host") {
+		return retryClassTimeoutNetwork
+	}
+	return retryClassGenericRetryable
+}
+
+func (m *Module) shouldBypassStopRetryCooldownLocked(now time.Time, trigger string) bool {
+	if trigger != "event" || m.pendingAction == nil || m.pendingAction.Action != actionStop {
+		return false
+	}
+	if m.lastActionResult != "retry_scheduled" || m.lastRetryClass != string(retryClassTimeoutNetwork) {
+		return false
+	}
+	if m.lastActionAt == nil {
+		return false
+	}
+	lastAttempt := m.lastActionAt.UTC()
+	if now.Sub(lastAttempt) < stopRetryBypassMin {
+		return false
+	}
+	nodeID := strings.TrimSpace(m.activeTriggerNode)
+	if nodeID == "" {
+		nodeID = strings.TrimSpace(m.pendingAction.NodeID)
+	}
+	if nodeID == "" {
+		return false
+	}
+	fact, ok := m.nodeFacts[strings.ToLower(nodeID)]
+	if !ok || !fact.HasPosition || !fact.InsideGeofence || fact.LastSeenAt.IsZero() {
+		return false
+	}
+	if !fact.LastSeenAt.After(lastAttempt) {
+		return false
+	}
+	return now.Sub(fact.LastSeenAt) <= stopRetryFreshInsideMax
 }
 
 func nonRetryableBlockedReason(action pendingActionKind, err error) string {

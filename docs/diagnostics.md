@@ -245,3 +245,7 @@ Home Auto Session control loop logs:
 - `home auto session retry scheduled`
 - `home auto session action blocked by lifecycle conflict`
 - `home auto session action blocked by non-retryable cloud error`
+- For stop retries caused by network/timeout errors, look for:
+  - `retry_class=timeout_network`
+  - summary text: `stop pending; cloud unreachable/slow (...)`
+  - decision text including retry attempt count and next retry ETA
