@@ -246,6 +246,7 @@ Home Auto Session control loop logs:
 - `home auto session cloud action response`
 - `home auto session retry scheduled`
 - `home auto session stop fallback activated`
+- `home auto session start conflict retry scheduled`
 - `home auto session action blocked by lifecycle conflict`
 - `home auto session action blocked by non-retryable cloud error`
 - failed action logs include:
@@ -257,3 +258,7 @@ Home Auto Session control loop logs:
   - `retry_class=timeout_network`
   - summary text: `stop pending; cloud unreachable/slow (...)`
   - decision text including retry attempt count and next retry ETA
+- For cloud start conflicts missing a session ID, look for:
+  - `error_class=has_start_missing_session_id_conflict`
+  - `dedupe_key_hash` + `next_retry_at` fields
+  - control state transitioning through temporary conflict/cooldown before retry

@@ -127,6 +127,7 @@ type retryableErrorClass string
 const (
 	retryClassGenericRetryable retryableErrorClass = "generic_retryable"
 	retryClassTimeoutNetwork   retryableErrorClass = "timeout_network"
+	retryClassStartMissingID   retryableErrorClass = "has_start_missing_session_id_conflict"
 )
 
 type SessionClient interface {
@@ -745,7 +746,15 @@ func (m *Module) evaluateLocked(ctx context.Context, now time.Time, trigger stri
 			cooldownETA := m.cooldownUntil.UTC()
 			m.state = StateCooldown
 			m.controlState = controlStateCooldown
-			if m.pendingAction != nil &&
+			if m.lastRetryClass == string(retryClassStartMissingID) {
+				m.controlState = controlStateConflictBlocked
+				m.summary = fmt.Sprintf("start pending; cloud start conflict (attempt %d, next retry %s)", m.consecutiveFailures, cooldownETA.Format(time.RFC3339))
+				m.lastDecision = fmt.Sprintf(
+					"waiting for start retry after missing-sessionId conflict (attempt %d, next retry %s)",
+					m.consecutiveFailures,
+					cooldownETA.Format(time.RFC3339),
+				)
+			} else if m.pendingAction != nil &&
 				m.pendingAction.Action == actionStop &&
 				m.lastActionResult == "retry_scheduled" &&
 				m.lastRetryClass == string(retryClassTimeoutNetwork) {
@@ -997,6 +1006,9 @@ func (m *Module) attemptStartLocked(ctx context.Context, now time.Time, cfg conf
 	m.activeSessionID = strings.TrimSpace(result.SessionID)
 	m.activeTriggerNode = candidate.NodeID
 	m.activeStateSource = activeStateSourceCloudAck
+	if strings.Contains(strings.ToLower(strings.TrimSpace(m.reconciliationState)), "conflict") {
+		m.reconciliationState = reconciliationCleanIdle
+	}
 	m.lastActionResult = "started"
 	m.lastSuccessfulAction = string(actionStart)
 	m.lastSuccessfulActionAt = cloneTime(startedAt)
@@ -1440,6 +1452,75 @@ func (m *Module) handleCloudErrorLocked(now time.Time, action pendingActionKind,
 			"blocked_reason",
 			m.blockedReason,
 		)
+		return
+	}
+
+	if action == actionStart && startMissingSessionIDConflict(err) {
+		currentDedupe := ""
+		startNode := ""
+		startReason := "tracked node moved outside home geofence"
+		if m.pendingAction != nil && m.pendingAction.Action == actionStart {
+			currentDedupe = strings.TrimSpace(m.pendingAction.DedupeKey)
+			startNode = strings.TrimSpace(m.pendingAction.NodeID)
+			if value := strings.TrimSpace(m.pendingAction.Reason); value != "" {
+				startReason = value
+			}
+		}
+		if m.startCandidate != nil {
+			if currentDedupe == "" {
+				currentDedupe = strings.TrimSpace(m.startCandidate.DedupeKey)
+			}
+			if startNode == "" {
+				startNode = strings.TrimSpace(m.startCandidate.NodeID)
+			}
+			if value := strings.TrimSpace(m.startCandidate.Reason); value != "" {
+				startReason = value
+			}
+		}
+		if startNode == "" {
+			startNode = strings.TrimSpace(m.activeTriggerNode)
+		}
+		if startNode == "" {
+			startNode = strings.TrimSpace(m.gpsNodeID)
+		}
+		if startNode == "" {
+			startNode = "unknown"
+		}
+
+		// Drop current start dedupe markers so the next attempt gets a fresh key.
+		m.pendingAction = nil
+		m.startCandidate = &transitionCandidate{
+			NodeID:    startNode,
+			At:        now,
+			Reason:    startReason,
+			DedupeKey: "",
+		}
+		m.stopCandidate = nil
+
+		delay := retryDelayFor(actionStart, retryClassGenericRetryable, m.consecutiveFailures)
+		delay = jitterRetryDelay(delay, actionStart, m.consecutiveFailures, startNode+"|"+currentDedupe)
+		cooldown := now.Add(delay)
+		m.cooldownUntil = &cooldown
+		m.blockedReason = ""
+		m.state = StateCooldown
+		m.controlState = controlStateConflictBlocked
+		m.activeStateSource = activeStateSourceConflict
+		m.reconciliationState = reconciliationConflictStateMismatch
+		m.lastRetryClass = string(retryClassStartMissingID)
+		m.lastActionResult = "retry_scheduled_missing_session_id_conflict"
+		m.summary = fmt.Sprintf("start pending; cloud start conflict (attempt %d, next retry %s)", m.consecutiveFailures, cooldown.UTC().Format(time.RFC3339))
+		m.lastDecision = fmt.Sprintf("start retry scheduled after missing-sessionId conflict (attempt %d, next retry %s)", m.consecutiveFailures, cooldown.UTC().Format(time.RFC3339))
+		m.logger.Warn(
+			"home auto session start conflict retry scheduled",
+			"action", actionName,
+			"error_class", string(retryClassStartMissingID),
+			"attempt", m.consecutiveFailures,
+			"dedupe_key_hash", dedupeKeyHash(currentDedupe),
+			"next_retry_at", cooldown.UTC().Format(time.RFC3339),
+			"cloud_request_id", cloudRequestIDFromError(err),
+		)
+		m.publishLocked()
+		m.persistLocked()
 		return
 	}
 
@@ -2297,6 +2378,22 @@ func startAlreadyActiveConflict(err error) bool {
 	return false
 }
 
+func startMissingSessionIDConflict(err error) bool {
+	var apiErr *cloudclient.APIError
+	if !errors.As(err, &apiErr) {
+		return false
+	}
+	if apiErr.StatusCode != http.StatusConflict {
+		return false
+	}
+	message := strings.ToLower(strings.TrimSpace(apiErr.Message))
+	if message == "" {
+		return false
+	}
+	return strings.Contains(message, "home auto session start is missing sessionid") ||
+		strings.Contains(message, "home auto session start is missing session id")
+}
+
 func stopStateMismatchConflict(err error) bool {
 	var apiErr *cloudclient.APIError
 	if !errors.As(err, &apiErr) {
@@ -2337,6 +2434,15 @@ func stopAlreadyResolvedError(err error) bool {
 		return true
 	}
 	return false
+}
+
+func dedupeKeyHash(key string) string {
+	trimmed := strings.TrimSpace(key)
+	if trimmed == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(trimmed))
+	return hex.EncodeToString(sum[:8])
 }
 
 func readySummaryForGPS(gpsStatus, gpsReason, fallback string) string {

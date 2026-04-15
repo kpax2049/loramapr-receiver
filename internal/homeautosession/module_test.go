@@ -100,6 +100,14 @@ func (m *mockSessionClient) lastStartRequest() cloudclient.HomeAutoSessionStartR
 	return m.startRequests[len(m.startRequests)-1]
 }
 
+func (m *mockSessionClient) startRequestsSnapshot() []cloudclient.HomeAutoSessionStartRequest {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]cloudclient.HomeAutoSessionStartRequest, len(m.startRequests))
+	copy(out, m.startRequests)
+	return out
+}
+
 func (m *mockSessionClient) lastStopRequest() cloudclient.HomeAutoSessionStopRequest {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -1057,6 +1065,113 @@ func TestStartConflictAlreadyActiveEntersConflictBlocked(t *testing.T) {
 	}
 }
 
+func TestStartMissingSessionIDConflictSchedulesFreshRetry(t *testing.T) {
+	store, err := state.Open(filepath.Join(t.TempDir(), "receiver-state.json"))
+	if err != nil {
+		t.Fatalf("open state: %v", err)
+	}
+	if err := store.Update(func(data *state.Data) {
+		data.Pairing.Phase = state.PairingSteadyState
+		data.Cloud.IngestAPIKey = "secret"
+	}); err != nil {
+		t.Fatalf("seed state: %v", err)
+	}
+
+	statusModel := status.New()
+	cloud := &mockSessionClient{
+		startHook: func(request cloudclient.HomeAutoSessionStartRequest, call int) (cloudclient.HomeAutoSessionStartResult, error) {
+			if call == 1 {
+				return cloudclient.HomeAutoSessionStartResult{}, &cloudclient.APIError{
+					StatusCode: 409,
+					Message:    "home auto session start is missing sessionId",
+					Retryable:  false,
+					RequestID:  "req-start-missing-1",
+				}
+			}
+			return cloudclient.HomeAutoSessionStartResult{
+				SessionID:      "session-2",
+				StartedAt:      time.Now().UTC(),
+				StatusCode:     201,
+				CloudRequestID: "req-start-ok-2",
+			}, nil
+		},
+	}
+	module := New(homeAutoTestConfig(config.HomeAutoSessionModeControl), store, statusModel, nil, cloud)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer func() {
+		cancel()
+		time.Sleep(80 * time.Millisecond)
+	}()
+	module.Start(ctx)
+
+	now := time.Now().UTC()
+	module.ObserveEvent(testPacket("!nodeA", 37.3349, -122.0090, now))
+	module.ObserveEvent(testPacket("!nodeA", latOffsetMeters(37.3349, 250), -122.0090, now.Add(time.Second)))
+	module.Reevaluate()
+
+	waitForCondition(t, 6*time.Second, func() bool {
+		snap := statusModel.Snapshot().HomeAutoSession
+		return snap.State == string(StateCooldown) &&
+			snap.ControlState == controlStateConflictBlocked &&
+			strings.Contains(strings.ToLower(snap.Summary), "start pending; cloud start conflict")
+	})
+
+	initialReqs := cloud.startRequestsSnapshot()
+	if len(initialReqs) != 1 {
+		t.Fatalf("expected one initial start call, got %d", len(initialReqs))
+	}
+	firstDedupe := strings.TrimSpace(initialReqs[0].DedupeKey)
+	if firstDedupe == "" {
+		t.Fatalf("expected first start call to include dedupe key")
+	}
+
+	time.Sleep(300 * time.Millisecond)
+	if calls, _ := cloud.calls(); calls != 1 {
+		t.Fatalf("expected no retry storm before cooldown expiry, got %d start calls", calls)
+	}
+
+	module.mu.Lock()
+	if module.cooldownUntil == nil {
+		t.Fatalf("expected cooldown to be set")
+	}
+	soon := time.Now().UTC().Add(30 * time.Millisecond)
+	module.cooldownUntil = &soon
+	if module.startCandidate != nil {
+		module.startCandidate.At = time.Now().UTC().Add(-module.cfg.StartDebounce.Std() - 20*time.Millisecond)
+	}
+	module.mu.Unlock()
+	module.Reevaluate()
+
+	waitForCondition(t, 5*time.Second, func() bool {
+		if calls, _ := cloud.calls(); calls < 2 {
+			return false
+		}
+		snap := statusModel.Snapshot().HomeAutoSession
+		return snap.State == string(StateActive) && snap.ActiveSessionID == "session-2"
+	})
+
+	reqs := cloud.startRequestsSnapshot()
+	if len(reqs) < 2 {
+		t.Fatalf("expected second start call after cooldown expiry")
+	}
+	secondDedupe := strings.TrimSpace(reqs[1].DedupeKey)
+	if secondDedupe == "" {
+		t.Fatalf("expected second start call to include dedupe key")
+	}
+	if secondDedupe == firstDedupe {
+		t.Fatalf("expected fresh dedupe key on retry, got same value %q", secondDedupe)
+	}
+
+	snap := statusModel.Snapshot().HomeAutoSession
+	if snap.BlockedReason != "" {
+		t.Fatalf("expected blocked reason cleared on success, got %q", snap.BlockedReason)
+	}
+	if snap.LastError != "" {
+		t.Fatalf("expected last error cleared on success, got %q", snap.LastError)
+	}
+}
+
 func TestStartLifecycleRevokedEntersLifecycleBlocked(t *testing.T) {
 	store, err := state.Open(filepath.Join(t.TempDir(), "receiver-state.json"))
 	if err != nil {
@@ -1223,6 +1338,64 @@ func TestCloudFailureLogIncludesRequestIDAndSessionFlag(t *testing.T) {
 	}
 	if !strings.Contains(logText, `"session_id_included":true`) {
 		t.Fatalf("expected session_id_included flag in logs, got: %s", logText)
+	}
+}
+
+func TestStartMissingSessionIDConflictLogIncludesClassAndRetryMetadata(t *testing.T) {
+	store, err := state.Open(filepath.Join(t.TempDir(), "receiver-state.json"))
+	if err != nil {
+		t.Fatalf("open state: %v", err)
+	}
+	if err := store.Update(func(data *state.Data) {
+		data.Pairing.Phase = state.PairingSteadyState
+		data.Cloud.IngestAPIKey = "secret"
+	}); err != nil {
+		t.Fatalf("seed state: %v", err)
+	}
+
+	var out bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&out, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+	statusModel := status.New()
+	cloud := &mockSessionClient{
+		startErr: &cloudclient.APIError{
+			StatusCode: 409,
+			Message:    "home auto session start is missing sessionId",
+			Retryable:  false,
+			RequestID:  "req-start-missing-log-1",
+		},
+	}
+	module := New(homeAutoTestConfig(config.HomeAutoSessionModeControl), store, statusModel, logger, cloud)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer func() {
+		cancel()
+		time.Sleep(80 * time.Millisecond)
+	}()
+	module.Start(ctx)
+
+	now := time.Now().UTC()
+	module.ObserveEvent(testPacket("!nodeA", 37.3349, -122.0090, now))
+	module.ObserveEvent(testPacket("!nodeA", latOffsetMeters(37.3349, 250), -122.0090, now.Add(time.Second)))
+	module.Reevaluate()
+
+	waitForCondition(t, 6*time.Second, func() bool {
+		snap := statusModel.Snapshot().HomeAutoSession
+		return snap.State == string(StateCooldown) && snap.ControlState == controlStateConflictBlocked
+	})
+
+	logText := out.String()
+	if !strings.Contains(logText, `"error_class":"has_start_missing_session_id_conflict"`) {
+		t.Fatalf("expected missing-session conflict error class in logs, got: %s", logText)
+	}
+	if !strings.Contains(logText, `"cloud_request_id":"req-start-missing-log-1"`) {
+		t.Fatalf("expected cloud request id in logs, got: %s", logText)
+	}
+	if !strings.Contains(logText, `"dedupe_key_hash":"`) {
+		t.Fatalf("expected dedupe key hash in logs, got: %s", logText)
+	}
+	if !strings.Contains(logText, `"next_retry_at":"`) {
+		t.Fatalf("expected next_retry_at in logs, got: %s", logText)
 	}
 }
 
