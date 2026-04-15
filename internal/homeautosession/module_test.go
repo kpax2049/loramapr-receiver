@@ -1,7 +1,9 @@
 package homeautosession
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -24,6 +26,12 @@ type mockSessionClient struct {
 	startErr error
 	stopErr  error
 
+	startResult cloudclient.HomeAutoSessionStartResult
+	stopResult  cloudclient.HomeAutoSessionStopResult
+
+	startHook func(request cloudclient.HomeAutoSessionStartRequest, call int) (cloudclient.HomeAutoSessionStartResult, error)
+	stopHook  func(request cloudclient.HomeAutoSessionStopRequest, call int) (cloudclient.HomeAutoSessionStopResult, error)
+
 	startRequests []cloudclient.HomeAutoSessionStartRequest
 	stopRequests  []cloudclient.HomeAutoSessionStopRequest
 }
@@ -33,8 +41,18 @@ func (m *mockSessionClient) StartHomeAutoSession(_ context.Context, _ string, _ 
 	defer m.mu.Unlock()
 	m.startCalls++
 	m.startRequests = append(m.startRequests, request)
+	if m.startHook != nil {
+		return m.startHook(request, m.startCalls)
+	}
 	if m.startErr != nil {
 		return cloudclient.HomeAutoSessionStartResult{}, m.startErr
+	}
+	if strings.TrimSpace(m.startResult.SessionID) != "" || !m.startResult.StartedAt.IsZero() {
+		result := m.startResult
+		if result.StartedAt.IsZero() {
+			result.StartedAt = time.Now().UTC()
+		}
+		return result, nil
 	}
 	return cloudclient.HomeAutoSessionStartResult{
 		SessionID: "session-1",
@@ -47,8 +65,18 @@ func (m *mockSessionClient) StopHomeAutoSession(_ context.Context, _ string, _ s
 	defer m.mu.Unlock()
 	m.stopCalls++
 	m.stopRequests = append(m.stopRequests, request)
+	if m.stopHook != nil {
+		return m.stopHook(request, m.stopCalls)
+	}
 	if m.stopErr != nil {
 		return cloudclient.HomeAutoSessionStopResult{}, m.stopErr
+	}
+	if strings.TrimSpace(m.stopResult.SessionID) != "" || !m.stopResult.StoppedAt.IsZero() || strings.TrimSpace(m.stopResult.Status) != "" {
+		result := m.stopResult
+		if result.StoppedAt.IsZero() {
+			result.StoppedAt = time.Now().UTC()
+		}
+		return result, nil
 	}
 	return cloudclient.HomeAutoSessionStopResult{
 		SessionID: "session-1",
@@ -70,6 +98,15 @@ func (m *mockSessionClient) lastStartRequest() cloudclient.HomeAutoSessionStartR
 		return cloudclient.HomeAutoSessionStartRequest{}
 	}
 	return m.startRequests[len(m.startRequests)-1]
+}
+
+func (m *mockSessionClient) lastStopRequest() cloudclient.HomeAutoSessionStopRequest {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if len(m.stopRequests) == 0 {
+		return cloudclient.HomeAutoSessionStopRequest{}
+	}
+	return m.stopRequests[len(m.stopRequests)-1]
 }
 
 func TestModuleDisabledState(t *testing.T) {
@@ -478,6 +515,22 @@ func TestStopTimeoutRetryDelaySchedule(t *testing.T) {
 	}
 }
 
+func TestJitterRetryDelayDeterministicAndCapped(t *testing.T) {
+	base := retryCooldownMax
+	first := jitterRetryDelay(base, actionStop, 7, "seed-1")
+	second := jitterRetryDelay(base, actionStop, 7, "seed-1")
+	if first != second {
+		t.Fatalf("expected deterministic jitter for same seed, got %s and %s", first, second)
+	}
+	if first > retryCooldownMax {
+		t.Fatalf("expected jittered delay to stay capped at %s, got %s", retryCooldownMax, first)
+	}
+	other := jitterRetryDelay(base, actionStop, 7, "seed-2")
+	if other > retryCooldownMax {
+		t.Fatalf("expected jittered delay for second seed to stay capped at %s, got %s", retryCooldownMax, other)
+	}
+}
+
 func TestStopTimeoutRetryUsesFastEarlyCadence(t *testing.T) {
 	store, err := state.Open(filepath.Join(t.TempDir(), "receiver-state.json"))
 	if err != nil {
@@ -715,6 +768,239 @@ func TestStopAlreadyResolvedErrorClearsActiveSession(t *testing.T) {
 	})
 }
 
+func TestStopFallbackWithoutSessionIDOnRetryableError(t *testing.T) {
+	store, err := state.Open(filepath.Join(t.TempDir(), "receiver-state.json"))
+	if err != nil {
+		t.Fatalf("open state: %v", err)
+	}
+	if err := store.Update(func(data *state.Data) {
+		data.Pairing.Phase = state.PairingSteadyState
+		data.Cloud.IngestAPIKey = "secret"
+	}); err != nil {
+		t.Fatalf("seed state: %v", err)
+	}
+
+	statusModel := status.New()
+	cloud := &mockSessionClient{
+		stopHook: func(request cloudclient.HomeAutoSessionStopRequest, call int) (cloudclient.HomeAutoSessionStopResult, error) {
+			if call == 1 {
+				if strings.TrimSpace(request.SessionID) == "" {
+					t.Fatalf("expected first stop request to include session ID")
+				}
+				return cloudclient.HomeAutoSessionStopResult{}, &cloudclient.APIError{
+					StatusCode: 500,
+					Message:    "Internal server error",
+					Retryable:  true,
+					RequestID:  "req-stop-1",
+				}
+			}
+			if strings.TrimSpace(request.SessionID) != "" {
+				t.Fatalf("expected fallback stop request to omit session ID")
+			}
+			return cloudclient.HomeAutoSessionStopResult{
+				SessionID:      "session-1",
+				StoppedAt:      time.Now().UTC(),
+				Status:         "stopped",
+				StatusCode:     200,
+				CloudRequestID: "req-stop-2",
+			}, nil
+		},
+	}
+	module := New(homeAutoTestConfig(config.HomeAutoSessionModeControl), store, statusModel, nil, cloud)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer func() {
+		cancel()
+		time.Sleep(80 * time.Millisecond)
+	}()
+	module.Start(ctx)
+
+	now := time.Now().UTC()
+	module.ObserveEvent(testPacket("!nodeA", 37.3349, -122.0090, now))
+	module.ObserveEvent(testPacket("!nodeA", latOffsetMeters(37.3349, 250), -122.0090, now.Add(time.Second)))
+	module.Reevaluate()
+	waitForCondition(t, 5*time.Second, func() bool {
+		return statusModel.Snapshot().HomeAutoSession.State == string(StateActive)
+	})
+
+	module.ObserveEvent(testPacket("!nodeA", 37.3349, -122.0090, now.Add(3*time.Second)))
+	module.Reevaluate()
+
+	waitForCondition(t, 6*time.Second, func() bool {
+		snap := statusModel.Snapshot().HomeAutoSession
+		return snap.State == string(StateControlReady) && snap.LastActionResult == "stopped"
+	})
+
+	_, stopCalls := cloud.calls()
+	if stopCalls != 2 {
+		t.Fatalf("expected fallback to perform two stop calls, got %d", stopCalls)
+	}
+	if snap := store.Snapshot().HomeAutoSession; snap.ActiveSessionID != "" || snap.PendingAction != "" {
+		t.Fatalf("expected active session and pending action cleared after fallback stop, got %#v", snap)
+	}
+}
+
+func TestStopFallbackWithoutSessionIDOnStaleSessionSemanticError(t *testing.T) {
+	store, err := state.Open(filepath.Join(t.TempDir(), "receiver-state.json"))
+	if err != nil {
+		t.Fatalf("open state: %v", err)
+	}
+	if err := store.Update(func(data *state.Data) {
+		data.Pairing.Phase = state.PairingSteadyState
+		data.Cloud.IngestAPIKey = "secret"
+	}); err != nil {
+		t.Fatalf("seed state: %v", err)
+	}
+
+	statusModel := status.New()
+	cloud := &mockSessionClient{
+		stopHook: func(request cloudclient.HomeAutoSessionStopRequest, call int) (cloudclient.HomeAutoSessionStopResult, error) {
+			if call == 1 {
+				return cloudclient.HomeAutoSessionStopResult{}, &cloudclient.APIError{
+					StatusCode: 400,
+					Message:    "property sessionId should not exist",
+					Retryable:  false,
+					RequestID:  "req-stop-stale-1",
+				}
+			}
+			if strings.TrimSpace(request.SessionID) != "" {
+				t.Fatalf("expected fallback stop request to omit session ID")
+			}
+			return cloudclient.HomeAutoSessionStopResult{
+				SessionID: "session-1",
+				StoppedAt: time.Now().UTC(),
+				Status:    "stopped",
+			}, nil
+		},
+	}
+	module := New(homeAutoTestConfig(config.HomeAutoSessionModeControl), store, statusModel, nil, cloud)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer func() {
+		cancel()
+		time.Sleep(80 * time.Millisecond)
+	}()
+	module.Start(ctx)
+
+	now := time.Now().UTC()
+	module.ObserveEvent(testPacket("!nodeA", 37.3349, -122.0090, now))
+	module.ObserveEvent(testPacket("!nodeA", latOffsetMeters(37.3349, 250), -122.0090, now.Add(time.Second)))
+	module.Reevaluate()
+	waitForCondition(t, 5*time.Second, func() bool {
+		return statusModel.Snapshot().HomeAutoSession.State == string(StateActive)
+	})
+
+	module.ObserveEvent(testPacket("!nodeA", 37.3349, -122.0090, now.Add(3*time.Second)))
+	module.Reevaluate()
+	waitForCondition(t, 6*time.Second, func() bool {
+		snap := statusModel.Snapshot().HomeAutoSession
+		return snap.State == string(StateControlReady) && snap.LastActionResult == "stopped"
+	})
+
+	_, stopCalls := cloud.calls()
+	if stopCalls != 2 {
+		t.Fatalf("expected stale-session fallback to perform two stop calls, got %d", stopCalls)
+	}
+}
+
+func TestStopSuccessLikeAlreadyClosedClearsActiveSession(t *testing.T) {
+	store, err := state.Open(filepath.Join(t.TempDir(), "receiver-state.json"))
+	if err != nil {
+		t.Fatalf("open state: %v", err)
+	}
+	if err := store.Update(func(data *state.Data) {
+		data.Pairing.Phase = state.PairingSteadyState
+		data.Cloud.IngestAPIKey = "secret"
+	}); err != nil {
+		t.Fatalf("seed state: %v", err)
+	}
+
+	statusModel := status.New()
+	cloud := &mockSessionClient{
+		stopResult: cloudclient.HomeAutoSessionStopResult{
+			SessionID: "session-1",
+			StoppedAt: time.Now().UTC(),
+			Status:    "already_closed",
+		},
+	}
+	module := New(homeAutoTestConfig(config.HomeAutoSessionModeControl), store, statusModel, nil, cloud)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer func() {
+		cancel()
+		time.Sleep(80 * time.Millisecond)
+	}()
+	module.Start(ctx)
+
+	now := time.Now().UTC()
+	module.ObserveEvent(testPacket("!nodeA", 37.3349, -122.0090, now))
+	module.ObserveEvent(testPacket("!nodeA", latOffsetMeters(37.3349, 250), -122.0090, now.Add(time.Second)))
+	module.Reevaluate()
+	waitForCondition(t, 5*time.Second, func() bool {
+		return statusModel.Snapshot().HomeAutoSession.State == string(StateActive)
+	})
+
+	module.ObserveEvent(testPacket("!nodeA", 37.3349, -122.0090, now.Add(3*time.Second)))
+	module.Reevaluate()
+	waitForCondition(t, 6*time.Second, func() bool {
+		snap := statusModel.Snapshot().HomeAutoSession
+		return snap.State == string(StateControlReady) && snap.LastActionResult == "already_closed_resolved"
+	})
+
+	if snap := store.Snapshot().HomeAutoSession; snap.ActiveSessionID != "" || snap.PendingAction != "" {
+		t.Fatalf("expected active session and pending action cleared after already_closed stop, got %#v", snap)
+	}
+}
+
+func TestStartAlreadyActiveWithSessionIDSyncsLocalState(t *testing.T) {
+	store, err := state.Open(filepath.Join(t.TempDir(), "receiver-state.json"))
+	if err != nil {
+		t.Fatalf("open state: %v", err)
+	}
+	if err := store.Update(func(data *state.Data) {
+		data.Pairing.Phase = state.PairingSteadyState
+		data.Cloud.IngestAPIKey = "secret"
+	}); err != nil {
+		t.Fatalf("seed state: %v", err)
+	}
+
+	statusModel := status.New()
+	cloud := &mockSessionClient{
+		startErr: &cloudclient.APIError{
+			StatusCode: 409,
+			Message:    "session already active for receiver",
+			Retryable:  false,
+			SessionID:  "session-existing-1",
+		},
+	}
+	module := New(homeAutoTestConfig(config.HomeAutoSessionModeControl), store, statusModel, nil, cloud)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer func() {
+		cancel()
+		time.Sleep(80 * time.Millisecond)
+	}()
+	module.Start(ctx)
+
+	now := time.Now().UTC()
+	module.ObserveEvent(testPacket("!nodeA", 37.3349, -122.0090, now))
+	module.ObserveEvent(testPacket("!nodeA", latOffsetMeters(37.3349, 250), -122.0090, now.Add(time.Second)))
+	module.Reevaluate()
+
+	waitForCondition(t, 6*time.Second, func() bool {
+		snap := statusModel.Snapshot().HomeAutoSession
+		return snap.State == string(StateActive) && snap.ActiveSessionID == "session-existing-1"
+	})
+
+	snap := statusModel.Snapshot().HomeAutoSession
+	if snap.LastActionResult != "already_active_synced" {
+		t.Fatalf("expected already_active_synced result, got %q", snap.LastActionResult)
+	}
+	if snap.ControlState != controlStateActive {
+		t.Fatalf("expected control_state active, got %q", snap.ControlState)
+	}
+}
+
 func TestStartConflictAlreadyActiveEntersConflictBlocked(t *testing.T) {
 	store, err := state.Open(filepath.Join(t.TempDir(), "receiver-state.json"))
 	if err != nil {
@@ -881,6 +1167,62 @@ func TestStopStateMismatchConflictBlocked(t *testing.T) {
 	}
 	if strings.Contains(strings.ToLower(snap.Summary), "cloud unreachable/slow") {
 		t.Fatalf("expected non-retryable stop conflict summary, got %q", snap.Summary)
+	}
+}
+
+func TestCloudFailureLogIncludesRequestIDAndSessionFlag(t *testing.T) {
+	store, err := state.Open(filepath.Join(t.TempDir(), "receiver-state.json"))
+	if err != nil {
+		t.Fatalf("open state: %v", err)
+	}
+	if err := store.Update(func(data *state.Data) {
+		data.Pairing.Phase = state.PairingSteadyState
+		data.Cloud.IngestAPIKey = "secret"
+	}); err != nil {
+		t.Fatalf("seed state: %v", err)
+	}
+
+	var out bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&out, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+	statusModel := status.New()
+	cloud := &mockSessionClient{
+		stopErr: &cloudclient.APIError{
+			StatusCode: 409,
+			Message:    "state mismatch: cannot stop from current state",
+			Retryable:  false,
+			RequestID:  "req-stop-log-1",
+		},
+	}
+	module := New(homeAutoTestConfig(config.HomeAutoSessionModeControl), store, statusModel, logger, cloud)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer func() {
+		cancel()
+		time.Sleep(80 * time.Millisecond)
+	}()
+	module.Start(ctx)
+
+	now := time.Now().UTC()
+	module.ObserveEvent(testPacket("!nodeA", 37.3349, -122.0090, now))
+	module.ObserveEvent(testPacket("!nodeA", latOffsetMeters(37.3349, 250), -122.0090, now.Add(time.Second)))
+	module.Reevaluate()
+	waitForCondition(t, 5*time.Second, func() bool {
+		return statusModel.Snapshot().HomeAutoSession.State == string(StateActive)
+	})
+
+	module.ObserveEvent(testPacket("!nodeA", 37.3349, -122.0090, now.Add(3*time.Second)))
+	module.Reevaluate()
+	waitForCondition(t, 6*time.Second, func() bool {
+		return statusModel.Snapshot().HomeAutoSession.State == string(StateDegraded)
+	})
+
+	logText := out.String()
+	if !strings.Contains(logText, `"cloud_request_id":"req-stop-log-1"`) {
+		t.Fatalf("expected cloud request id in logs, got: %s", logText)
+	}
+	if !strings.Contains(logText, `"session_id_included":true`) {
+		t.Fatalf("expected session_id_included flag in logs, got: %s", logText)
 	}
 }
 

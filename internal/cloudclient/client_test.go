@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -407,7 +408,9 @@ func TestStopHomeAutoSession(t *testing.T) {
 			if req.Header.Get("x-idempotency-key") != "stop-1" {
 				t.Fatalf("missing x-idempotency-key header")
 			}
-			return jsonResponse(http.StatusOK, `{"sessionId":"session-1","stoppedAt":"2026-03-12T10:15:00Z","status":"stopped"}`), nil
+			resp := jsonResponse(http.StatusOK, `{"sessionId":"session-1","stoppedAt":"2026-03-12T10:15:00Z","status":"stopped"}`)
+			resp.Header.Set("X-Request-Id", "req-stop-200")
+			return resp, nil
 		})},
 	}
 
@@ -427,5 +430,49 @@ func TestStopHomeAutoSession(t *testing.T) {
 	}
 	if result.StoppedAt.IsZero() {
 		t.Fatal("expected stopped_at to be parsed")
+	}
+	if result.StatusCode != http.StatusOK {
+		t.Fatalf("expected status code 200, got %d", result.StatusCode)
+	}
+	if result.CloudRequestID != "req-stop-200" {
+		t.Fatalf("expected cloud request id req-stop-200, got %q", result.CloudRequestID)
+	}
+}
+
+func TestStartHomeAutoSessionErrorCapturesRequestIDAndSessionID(t *testing.T) {
+	t.Parallel()
+
+	client := &HTTPClient{
+		baseURL: "https://api.example.com",
+		client: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			resp := jsonResponse(http.StatusConflict, `{
+				"message":"session already active for receiver",
+				"sessionId":"session-existing-9"
+			}`)
+			resp.Header.Set("X-Request-Id", "req-start-409")
+			return resp, nil
+		})},
+	}
+
+	_, err := client.StartHomeAutoSession(context.Background(), "/api/receiver/home-auto-session/start", "ingest-secret", HomeAutoSessionStartRequest{
+		TriggerNodeID: "!nodeA",
+		DedupeKey:     "start-1",
+	})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("expected APIError, got %T", err)
+	}
+	if apiErr.StatusCode != http.StatusConflict {
+		t.Fatalf("expected status 409, got %d", apiErr.StatusCode)
+	}
+	if apiErr.RequestID != "req-start-409" {
+		t.Fatalf("expected request id req-start-409, got %q", apiErr.RequestID)
+	}
+	if apiErr.SessionID != "session-existing-9" {
+		t.Fatalf("expected session id session-existing-9, got %q", apiErr.SessionID)
 	}
 }

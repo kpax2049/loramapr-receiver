@@ -242,9 +242,17 @@ Trace fields include:
 Home Auto Session control loop logs:
 
 - `home auto session decision update`
+- `home auto session cloud action request`
+- `home auto session cloud action response`
 - `home auto session retry scheduled`
+- `home auto session stop fallback activated`
 - `home auto session action blocked by lifecycle conflict`
 - `home auto session action blocked by non-retryable cloud error`
+- failed action logs include:
+  - `action`, `endpoint`, `attempt`
+  - `status_code`, `error_code`
+  - `cloud_request_id` (when returned by cloud)
+  - `session_id_included` (`true`/`false`)
 - For stop retries caused by network/timeout errors, look for:
   - `retry_class=timeout_network`
   - summary text: `stop pending; cloud unreachable/slow (...)`

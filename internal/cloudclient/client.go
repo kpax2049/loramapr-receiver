@@ -114,8 +114,10 @@ type HomeAutoSessionStartRequest struct {
 }
 
 type HomeAutoSessionStartResult struct {
-	SessionID string
-	StartedAt time.Time
+	SessionID      string
+	StartedAt      time.Time
+	StatusCode     int
+	CloudRequestID string
 }
 
 type HomeAutoSessionStopRequest struct {
@@ -127,15 +129,20 @@ type HomeAutoSessionStopRequest struct {
 }
 
 type HomeAutoSessionStopResult struct {
-	SessionID string
-	StoppedAt time.Time
-	Status    string
+	SessionID      string
+	StoppedAt      time.Time
+	Status         string
+	StatusCode     int
+	CloudRequestID string
 }
 
 type APIError struct {
 	StatusCode int
 	Message    string
 	Retryable  bool
+	Route      string
+	RequestID  string
+	SessionID  string
 }
 
 func (e *APIError) Error() string {
@@ -408,7 +415,8 @@ func (c *HTTPClient) StartHomeAutoSession(
 		SessionID string `json:"sessionId"`
 		StartedAt string `json:"startedAt"`
 	}
-	if err := c.postJSON(ctx, startEndpoint, request, headers, &response); err != nil {
+	meta, err := c.postJSONWithMeta(ctx, startEndpoint, request, headers, &response)
+	if err != nil {
 		return HomeAutoSessionStartResult{}, err
 	}
 
@@ -422,8 +430,10 @@ func (c *HTTPClient) StartHomeAutoSession(
 	}
 
 	return HomeAutoSessionStartResult{
-		SessionID: strings.TrimSpace(response.SessionID),
-		StartedAt: startedAt,
+		SessionID:      strings.TrimSpace(response.SessionID),
+		StartedAt:      startedAt,
+		StatusCode:     meta.StatusCode,
+		CloudRequestID: meta.RequestID,
 	}, nil
 }
 
@@ -450,7 +460,8 @@ func (c *HTTPClient) StopHomeAutoSession(
 		StoppedAt string `json:"stoppedAt"`
 		Status    string `json:"status"`
 	}
-	if err := c.postJSON(ctx, stopEndpoint, request, headers, &response); err != nil {
+	meta, err := c.postJSONWithMeta(ctx, stopEndpoint, request, headers, &response)
+	if err != nil {
 		return HomeAutoSessionStopResult{}, err
 	}
 
@@ -464,9 +475,11 @@ func (c *HTTPClient) StopHomeAutoSession(
 	}
 
 	return HomeAutoSessionStopResult{
-		SessionID: strings.TrimSpace(response.SessionID),
-		StoppedAt: stoppedAt,
-		Status:    strings.TrimSpace(response.Status),
+		SessionID:      strings.TrimSpace(response.SessionID),
+		StoppedAt:      stoppedAt,
+		Status:         strings.TrimSpace(response.Status),
+		StatusCode:     meta.StatusCode,
+		CloudRequestID: meta.RequestID,
 	}, nil
 }
 
@@ -477,21 +490,37 @@ func (c *HTTPClient) postJSON(
 	headers map[string]string,
 	response any,
 ) error {
+	_, err := c.postJSONWithMeta(ctx, pathOrURL, request, headers, response)
+	return err
+}
+
+type postResponseMeta struct {
+	StatusCode int
+	RequestID  string
+}
+
+func (c *HTTPClient) postJSONWithMeta(
+	ctx context.Context,
+	pathOrURL string,
+	request any,
+	headers map[string]string,
+	response any,
+) (postResponseMeta, error) {
 	ctx, requestID := EnsureRequestID(ctx)
 
 	requestURL, err := c.resolveURL(pathOrURL)
 	if err != nil {
-		return err
+		return postResponseMeta{}, err
 	}
 
 	body, err := json.Marshal(request)
 	if err != nil {
-		return err
+		return postResponseMeta{}, err
 	}
 
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, requestURL, bytes.NewReader(body))
 	if err != nil {
-		return err
+		return postResponseMeta{}, err
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	if requestID != "" {
@@ -503,28 +532,36 @@ func (c *HTTPClient) postJSON(
 
 	httpResp, err := c.client.Do(httpReq)
 	if err != nil {
-		return err
+		return postResponseMeta{}, err
 	}
 	defer httpResp.Body.Close()
+	respRequestID := responseRequestID(httpResp.Header)
+	meta := postResponseMeta{
+		StatusCode: httpResp.StatusCode,
+		RequestID:  respRequestID,
+	}
 
 	if httpResp.StatusCode < 200 || httpResp.StatusCode >= 300 {
-		message := decodeErrorMessage(httpResp.Body)
-		return &APIError{
+		decoded := decodeErrorPayload(httpResp.Body)
+		return meta, &APIError{
 			StatusCode: httpResp.StatusCode,
-			Message:    message,
+			Message:    decoded.Message,
 			Retryable:  retryableStatus(httpResp.StatusCode),
+			Route:      requestURL,
+			RequestID:  respRequestID,
+			SessionID:  decoded.SessionID,
 		}
 	}
 
 	if response == nil {
 		_, _ = io.Copy(io.Discard, httpResp.Body)
-		return nil
+		return meta, nil
 	}
 
 	if err := json.NewDecoder(httpResp.Body).Decode(response); err != nil {
-		return err
+		return meta, err
 	}
-	return nil
+	return meta, nil
 }
 
 func (c *HTTPClient) resolveURL(pathOrURL string) (string, error) {
@@ -557,24 +594,40 @@ func retryableStatus(code int) bool {
 	return code >= 500
 }
 
-func decodeErrorMessage(body io.Reader) string {
+type decodedError struct {
+	Message   string
+	SessionID string
+}
+
+func decodeErrorPayload(body io.Reader) decodedError {
+	result := decodedError{}
 	var payload struct {
-		Message any `json:"message"`
-		Error   any `json:"error"`
+		Message   any            `json:"message"`
+		Error     any            `json:"error"`
+		SessionID string         `json:"sessionId"`
+		Data      map[string]any `json:"data"`
 	}
 	data, err := io.ReadAll(io.LimitReader(body, 2048))
 	if err != nil {
-		return ""
+		return result
 	}
+	result.Message = strings.TrimSpace(string(data))
 	if err := json.Unmarshal(data, &payload); err == nil {
 		if msg := normalizeErrorMessage(payload.Message); msg != "" {
-			return msg
+			result.Message = msg
+		} else if msg := normalizeErrorMessage(payload.Error); msg != "" {
+			result.Message = msg
 		}
-		if msg := normalizeErrorMessage(payload.Error); msg != "" {
-			return msg
+		result.SessionID = strings.TrimSpace(payload.SessionID)
+		if result.SessionID == "" && payload.Data != nil {
+			if raw, ok := payload.Data["sessionId"]; ok {
+				if value, ok := raw.(string); ok {
+					result.SessionID = strings.TrimSpace(value)
+				}
+			}
 		}
 	}
-	return strings.TrimSpace(string(data))
+	return result
 }
 
 func normalizeErrorMessage(value any) string {
@@ -598,4 +651,14 @@ func normalizeErrorMessage(value any) string {
 	default:
 		return ""
 	}
+}
+
+func responseRequestID(header http.Header) string {
+	if header == nil {
+		return ""
+	}
+	if value := strings.TrimSpace(header.Get("X-Request-Id")); value != "" {
+		return value
+	}
+	return strings.TrimSpace(header.Get("X-Request-ID"))
 }

@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"math"
 	"net"
+	"net/http"
 	"strings"
 	"sync"
 	"time"
@@ -103,8 +104,10 @@ const (
 const (
 	observationQueueDepth   = 256
 	controlCallTimeout      = 8 * time.Second
+	stopFallbackCallTimeout = 3 * time.Second
 	retryCooldown           = 30 * time.Second
 	retryCooldownMax        = 4 * time.Minute
+	retryJitterPercent      = 10
 	stopRetryQuickFirst     = 10 * time.Second
 	stopRetryQuickSecond    = 20 * time.Second
 	stopRetryQuickThird     = 30 * time.Second
@@ -955,11 +958,28 @@ func (m *Module) attemptStartLocked(ctx context.Context, now time.Time, cfg conf
 
 	callCtx, cancel := context.WithTimeout(ctx, controlCallTimeout)
 	defer cancel()
+	attempt := m.consecutiveFailures + 1
+	m.logger.Debug(
+		"home auto session cloud action request",
+		"action", string(actionStart),
+		"endpoint", startEndpoint,
+		"attempt", attempt,
+		"session_id_included", false,
+	)
 	result, err := m.client.StartHomeAutoSession(callCtx, startEndpoint, apiKey, request)
 	if err != nil {
-		m.handleCloudErrorLocked(now, actionStart, err)
+		m.handleCloudErrorLocked(now, actionStart, startEndpoint, attempt, false, err)
 		return
 	}
+	m.logger.Info(
+		"home auto session cloud action response",
+		"action", string(actionStart),
+		"endpoint", startEndpoint,
+		"attempt", attempt,
+		"status_code", normalizeSuccessStatus(result.StatusCode),
+		"cloud_request_id", strings.TrimSpace(result.CloudRequestID),
+		"session_id_included", false,
+	)
 
 	startedAt := now
 	if !result.StartedAt.IsZero() {
@@ -1053,15 +1073,40 @@ func (m *Module) attemptStopLocked(ctx context.Context, now time.Time, cfg confi
 		Reason:        candidate.Reason,
 		StoppedAt:     now.Format(time.RFC3339),
 	}
-	callCtx, cancel := context.WithTimeout(ctx, controlCallTimeout)
-	defer cancel()
-	result, err := m.client.StopHomeAutoSession(callCtx, stopEndpoint, apiKey, request)
+	attempt := m.consecutiveFailures + 1
+	result, err := m.callStopEndpointLocked(ctx, stopEndpoint, apiKey, request, attempt)
 	if err != nil {
 		if stopAlreadyResolvedError(err) {
 			m.completeStopLocked(candidate, now, trigger, cloudclient.HomeAutoSessionStopResult{SessionID: m.activeSessionID, StoppedAt: now, Status: "already_stopped"})
 			return
 		}
-		m.handleCloudErrorLocked(now, actionStop, err)
+
+		sessionIncluded := strings.TrimSpace(request.SessionID) != ""
+		if sessionIncluded && shouldFallbackStopWithoutSessionID(err) {
+			fallbackRequest := request
+			fallbackRequest.SessionID = ""
+			m.logger.Warn(
+				"home auto session stop fallback activated",
+				"action", string(actionStop),
+				"endpoint", stopEndpoint,
+				"attempt", attempt,
+				"cloud_request_id", cloudRequestIDFromError(err),
+				"reason", stopFallbackReason(err),
+			)
+			fallbackResult, fallbackErr := m.callStopEndpointLocked(ctx, stopEndpoint, apiKey, fallbackRequest, attempt)
+			if fallbackErr == nil {
+				m.completeStopLocked(candidate, now, trigger, fallbackResult)
+				return
+			}
+			if stopAlreadyResolvedError(fallbackErr) {
+				m.completeStopLocked(candidate, now, trigger, cloudclient.HomeAutoSessionStopResult{SessionID: m.activeSessionID, StoppedAt: now, Status: "already_stopped"})
+				return
+			}
+			err = fallbackErr
+			sessionIncluded = false
+		}
+
+		m.handleCloudErrorLocked(now, actionStop, stopEndpoint, attempt, sessionIncluded, err)
 		return
 	}
 
@@ -1087,7 +1132,8 @@ func (m *Module) completeStopLocked(candidate transitionCandidate, now time.Time
 	m.activeStateSource = activeStateSourceNone
 	m.lastAction = string(actionStop)
 	m.lastActionAt = cloneTime(now)
-	if strings.EqualFold(strings.TrimSpace(result.Status), "already_stopped") {
+	stopStatus := strings.ToLower(strings.TrimSpace(result.Status))
+	if stopStatus == "already_stopped" || stopStatus == "already_closed" {
 		m.lastActionResult = "already_closed_resolved"
 	} else {
 		m.lastActionResult = "stopped"
@@ -1103,6 +1149,45 @@ func (m *Module) completeStopLocked(candidate transitionCandidate, now time.Time
 	m.logger.Info("home auto session stopped", "trigger_node", candidate.NodeID, "trigger", trigger, "status", strings.TrimSpace(result.Status))
 	m.publishLocked()
 	m.persistLocked()
+}
+
+func (m *Module) callStopEndpointLocked(
+	ctx context.Context,
+	stopEndpoint string,
+	apiKey string,
+	request cloudclient.HomeAutoSessionStopRequest,
+	attempt int,
+) (cloudclient.HomeAutoSessionStopResult, error) {
+	sessionIncluded := strings.TrimSpace(request.SessionID) != ""
+	timeout := controlCallTimeout
+	if !sessionIncluded {
+		timeout = stopFallbackCallTimeout
+	}
+
+	m.logger.Debug(
+		"home auto session cloud action request",
+		"action", string(actionStop),
+		"endpoint", stopEndpoint,
+		"attempt", attempt,
+		"session_id_included", sessionIncluded,
+	)
+	callCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	result, err := m.client.StopHomeAutoSession(callCtx, stopEndpoint, apiKey, request)
+	if err != nil {
+		return cloudclient.HomeAutoSessionStopResult{}, err
+	}
+
+	m.logger.Info(
+		"home auto session cloud action response",
+		"action", string(actionStop),
+		"endpoint", stopEndpoint,
+		"attempt", attempt,
+		"status_code", normalizeSuccessStatus(result.StatusCode),
+		"cloud_request_id", strings.TrimSpace(result.CloudRequestID),
+		"session_id_included", sessionIncluded,
+	)
+	return result, nil
 }
 
 func (m *Module) setPendingActionLocked(action pendingActionKind, candidate transitionCandidate, now time.Time) {
@@ -1239,7 +1324,7 @@ func (m *Module) shouldStopByIdleLocked(now time.Time, cfg config.HomeAutoSessio
 	return now.Sub(fact.LastSeenAt) >= timeout
 }
 
-func (m *Module) handleCloudErrorLocked(now time.Time, action pendingActionKind, err error) {
+func (m *Module) handleCloudErrorLocked(now time.Time, action pendingActionKind, endpoint string, attempt int, sessionIDIncluded bool, err error) {
 	actionName := string(action)
 	errText := strings.TrimSpace(err.Error())
 	if errText == "" {
@@ -1249,7 +1334,18 @@ func (m *Module) handleCloudErrorLocked(now time.Time, action pendingActionKind,
 	m.lastAction = actionName
 	m.lastActionAt = cloneTime(now)
 	m.consecutiveFailures++
-	m.logger.Warn("home auto session cloud action failed", "action", actionName, "err", err)
+	statusCode, errorCode := homeAutoOutboundCallResult(err)
+	m.logger.Warn(
+		"home auto session cloud action failed",
+		"action", actionName,
+		"endpoint", endpoint,
+		"attempt", attempt,
+		"status_code", statusCode,
+		"error_code", errorCode,
+		"cloud_request_id", cloudRequestIDFromError(err),
+		"session_id_included", sessionIDIncluded,
+		"err", err,
+	)
 
 	if lifecycle, ok := lifecycleConflictFromError(err); ok {
 		m.lastRetryClass = ""
@@ -1288,6 +1384,47 @@ func (m *Module) handleCloudErrorLocked(now time.Time, action pendingActionKind,
 	}
 
 	if action == actionStart && startAlreadyActiveConflict(err) {
+		if sessionID := cloudSessionIDFromError(err); sessionID != "" {
+			nodeID := ""
+			if m.startCandidate != nil {
+				nodeID = strings.TrimSpace(m.startCandidate.NodeID)
+			}
+			if nodeID == "" && m.pendingAction != nil && m.pendingAction.Action == actionStart {
+				nodeID = strings.TrimSpace(m.pendingAction.NodeID)
+			}
+			if nodeID == "" {
+				nodeID = strings.TrimSpace(m.activeTriggerNode)
+			}
+			m.lastRetryClass = ""
+			m.lastActionResult = "already_active_synced"
+			m.pendingAction = nil
+			m.startCandidate = nil
+			m.stopCandidate = nil
+			m.cooldownUntil = nil
+			m.blockedReason = ""
+			m.lastError = ""
+			m.reconciliationState = reconciliationConflictAlreadyActive
+			m.activeStateSource = activeStateSourceCloudAck
+			m.activeSessionID = sessionID
+			if nodeID != "" {
+				m.activeTriggerNode = nodeID
+			}
+			m.state = StateActive
+			m.controlState = controlStateActive
+			m.summary = "cloud reports an active session; local state synchronized"
+			m.lastDecision = "start conflict resolved by syncing active cloud session"
+			m.logger.Info(
+				"home auto session already-active conflict resolved by sync",
+				"action", actionName,
+				"endpoint", endpoint,
+				"attempt", attempt,
+				"session_id", sessionID,
+			)
+			m.publishLocked()
+			m.persistLocked()
+			return
+		}
+
 		m.lastRetryClass = ""
 		m.lastActionResult = "already_active_conflict"
 		m.pendingAction = nil
@@ -1328,6 +1465,7 @@ func (m *Module) handleCloudErrorLocked(now time.Time, action pendingActionKind,
 	if cloudclient.IsRetryable(err) {
 		retryClass := classifyRetryableCloudError(err)
 		delay := retryDelayFor(action, retryClass, m.consecutiveFailures)
+		delay = jitterRetryDelay(delay, action, m.consecutiveFailures, m.retryJitterKeyLocked(action))
 		cooldown := now.Add(delay)
 		m.cooldownUntil = &cooldown
 		m.blockedReason = ""
@@ -1351,12 +1489,16 @@ func (m *Module) handleCloudErrorLocked(now time.Time, action pendingActionKind,
 			"home auto session retry scheduled",
 			"action",
 			actionName,
+			"endpoint",
+			endpoint,
 			"attempt",
 			m.consecutiveFailures,
 			"retry_in",
 			delay.Round(time.Second),
 			"retry_class",
 			string(retryClass),
+			"next_retry_at",
+			cooldown.UTC().Format(time.RFC3339),
 			"cooldown_until",
 			cooldown.Format(time.RFC3339Nano),
 		)
@@ -1858,6 +2000,25 @@ func retryDelayFor(action pendingActionKind, retryClass retryableErrorClass, fai
 	return retryDelay(failures)
 }
 
+func jitterRetryDelay(base time.Duration, action pendingActionKind, failures int, key string) time.Duration {
+	if base <= 0 {
+		return base
+	}
+	seed := fmt.Sprintf("%s|%d|%s", action, failures, strings.ToLower(strings.TrimSpace(key)))
+	sum := sha256.Sum256([]byte(seed))
+	span := retryJitterPercent*2 + 1
+	offset := int(sum[0])%span - retryJitterPercent
+	delta := int64(base) * int64(offset) / 100
+	jittered := time.Duration(int64(base) + delta)
+	if jittered < time.Second {
+		jittered = time.Second
+	}
+	if jittered > retryCooldownMax {
+		jittered = retryCooldownMax
+	}
+	return jittered
+}
+
 func stopTimeoutRetryDelay(failures int) time.Duration {
 	switch {
 	case failures <= 1:
@@ -1929,6 +2090,138 @@ func (m *Module) shouldBypassStopRetryCooldownLocked(now time.Time, trigger stri
 		return false
 	}
 	return now.Sub(fact.LastSeenAt) <= stopRetryFreshInsideMax
+}
+
+func (m *Module) retryJitterKeyLocked(action pendingActionKind) string {
+	if m.pendingAction != nil && m.pendingAction.Action == action {
+		if key := strings.TrimSpace(m.pendingAction.DedupeKey); key != "" {
+			return key
+		}
+	}
+	if action == actionStop {
+		if key := strings.TrimSpace(m.activeSessionID); key != "" {
+			return key
+		}
+	}
+	if key := strings.TrimSpace(m.activeTriggerNode); key != "" {
+		return key
+	}
+	return string(action)
+}
+
+func shouldFallbackStopWithoutSessionID(err error) bool {
+	if err == nil || stopAlreadyResolvedError(err) {
+		return false
+	}
+	if stopStateMismatchConflict(err) {
+		return false
+	}
+	if _, blocked := lifecycleConflictFromError(err); blocked {
+		return false
+	}
+	if cloudclient.IsRetryable(err) {
+		return true
+	}
+	var apiErr *cloudclient.APIError
+	if !errors.As(err, &apiErr) {
+		return false
+	}
+	if apiErr.StatusCode >= http.StatusInternalServerError {
+		return true
+	}
+	return staleSessionSemantics(strings.ToLower(strings.TrimSpace(apiErr.Message)))
+}
+
+func stopFallbackReason(err error) string {
+	if err == nil {
+		return ""
+	}
+	if cloudclient.IsRetryable(err) {
+		return "retryable_cloud_error"
+	}
+	var apiErr *cloudclient.APIError
+	if errors.As(err, &apiErr) {
+		if staleSessionSemantics(strings.ToLower(strings.TrimSpace(apiErr.Message))) {
+			return "stale_or_missing_session_id"
+		}
+	}
+	return "unknown"
+}
+
+func staleSessionSemantics(message string) bool {
+	if message == "" {
+		return false
+	}
+	if strings.Contains(message, "sessionid should not exist") ||
+		strings.Contains(message, "session id should not exist") ||
+		strings.Contains(message, "invalid sessionid") ||
+		strings.Contains(message, "invalid session id") ||
+		strings.Contains(message, "stale session") ||
+		strings.Contains(message, "missing session") ||
+		strings.Contains(message, "unknown session") {
+		return true
+	}
+	if strings.Contains(message, "session") && strings.Contains(message, "not found") {
+		return true
+	}
+	return false
+}
+
+func homeAutoOutboundCallResult(err error) (int, string) {
+	if err == nil {
+		return http.StatusOK, ""
+	}
+	var apiErr *cloudclient.APIError
+	if errors.As(err, &apiErr) {
+		code := apiErr.StatusCode
+		if code <= 0 {
+			code = http.StatusBadGateway
+		}
+		switch apiErr.StatusCode {
+		case http.StatusUnauthorized:
+			return code, "unauthorized"
+		case http.StatusForbidden:
+			return code, "forbidden"
+		case http.StatusConflict:
+			return code, "conflict"
+		case http.StatusTooManyRequests:
+			return code, "rate_limited"
+		case http.StatusServiceUnavailable:
+			return code, "service_unavailable"
+		default:
+			return code, "cloud_api_error"
+		}
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return http.StatusGatewayTimeout, "timeout"
+	}
+	if errors.Is(err, context.Canceled) {
+		return 499, "canceled"
+	}
+	return http.StatusBadGateway, "transport_error"
+}
+
+func cloudRequestIDFromError(err error) string {
+	var apiErr *cloudclient.APIError
+	if errors.As(err, &apiErr) {
+		return strings.TrimSpace(apiErr.RequestID)
+	}
+	return ""
+}
+
+func cloudSessionIDFromError(err error) string {
+	var apiErr *cloudclient.APIError
+	if errors.As(err, &apiErr) {
+		return strings.TrimSpace(apiErr.SessionID)
+	}
+	return ""
+}
+
+func normalizeSuccessStatus(code int) int {
+	if code <= 0 {
+		return http.StatusOK
+	}
+	return code
 }
 
 func nonRetryableBlockedReason(action pendingActionKind, err error) string {
