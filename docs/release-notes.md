@@ -1,5 +1,8 @@
 # LoRaMapr Receiver Release Notes
 
+For Home Auto Session conflict/fallback resiliency notes targeting `v3.3.0`,
+see `docs/release-notes-v3.3.0.md`.
+
 For minimum structured logging + request-ID correlation notes targeting
 `v3.1.0`, see `docs/release-notes-v3.1.0.md`.
 
