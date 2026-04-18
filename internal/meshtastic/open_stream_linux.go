@@ -70,14 +70,16 @@ func configureSerialFD(fd int) error {
 		return errno
 	}
 
-	lines := syscall.TIOCM_DTR | syscall.TIOCM_RTS
-	if _, _, errno := syscall.Syscall(
-		syscall.SYS_IOCTL,
-		uintptr(fd),
-		uintptr(syscall.TIOCMBIS),
-		uintptr(unsafe.Pointer(&lines)),
-	); errno != 0 {
-		return errno
+	if shouldAssertSerialControlLines() {
+		lines := syscall.TIOCM_DTR | syscall.TIOCM_RTS
+		if _, _, errno := syscall.Syscall(
+			syscall.SYS_IOCTL,
+			uintptr(fd),
+			uintptr(syscall.TIOCMBIS),
+			uintptr(unsafe.Pointer(&lines)),
+		); errno != 0 {
+			return errno
+		}
 	}
 	return nil
 }

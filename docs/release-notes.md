@@ -1,5 +1,8 @@
 # LoRaMapr Receiver Release Notes
 
+For Linux serial line-control hardening notes targeting `v3.3.1`, see
+`docs/release-notes-v3.3.1.md`.
+
 For Home Auto Session conflict/fallback resiliency notes targeting `v3.3.0`,
 see `docs/release-notes-v3.3.0.md`.
 

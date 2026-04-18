@@ -175,6 +175,16 @@ Supported token substitution in command and args:
 - `true`: receiver may send a throttled startup bootstrap request to encourage
   native config/status streaming on compatible nodes.
 
+### Linux serial control lines
+
+For Linux serial opens, receiver no longer asserts DTR/RTS by default. This
+avoids aggressive line control on boards that reset when those lines are driven.
+
+Advanced override (Linux only):
+
+- env var: `LORAMAPR_MESHTASTIC_ASSERT_DTR_RTS=true`
+- effect: re-enables DTR/RTS assertion after termios setup
+
 ### `home_auto_session` block
 
 Optional embedded Home Auto Session module config:

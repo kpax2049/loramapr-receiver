@@ -22,6 +22,8 @@ Configured via `meshtastic.transport`:
   - passive/read-only by default (`meshtastic.bootstrap_write=false`)
   - optional throttled startup bootstrap request when
     `meshtastic.bootstrap_write=true`
+  - Linux serial open no longer asserts DTR/RTS by default; set
+    `LORAMAPR_MESHTASTIC_ASSERT_DTR_RTS=true` only for hardware that requires it
 - `bridge` (packaged Linux/Pi default)
   - auto-detects likely serial devices on Linux/macOS
   - runs a supervised bridge subprocess that emits NDJSON
