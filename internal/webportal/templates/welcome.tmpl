@@ -1,51 +1,87 @@
 {{define "content"}}
-<section class="panel">
-  <h2>Welcome to LoRaMapr Receiver</h2>
-  <p>Use this local portal to pair your receiver, verify node connection, and confirm packet forwarding.</p>
-  <div class="status-grid">
-    <div class="status-chip"><div class="label">Local Receiver Name</div><div class="value" data-status-key="local_name">{{if .Snapshot.LocalName}}{{.Snapshot.LocalName}}{{else}}unnamed{{end}}</div></div>
-    <div class="status-chip"><div class="label">Cloud Receiver</div><div class="value" data-status-key="cloud_receiver_display">{{if .Snapshot.CloudReceiverLabel}}{{.Snapshot.CloudReceiverLabel}}{{else if .Snapshot.CloudReceiverID}}{{.Snapshot.CloudReceiverID}}{{else}}not assigned{{end}}</div></div>
-    <div class="status-chip"><div class="label">Pairing Status</div><div class="value mono" data-status-key="pairing_phase">{{.Snapshot.PairingPhase}}</div></div>
-    <div class="status-chip"><div class="label">Cloud Status</div><div class="value" data-status-key="cloud_status">{{.Snapshot.CloudStatus}}</div></div>
-    <div class="status-chip"><div class="label">Service Status</div><div class="value" data-status-key="lifecycle">{{.Snapshot.Lifecycle}}</div></div>
-    <div class="status-chip"><div class="label">Ready</div><div class="value" data-status-key="ready">{{if .Snapshot.Ready}}yes{{else}}no{{end}}</div></div>
-    <div class="status-chip"><div class="label">Issue Code</div><div class="value mono" data-status-key="failure_code">{{if .Snapshot.FailureCode}}{{.Snapshot.FailureCode}}{{else}}none{{end}}</div></div>
-    <div class="status-chip">
-      <div class="label">Attention State</div>
-      <div class="value mono" data-status-key="attention_state_code">
+<section class="lmr-card">
+  <h2 class="lmr-card__title">Welcome to LoRaMapr Receiver</h2>
+  <p class="lmr-card__desc">Use this local portal to pair your receiver, verify node connection, and confirm packet forwarding.</p>
+  <div class="lmr-tiles">
+    <div class="lmr-tile">
+      <div class="lmr-tile__label">Local Receiver Name</div>
+      <div class="lmr-tile__value"><span class="lmr-mono" data-status-key="local_name">{{if .Snapshot.LocalName}}{{.Snapshot.LocalName}}{{else}}unnamed{{end}}</span></div>
+    </div>
+    <div class="lmr-tile">
+      <div class="lmr-tile__label">Cloud Receiver</div>
+      <div class="lmr-tile__value"><span class="lmr-mono" data-status-key="cloud_receiver_display">{{if .Snapshot.CloudReceiverLabel}}{{.Snapshot.CloudReceiverLabel}}{{else if .Snapshot.CloudReceiverID}}{{.Snapshot.CloudReceiverID}}{{else}}not assigned{{end}}</span></div>
+    </div>
+    <div class="lmr-tile">
+      <div class="lmr-tile__label">Pairing Status</div>
+      <div class="lmr-tile__value"><span class="lmr-pill {{lmrTone .Snapshot.PairingPhase}}"><span class="lmr-pill__dot"></span><span data-status-key="pairing_phase">{{.Snapshot.PairingPhase}}</span></span></div>
+    </div>
+    <div class="lmr-tile">
+      <div class="lmr-tile__label">Cloud Status</div>
+      <div class="lmr-tile__value"><span class="lmr-pill {{lmrTone .Snapshot.CloudStatus}}"><span class="lmr-pill__dot"></span><span data-status-key="cloud_status">{{.Snapshot.CloudStatus}}</span></span></div>
+    </div>
+    <div class="lmr-tile">
+      <div class="lmr-tile__label">Service Status</div>
+      <div class="lmr-tile__value"><span class="lmr-pill {{lmrTone .Snapshot.Lifecycle}}"><span class="lmr-pill__dot"></span><span data-status-key="lifecycle">{{.Snapshot.Lifecycle}}</span></span></div>
+    </div>
+    <div class="lmr-tile">
+      <div class="lmr-tile__label">Ready</div>
+      <div class="lmr-tile__value"><span class="lmr-pill {{lmrBoolTone .Snapshot.Ready}}"><span class="lmr-pill__dot"></span><span data-status-key="ready">{{lmrBoolLabel .Snapshot.Ready}}</span></span></div>
+    </div>
+    <div class="lmr-tile">
+      <div class="lmr-tile__label">Issue Code</div>
+      <div class="lmr-tile__value"><span class="lmr-chip {{if .Snapshot.FailureCode}}is-fail{{end}}" data-status-key="failure_code">{{if .Snapshot.FailureCode}}{{.Snapshot.FailureCode}}{{else}}none{{end}}</span></div>
+    </div>
+    <div class="lmr-tile">
+      <div class="lmr-tile__label">Attention State</div>
+      <div class="lmr-tile__value">
         {{if and .Attention.State (ne .Attention.State "none")}}
-          {{.Attention.State}}{{if .Attention.Code}} {{.Attention.Code}}{{end}}
+        <span class="lmr-chip {{lmrAttentionTone .Attention.State}}">{{.Attention.State}}</span>
+        {{if .Attention.Code}}<span class="lmr-chip {{lmrAttentionTone .Attention.State}}">{{.Attention.Code}}</span>{{end}}
         {{else}}
-          none
+        <span class="lmr-chip is-neutral">none</span>
         {{end}}
       </div>
     </div>
   </div>
   {{if .SummaryHint}}
-  <div class="hint {{.SummaryHintClass}}">{{.SummaryHint}}</div>
+  <div class="lmr-callout {{lmrCalloutClass .SummaryHintClass}}">
+    <span class="lmr-callout__icon">{{if eq .SummaryHintClass "err"}}x{{else}}!{{end}}</span>
+    <div>{{.SummaryHint}}</div>
+  </div>
   {{end}}
   {{if .SetupIssues}}
-  <div class="hint warn">
-    <strong>Setup root cause</strong>
-    <ul>
-      {{range .SetupIssues}}
-      <li><span class="mono">{{.Code}}</span>: {{.Summary}}{{if .Guidance}} Next: {{.Guidance}}{{end}}</li>
-      {{end}}
-    </ul>
+  <div class="lmr-callout">
+    <span class="lmr-callout__icon">!</span>
+    <div>
+      <div class="lmr-eyebrow">Setup root cause</div>
+      <div class="lmr-issues">
+        {{range .SetupIssues}}
+        <div class="lmr-issue">
+          <div>
+            <span class="lmr-chip {{lmrLevelTone .Level}}">{{.Code}}</span> {{.Summary}}
+            {{if .Guidance}}<div class="lmr-next"><b>Next:</b> {{.Guidance}}</div>{{end}}
+          </div>
+        </div>
+        {{end}}
+      </div>
+    </div>
   </div>
   {{end}}
   {{if ne .Attention.State "none"}}
   {{if .Attention.Summary}}
-  <div class="hint {{if eq .Attention.State "urgent"}}err{{else if eq .Attention.State "action_required"}}warn{{else}}none{{end}}">
-    <strong>{{if .Attention.Category}}{{.Attention.Category}}{{else}}attention{{end}}</strong>: {{.Attention.Summary}}
-    {{if .Attention.Hint}}<br>{{.Attention.Hint}}{{end}}
+  <div class="lmr-callout {{if eq .Attention.State "urgent"}}is-fail{{end}}">
+    <span class="lmr-callout__icon">{{if eq .Attention.State "urgent"}}x{{else}}!{{end}}</span>
+    <div>
+      <strong>{{if .Attention.Category}}{{.Attention.Category}}{{else}}attention{{end}}</strong>: {{.Attention.Summary}}
+      {{if .Attention.Hint}}<br><span class="lmr-callout__muted">{{.Attention.Hint}}</span>{{end}}
+    </div>
   </div>
   {{end}}
   {{end}}
 </section>
-<section class="panel">
-  <h2>Next Step</h2>
-  <p>{{.NextAction}}</p>
-  <p class="muted">If this is first setup, open Pairing and paste the code from LoRaMapr Cloud.</p>
+<section class="lmr-card">
+  <h2 class="lmr-card__title">Next Step</h2>
+  <p class="lmr-card__desc">{{.NextAction}}</p>
+  <p class="lmr-card__desc">If this is first setup, open Pairing and paste the code from LoRaMapr Cloud.</p>
 </section>
 {{end}}

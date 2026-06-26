@@ -1,27 +1,51 @@
 {{define "content"}}
-<section class="panel">
-  <h2>Pair This Receiver</h2>
-  <p>Paste the pairing code from LoRaMapr Cloud to link this installation to your account.</p>
-  <p class="muted">For local/self-hosted cloud testing, set cloud base URL during bootstrap with <span class="mono">--cloud-base-url</span> (no manual config editing needed).</p>
+<section class="lmr-card">
+  <h2 class="lmr-card__title">Pair This Receiver</h2>
+  <p class="lmr-card__desc">Paste the pairing code from LoRaMapr Cloud to link this installation to your account.</p>
+  <p class="lmr-card__desc">For local/self-hosted cloud testing, set cloud base URL during bootstrap with <span class="lmr-code">--cloud-base-url</span> (no manual config editing needed).</p>
   {{if .Flash}}
-  <div class="hint {{.FlashClass}}">{{.Flash}}</div>
+  <div class="lmr-callout {{lmrCalloutClass .FlashClass}}">
+    <span class="lmr-callout__icon">{{if eq .FlashClass "err"}}x{{else}}!{{end}}</span>
+    <div>{{.Flash}}</div>
+  </div>
   {{end}}
   <form method="post" action="/pairing">
-    <label for="pairing_code">Pairing Code</label>
-    <input id="pairing_code" name="pairing_code" type="text" placeholder="LMR-..." maxlength="128" required>
-    <button type="submit">Submit Pairing Code</button>
+    <label class="lmr-label" for="pairing_code">Pairing Code</label>
+    <input class="lmr-input" id="pairing_code" name="pairing_code" type="text" placeholder="LMR-..." maxlength="128" required>
+    <button class="lmr-btn" type="submit">Submit Pairing Code</button>
   </form>
 </section>
-<section class="panel">
-  <h2>Current Receiver Status</h2>
-  <table>
-    <tr><th>Local Receiver Name</th><td data-status-key="local_name">{{if .Snapshot.LocalName}}{{.Snapshot.LocalName}}{{else}}unnamed{{end}}</td></tr>
-    <tr><th>Cloud Receiver</th><td data-status-key="cloud_receiver_display">{{if .Snapshot.CloudReceiverLabel}}{{.Snapshot.CloudReceiverLabel}}{{else if .Snapshot.CloudReceiverID}}{{.Snapshot.CloudReceiverID}}{{else}}not assigned yet{{end}}</td></tr>
-    <tr><th>Cloud Endpoint</th><td class="mono" data-status-key="cloud_endpoint">{{.Snapshot.CloudEndpoint}}</td></tr>
-    <tr><th>Pairing Phase</th><td class="mono" data-status-key="pairing_phase">{{.Snapshot.PairingPhase}}</td></tr>
-    <tr><th>Cloud Status</th><td data-status-key="cloud_status">{{.Snapshot.CloudStatus}}</td></tr>
-    <tr><th>Service Status</th><td data-status-key="lifecycle">{{.Snapshot.Lifecycle}}</td></tr>
-    <tr><th>Last Runtime Error</th><td data-status-key="last_error">{{if .Snapshot.LastError}}{{.Snapshot.LastError}}{{else}}none{{end}}</td></tr>
-  </table>
+<section class="lmr-card">
+  <h2 class="lmr-card__title">Current Receiver Status</h2>
+  <div class="lmr-kv">
+    <div class="lmr-kv__row">
+      <div class="lmr-kv__label">Local Receiver Name</div>
+      <div><span class="lmr-mono" data-status-key="local_name">{{if .Snapshot.LocalName}}{{.Snapshot.LocalName}}{{else}}unnamed{{end}}</span></div>
+    </div>
+    <div class="lmr-kv__row">
+      <div class="lmr-kv__label">Cloud Receiver</div>
+      <div><span class="lmr-mono" data-status-key="cloud_receiver_display">{{if .Snapshot.CloudReceiverLabel}}{{.Snapshot.CloudReceiverLabel}}{{else if .Snapshot.CloudReceiverID}}{{.Snapshot.CloudReceiverID}}{{else}}not assigned yet{{end}}</span></div>
+    </div>
+    <div class="lmr-kv__row">
+      <div class="lmr-kv__label">Cloud Endpoint</div>
+      <div><span class="lmr-mono" data-status-key="cloud_endpoint">{{.Snapshot.CloudEndpoint}}</span></div>
+    </div>
+    <div class="lmr-kv__row">
+      <div class="lmr-kv__label">Pairing Phase</div>
+      <div><span class="lmr-pill {{lmrTone .Snapshot.PairingPhase}}"><span class="lmr-pill__dot"></span><span data-status-key="pairing_phase">{{.Snapshot.PairingPhase}}</span></span></div>
+    </div>
+    <div class="lmr-kv__row">
+      <div class="lmr-kv__label">Cloud Status</div>
+      <div><span class="lmr-pill {{lmrTone .Snapshot.CloudStatus}}"><span class="lmr-pill__dot"></span><span data-status-key="cloud_status">{{.Snapshot.CloudStatus}}</span></span></div>
+    </div>
+    <div class="lmr-kv__row">
+      <div class="lmr-kv__label">Service Status</div>
+      <div><span class="lmr-pill {{lmrTone .Snapshot.Lifecycle}}"><span class="lmr-pill__dot"></span><span data-status-key="lifecycle">{{.Snapshot.Lifecycle}}</span></span></div>
+    </div>
+    <div class="lmr-kv__row">
+      <div class="lmr-kv__label">Last Runtime Error</div>
+      <div><span class="lmr-mono" data-status-key="last_error">{{if .Snapshot.LastError}}{{.Snapshot.LastError}}{{else}}none{{end}}</span></div>
+    </div>
+  </div>
 </section>
 {{end}}

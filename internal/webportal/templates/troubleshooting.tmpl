@@ -1,67 +1,85 @@
 {{define "content"}}
-<section class="panel">
-  <h2>Troubleshooting</h2>
-  <p>Use this page when pairing is stuck, cloud is offline, node is missing, or packets are not forwarding.</p>
+<section class="lmr-card">
+  <h2 class="lmr-card__title">Troubleshooting</h2>
+  <p class="lmr-card__desc">Use this page when pairing is stuck, cloud is offline, node is missing, or packets are not forwarding.</p>
   {{if .Snapshot.FailureCode}}
-  <div class="hint err">
-    <strong>{{.Snapshot.FailureCode}}</strong>: {{.Snapshot.FailureSummary}}
-    {{if .Snapshot.FailureHint}}<br>{{.Snapshot.FailureHint}}{{end}}
+  <div class="lmr-callout is-fail">
+    <span class="lmr-callout__icon">x</span>
+    <div>
+      <strong>{{.Snapshot.FailureCode}}</strong>: {{.Snapshot.FailureSummary}}
+      {{if .Snapshot.FailureHint}}<br><span class="lmr-callout__muted">{{.Snapshot.FailureHint}}</span>{{end}}
+    </div>
   </div>
   {{end}}
   {{if and .Attention.State (ne .Attention.State "none")}}
-  <div class="hint {{if eq .Attention.State "urgent"}}err{{else if eq .Attention.State "action_required"}}warn{{else}}none{{end}}">
-    <strong>Attention {{.Attention.State}}</strong>{{if .Attention.Code}} ({{.Attention.Code}}){{end}}
-    {{if .Attention.Summary}}: {{.Attention.Summary}}{{end}}
-    {{if .Attention.Hint}}<br>{{.Attention.Hint}}{{end}}
+  <div class="lmr-callout {{if eq .Attention.State "urgent"}}is-fail{{end}}">
+    <span class="lmr-callout__icon">{{if eq .Attention.State "urgent"}}x{{else}}!{{end}}</span>
+    <div>
+      <strong>Attention {{.Attention.State}}</strong>{{if .Attention.Code}} ({{.Attention.Code}}){{end}}
+      {{if .Attention.Summary}}: {{.Attention.Summary}}{{end}}
+      {{if .Attention.Hint}}<br><span class="lmr-callout__muted">{{.Attention.Hint}}</span>{{end}}
+    </div>
   </div>
   {{end}}
   {{if .SetupIssues}}
-  <div class="hint warn">
-    <strong>Concrete setup issues detected:</strong>
-    <ul>
-      {{range .SetupIssues}}
-      <li><span class="mono">{{.Code}}</span>: {{.Summary}}{{if .Guidance}} Next: {{.Guidance}}{{end}}</li>
-      {{end}}
-    </ul>
+  <div class="lmr-callout">
+    <span class="lmr-callout__icon">!</span>
+    <div>
+      <div class="lmr-eyebrow">Concrete setup issues detected</div>
+      <div class="lmr-issues">
+        {{range .SetupIssues}}
+        <div class="lmr-issue">
+          <div>
+            <span class="lmr-chip {{lmrLevelTone .Level}}">{{.Code}}</span> {{.Summary}}
+            {{if .Guidance}}<div class="lmr-next"><b>Next:</b> {{.Guidance}}</div>{{end}}
+          </div>
+        </div>
+        {{end}}
+      </div>
+    </div>
   </div>
   {{end}}
-  <ul>
+  <ul class="lmr-guide">
     {{range .TroubleshootingHints}}
     <li>{{.}}</li>
     {{end}}
   </ul>
 </section>
-<section class="panel">
-  <h2>Operational Status</h2>
-  <p><strong>{{if .OperationalOverall}}{{.OperationalOverall}}{{else}}unknown{{end}}</strong>{{if .OperationalSummary}}: {{.OperationalSummary}}{{end}}</p>
-  <table>
-    <tr><th>Check</th><th>Level</th><th>Summary</th><th>Guidance</th></tr>
-    {{range .OperationalChecks}}
-    <tr>
-      <td class="mono">{{.ID}}</td>
-      <td class="mono">{{.Level}}</td>
-      <td>{{.Summary}}</td>
-      <td>{{if .Hint}}{{.Hint}}{{else}}-{{end}}</td>
-    </tr>
-    {{end}}
-  </table>
+<section class="lmr-card">
+  <h2 class="lmr-card__title">Operational Status <span class="lmr-pill {{lmrTone .OperationalOverall}}"><span class="lmr-pill__dot"></span>{{if .OperationalOverall}}{{.OperationalOverall}}{{else}}unknown{{end}}</span></h2>
+  {{if .OperationalSummary}}<p class="lmr-card__desc">{{.OperationalSummary}}</p>{{end}}
+  <div class="lmr-tablewrap">
+    <table class="lmr-table">
+      <thead><tr><th>Check</th><th>Level</th><th>Summary</th><th>Guidance</th></tr></thead>
+      <tbody>
+        {{range .OperationalChecks}}
+        <tr>
+          <td><span class="lmr-mono">{{.ID}}</span></td>
+          <td><span class="lmr-pill {{lmrLevelTone .Level}}"><span class="lmr-pill__dot"></span>{{.Level}}</span></td>
+          <td>{{.Summary}}</td>
+          <td class="lmr-cell-soft">{{if .Hint}}{{.Hint}}{{else}}-{{end}}</td>
+        </tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
 </section>
-<section class="panel">
-  <h2>Lifecycle Actions</h2>
-  <p>If this receiver was revoked, disabled, or replaced in cloud, reset local credentials and pair again.</p>
+<section class="lmr-card">
+  <h2 class="lmr-card__title">Lifecycle Actions</h2>
+  <p class="lmr-card__desc">If this receiver was revoked, disabled, or replaced in cloud, reset local credentials and pair again.</p>
   <form method="post" action="/reset">
     <input type="hidden" name="deauthorize" value="1">
-    <button type="submit">Reset And Re-pair</button>
+    <button class="lmr-btn" type="submit">Reset And Re-pair</button>
   </form>
 </section>
-<section class="panel">
-  <h2>Advanced Local Endpoints</h2>
-  <p class="muted">These endpoints are mainly for local diagnostics tooling and support workflows.</p>
-  <table>
-    <tr><th>Liveness</th><td><span class="mono">GET /healthz</span></td></tr>
-    <tr><th>Readiness</th><td><span class="mono">GET /readyz</span></td></tr>
-    <tr><th>Structured Status</th><td><span class="mono">GET /api/status</span></td></tr>
-    <tr><th>Operational Checks</th><td><span class="mono">GET /api/ops</span></td></tr>
-  </table>
+<section class="lmr-card">
+  <h2 class="lmr-card__title">Advanced Local Endpoints</h2>
+  <p class="lmr-card__desc">These endpoints are mainly for local diagnostics tooling and support workflows.</p>
+  <div class="lmr-kv">
+    <div class="lmr-kv__row"><div class="lmr-kv__label">Liveness</div><div><span class="lmr-mono">GET /healthz</span></div></div>
+    <div class="lmr-kv__row"><div class="lmr-kv__label">Readiness</div><div><span class="lmr-mono">GET /readyz</span></div></div>
+    <div class="lmr-kv__row"><div class="lmr-kv__label">Structured Status</div><div><span class="lmr-mono">GET /api/status</span></div></div>
+    <div class="lmr-kv__row"><div class="lmr-kv__label">Operational Checks</div><div><span class="lmr-mono">GET /api/ops</span></div></div>
+  </div>
 </section>
 {{end}}

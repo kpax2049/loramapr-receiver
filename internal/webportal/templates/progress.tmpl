@@ -1,133 +1,152 @@
 {{define "content"}}
-<section class="panel">
-  <h2>Receiver Progress</h2>
-  <p>Use this page to confirm pairing, cloud reachability, node connection, and forwarding activity.</p>
+<section class="lmr-card">
+  <h2 class="lmr-card__title">Receiver Progress</h2>
+  <p class="lmr-card__desc">Use this page to confirm pairing, cloud reachability, node connection, and forwarding activity.</p>
   {{if .Flash}}
-  <div class="hint {{.FlashClass}}">{{.Flash}}</div>
+  <div class="lmr-callout {{lmrCalloutClass .FlashClass}}">
+    <span class="lmr-callout__icon">{{if eq .FlashClass "err"}}x{{else}}!{{end}}</span>
+    <div>{{.Flash}}</div>
+  </div>
   {{end}}
-  <div class="status-grid">
-    <div class="status-chip"><div class="label">Local Receiver Name</div><div class="value" data-status-key="local_name">{{if .Snapshot.LocalName}}{{.Snapshot.LocalName}}{{else}}unnamed{{end}}</div></div>
-    <div class="status-chip"><div class="label">Cloud Receiver</div><div class="value" data-status-key="cloud_receiver_display">{{if .Snapshot.CloudReceiverLabel}}{{.Snapshot.CloudReceiverLabel}}{{else if .Snapshot.CloudReceiverID}}{{.Snapshot.CloudReceiverID}}{{else}}not assigned{{end}}</div></div>
-    <div class="status-chip"><div class="label">Pairing State</div><div class="value mono" data-status-key="pairing_phase">{{.Snapshot.PairingPhase}}</div></div>
-    <div class="status-chip"><div class="label">Cloud Connectivity</div><div class="value" data-status-key="cloud_status">{{.Snapshot.CloudStatus}}</div></div>
-    <div class="status-chip"><div class="label">Network</div><div class="value" data-status-key="network_state">{{.NetworkState}}</div></div>
-    <div class="status-chip"><div class="label">Service State</div><div class="value" data-status-key="lifecycle">{{.Snapshot.Lifecycle}}</div></div>
-    <div class="status-chip"><div class="label">Meshtastic Status</div><div class="value" data-status-key="meshtastic_state">{{.MeshtasticState}}</div></div>
-    <div class="status-chip"><div class="label">Update Status</div><div class="value mono" data-status-key="update_status">{{if .Snapshot.UpdateStatus}}{{.Snapshot.UpdateStatus}}{{else}}unknown{{end}}</div></div>
-    <div class="status-chip"><div class="label">Issue Code</div><div class="value mono" data-status-key="failure_code">{{if .Snapshot.FailureCode}}{{.Snapshot.FailureCode}}{{else}}none{{end}}</div></div>
-    <div class="status-chip">
-      <div class="label">Attention</div>
-      <div class="value mono" data-status-key="attention_state_code">
+  <div class="lmr-tiles">
+    <div class="lmr-tile"><div class="lmr-tile__label">Local Receiver Name</div><div class="lmr-tile__value"><span class="lmr-mono" data-status-key="local_name">{{if .Snapshot.LocalName}}{{.Snapshot.LocalName}}{{else}}unnamed{{end}}</span></div></div>
+    <div class="lmr-tile"><div class="lmr-tile__label">Cloud Receiver</div><div class="lmr-tile__value"><span class="lmr-mono" data-status-key="cloud_receiver_display">{{if .Snapshot.CloudReceiverLabel}}{{.Snapshot.CloudReceiverLabel}}{{else if .Snapshot.CloudReceiverID}}{{.Snapshot.CloudReceiverID}}{{else}}not assigned{{end}}</span></div></div>
+    <div class="lmr-tile"><div class="lmr-tile__label">Pairing State</div><div class="lmr-tile__value"><span class="lmr-pill {{lmrTone .Snapshot.PairingPhase}}"><span class="lmr-pill__dot"></span><span data-status-key="pairing_phase">{{.Snapshot.PairingPhase}}</span></span></div></div>
+    <div class="lmr-tile"><div class="lmr-tile__label">Cloud Connectivity</div><div class="lmr-tile__value"><span class="lmr-pill {{lmrTone .Snapshot.CloudStatus}}"><span class="lmr-pill__dot"></span><span data-status-key="cloud_status">{{.Snapshot.CloudStatus}}</span></span></div></div>
+    <div class="lmr-tile"><div class="lmr-tile__label">Network</div><div class="lmr-tile__value"><span class="lmr-pill {{lmrTone .NetworkState}}"><span class="lmr-pill__dot"></span><span data-status-key="network_state">{{.NetworkState}}</span></span></div></div>
+    <div class="lmr-tile"><div class="lmr-tile__label">Service State</div><div class="lmr-tile__value"><span class="lmr-pill {{lmrTone .Snapshot.Lifecycle}}"><span class="lmr-pill__dot"></span><span data-status-key="lifecycle">{{.Snapshot.Lifecycle}}</span></span></div></div>
+    <div class="lmr-tile"><div class="lmr-tile__label">Meshtastic Status</div><div class="lmr-tile__value"><span class="lmr-pill {{lmrTone .MeshtasticState}}"><span class="lmr-pill__dot"></span><span data-status-key="meshtastic_state">{{.MeshtasticState}}</span></span></div></div>
+    <div class="lmr-tile"><div class="lmr-tile__label">Update Status</div><div class="lmr-tile__value"><span class="lmr-pill {{lmrTone .Snapshot.UpdateStatus}}"><span class="lmr-pill__dot"></span><span data-status-key="update_status">{{if .Snapshot.UpdateStatus}}{{.Snapshot.UpdateStatus}}{{else}}unknown{{end}}</span></span></div></div>
+    <div class="lmr-tile"><div class="lmr-tile__label">Issue Code</div><div class="lmr-tile__value"><span class="lmr-chip {{if .Snapshot.FailureCode}}is-fail{{end}}" data-status-key="failure_code">{{if .Snapshot.FailureCode}}{{.Snapshot.FailureCode}}{{else}}none{{end}}</span></div></div>
+    <div class="lmr-tile">
+      <div class="lmr-tile__label">Attention</div>
+      <div class="lmr-tile__value">
         {{if and .Attention.State (ne .Attention.State "none")}}
-          {{.Attention.State}}{{if .Attention.Code}} {{.Attention.Code}}{{end}}
+        <span class="lmr-chip {{lmrAttentionTone .Attention.State}}">{{.Attention.State}}</span>
+        {{if .Attention.Code}}<span class="lmr-chip {{lmrAttentionTone .Attention.State}}">{{.Attention.Code}}</span>{{end}}
         {{else}}
-          none
+        <span class="lmr-chip is-neutral">none</span>
         {{end}}
       </div>
     </div>
   </div>
   {{if and .Attention.State (ne .Attention.State "none")}}
-  <div class="hint {{if eq .Attention.State "urgent"}}err{{else if eq .Attention.State "action_required"}}warn{{else}}none{{end}}">
-    <strong>{{if .Attention.Category}}{{.Attention.Category}}{{else}}attention{{end}}</strong>: {{.Attention.Summary}}
-    {{if .Attention.Hint}}<br>{{.Attention.Hint}}{{end}}
+  <div class="lmr-callout {{if eq .Attention.State "urgent"}}is-fail{{end}}">
+    <span class="lmr-callout__icon">{{if eq .Attention.State "urgent"}}x{{else}}!{{end}}</span>
+    <div>
+      <strong>{{if .Attention.Category}}{{.Attention.Category}}{{else}}attention{{end}}</strong>: {{.Attention.Summary}}
+      {{if .Attention.Hint}}<br><span class="lmr-callout__muted">{{.Attention.Hint}}</span>{{end}}
+    </div>
   </div>
-{{end}}
+  {{end}}
 </section>
 {{if .SetupIssues}}
-<section class="panel">
-  <h2>Setup Root Cause</h2>
-  <p>Aggregate status may show degraded while one component is actually blocking setup. Resolve these concrete issues first.</p>
-  <table>
-    <tr><th>Code</th><th>Component</th><th>Level</th><th>Summary</th><th>Next Step</th></tr>
-    {{range .SetupIssues}}
-    <tr>
-      <td class="mono">{{.Code}}</td>
-      <td class="mono">{{if .Component}}{{.Component}}{{else}}unknown{{end}}</td>
-      <td class="mono">{{if .Level}}{{.Level}}{{else}}warn{{end}}</td>
-      <td>{{.Summary}}{{if .Detail}}<br><span class="mono">{{.Detail}}</span>{{end}}</td>
-      <td>{{if .Guidance}}{{.Guidance}}{{else}}-{{end}}</td>
-    </tr>
-    {{end}}
-  </table>
+<section class="lmr-card">
+  <h2 class="lmr-card__title">Setup Root Cause</h2>
+  <p class="lmr-card__desc">Aggregate status may show degraded while one component is actually blocking setup. Resolve these concrete issues first.</p>
+  <div class="lmr-tablewrap">
+    <table class="lmr-table">
+      <thead><tr><th>Code</th><th>Component</th><th>Level</th><th>Summary</th><th>Next Step</th></tr></thead>
+      <tbody>
+        {{range .SetupIssues}}
+        <tr>
+          <td><span class="lmr-chip {{lmrLevelTone .Level}}">{{.Code}}</span></td>
+          <td><span class="lmr-mono">{{if .Component}}{{.Component}}{{else}}unknown{{end}}</span></td>
+          <td><span class="lmr-pill {{lmrLevelTone .Level}}"><span class="lmr-pill__dot"></span>{{if .Level}}{{.Level}}{{else}}warn{{end}}</span></td>
+          <td>{{.Summary}}{{if .Detail}}<div class="lmr-sub">{{.Detail}}</div>{{end}}</td>
+          <td class="lmr-cell-soft">{{if .Guidance}}{{.Guidance}}{{else}}-{{end}}</td>
+        </tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
 </section>
 {{end}}
-<section class="panel">
-  <h2>Operational Checks</h2>
-  <p><strong>{{if .OperationalOverall}}{{.OperationalOverall}}{{else}}unknown{{end}}</strong>{{if .OperationalSummary}}: {{.OperationalSummary}}{{end}}</p>
-  <table>
-    <tr><th>Check</th><th>Level</th><th>Summary</th><th>Guidance</th></tr>
-    {{range .OperationalChecks}}
-    <tr>
-      <td class="mono">{{.ID}}</td>
-      <td class="mono">{{.Level}}</td>
-      <td>{{.Summary}}</td>
-      <td>{{if .Hint}}{{.Hint}}{{else}}-{{end}}</td>
-    </tr>
-    {{end}}
-  </table>
+<section class="lmr-card">
+  <h2 class="lmr-card__title">Operational Checks <span class="lmr-pill {{lmrTone .OperationalOverall}}"><span class="lmr-pill__dot"></span>{{if .OperationalOverall}}{{.OperationalOverall}}{{else}}unknown{{end}}</span></h2>
+  {{if .OperationalSummary}}<p class="lmr-card__desc">{{.OperationalSummary}}</p>{{end}}
+  <div class="lmr-tablewrap">
+    <table class="lmr-table">
+      <thead><tr><th>Check</th><th>Level</th><th>Summary</th><th>Guidance</th></tr></thead>
+      <tbody>
+        {{range .OperationalChecks}}
+        <tr>
+          <td><span class="lmr-mono">{{.ID}}</span></td>
+          <td><span class="lmr-pill {{lmrLevelTone .Level}}"><span class="lmr-pill__dot"></span>{{.Level}}</span></td>
+          <td>{{.Summary}}</td>
+          <td class="lmr-cell-soft">{{if .Hint}}{{.Hint}}{{else}}-{{end}}</td>
+        </tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
 </section>
-<section class="panel">
-  <h2>Detailed Status</h2>
-  <table>
-    <tr><th>Installation ID</th><td class="mono">{{if .Snapshot.InstallationID}}{{.Snapshot.InstallationID}}{{else}}unknown{{end}}</td></tr>
-    <tr><th>Local Name</th><td>{{if .Snapshot.LocalName}}{{.Snapshot.LocalName}}{{else}}unnamed{{end}}</td></tr>
-    <tr><th>Hostname</th><td class="mono">{{if .Snapshot.Hostname}}{{.Snapshot.Hostname}}{{else}}unknown{{end}}</td></tr>
-    <tr><th>Cloud Receiver ID</th><td class="mono">{{if .Snapshot.CloudReceiverID}}{{.Snapshot.CloudReceiverID}}{{else}}not assigned{{end}}</td></tr>
-    <tr><th>Cloud Receiver Name</th><td>{{if .Snapshot.CloudReceiverLabel}}{{.Snapshot.CloudReceiverLabel}}{{else}}not assigned{{end}}</td></tr>
-    <tr><th>Optional Cloud Labels</th><td>{{if or .Snapshot.CloudSiteLabel .Snapshot.CloudGroupLabel}}site={{if .Snapshot.CloudSiteLabel}}{{.Snapshot.CloudSiteLabel}}{{else}}not set{{end}}, group={{if .Snapshot.CloudGroupLabel}}{{.Snapshot.CloudGroupLabel}}{{else}}not set{{end}}{{else}}none{{end}}</td></tr>
-    <tr><th>Ready</th><td>{{if .Snapshot.Ready}}yes{{else}}no{{end}} {{if .Snapshot.ReadyReason}}({{.Snapshot.ReadyReason}}){{end}}</td></tr>
-    <tr><th>Cloud Reachable</th><td>{{if .Snapshot.CloudReachable}}yes{{else}}no{{end}}</td></tr>
-    <tr><th>Heartbeat Fresh</th><td>{{if .Snapshot.HeartbeatFresh}}yes{{else}}no{{end}}</td></tr>
-    <tr><th>Last Heartbeat Ack</th><td class="mono">{{if .Snapshot.LastHeartbeatAck}}{{.Snapshot.LastHeartbeatAck}}{{else}}none{{end}}</td></tr>
-    <tr><th>Ingest Queue Depth</th><td>{{.Snapshot.IngestQueueDepth}}</td></tr>
-    <tr><th>Last Packet Ack</th><td class="mono">{{if .Snapshot.LastPacketAck}}{{.Snapshot.LastPacketAck}}{{else}}none{{end}}</td></tr>
-    <tr><th>Started At</th><td class="mono">{{.Snapshot.StartedAt}}</td></tr>
-    <tr><th>Updated At</th><td class="mono">{{.Snapshot.UpdatedAt}}</td></tr>
-    <tr><th>Cloud Endpoint</th><td class="mono">{{.Snapshot.CloudEndpoint}}</td></tr>
-    <tr><th>Mode</th><td class="mono">{{.Snapshot.Mode}}</td></tr>
-    <tr><th>Runtime Profile</th><td class="mono">{{.Snapshot.RuntimeProfile}}</td></tr>
-    <tr><th>Issue Summary</th><td>{{if .Snapshot.FailureSummary}}{{.Snapshot.FailureSummary}}{{else}}none{{end}}</td></tr>
-    <tr><th>Issue Guidance</th><td>{{if .Snapshot.FailureHint}}{{.Snapshot.FailureHint}}{{else}}none{{end}}</td></tr>
-    <tr><th>Attention State</th><td class="mono">{{if .Attention.State}}{{.Attention.State}}{{else}}none{{end}}</td></tr>
-    <tr><th>Attention Category</th><td class="mono">{{if .Attention.Category}}{{.Attention.Category}}{{else}}none{{end}}</td></tr>
-    <tr><th>Attention Summary</th><td>{{if .Attention.Summary}}{{.Attention.Summary}}{{else}}none{{end}}</td></tr>
-    <tr><th>Attention Guidance</th><td>{{if .Attention.Hint}}{{.Attention.Hint}}{{else}}none{{end}}</td></tr>
-    <tr><th>Update Summary</th><td>{{if .Snapshot.UpdateSummary}}{{.Snapshot.UpdateSummary}}{{else}}none{{end}}</td></tr>
-    <tr><th>Update Guidance</th><td>{{if .Snapshot.UpdateHint}}{{.Snapshot.UpdateHint}}{{else}}none{{end}}</td></tr>
-    <tr><th>Recommended Version</th><td class="mono">{{if .Snapshot.UpdateRecommendedVersion}}{{.Snapshot.UpdateRecommendedVersion}}{{else}}unknown{{end}}</td></tr>
-    <tr><th>Manifest Channel</th><td class="mono">{{if .Snapshot.UpdateManifestChannel}}{{.Snapshot.UpdateManifestChannel}}{{else}}unknown{{end}}</td></tr>
-    <tr><th>Last Update Check</th><td class="mono">{{if .Snapshot.UpdateCheckedAt}}{{.Snapshot.UpdateCheckedAt}}{{else}}never{{end}}</td></tr>
-    <tr><th>Last Error</th><td>{{if .Snapshot.LastError}}{{.Snapshot.LastError}}{{else}}none{{end}}</td></tr>
-  </table>
+<section class="lmr-card">
+  <h2 class="lmr-card__title">Detailed Status</h2>
+  <div class="lmr-kv">
+    <div class="lmr-kv__row"><div class="lmr-kv__label">Installation ID</div><div><span class="lmr-mono">{{if .Snapshot.InstallationID}}{{.Snapshot.InstallationID}}{{else}}unknown{{end}}</span></div></div>
+    <div class="lmr-kv__row"><div class="lmr-kv__label">Local Name</div><div>{{if .Snapshot.LocalName}}{{.Snapshot.LocalName}}{{else}}unnamed{{end}}</div></div>
+    <div class="lmr-kv__row"><div class="lmr-kv__label">Hostname</div><div><span class="lmr-mono">{{if .Snapshot.Hostname}}{{.Snapshot.Hostname}}{{else}}unknown{{end}}</span></div></div>
+    <div class="lmr-kv__row"><div class="lmr-kv__label">Cloud Receiver ID</div><div><span class="lmr-mono">{{if .Snapshot.CloudReceiverID}}{{.Snapshot.CloudReceiverID}}{{else}}not assigned{{end}}</span></div></div>
+    <div class="lmr-kv__row"><div class="lmr-kv__label">Cloud Receiver Name</div><div>{{if .Snapshot.CloudReceiverLabel}}{{.Snapshot.CloudReceiverLabel}}{{else}}not assigned{{end}}</div></div>
+    <div class="lmr-kv__row"><div class="lmr-kv__label">Optional Cloud Labels</div><div>{{if or .Snapshot.CloudSiteLabel .Snapshot.CloudGroupLabel}}site={{if .Snapshot.CloudSiteLabel}}{{.Snapshot.CloudSiteLabel}}{{else}}not set{{end}}, group={{if .Snapshot.CloudGroupLabel}}{{.Snapshot.CloudGroupLabel}}{{else}}not set{{end}}{{else}}none{{end}}</div></div>
+    <div class="lmr-kv__row"><div class="lmr-kv__label">Ready</div><div><span class="lmr-pill {{lmrBoolTone .Snapshot.Ready}}"><span class="lmr-pill__dot"></span>{{lmrBoolLabel .Snapshot.Ready}}</span> {{if .Snapshot.ReadyReason}}<span class="lmr-callout__muted">{{.Snapshot.ReadyReason}}</span>{{end}}</div></div>
+    <div class="lmr-kv__row"><div class="lmr-kv__label">Cloud Reachable</div><div><span class="lmr-pill {{lmrBoolTone .Snapshot.CloudReachable}}"><span class="lmr-pill__dot"></span>{{lmrBoolLabel .Snapshot.CloudReachable}}</span></div></div>
+    <div class="lmr-kv__row"><div class="lmr-kv__label">Heartbeat Fresh</div><div><span class="lmr-pill {{lmrBoolTone .Snapshot.HeartbeatFresh}}"><span class="lmr-pill__dot"></span>{{lmrBoolLabel .Snapshot.HeartbeatFresh}}</span></div></div>
+    <div class="lmr-kv__row"><div class="lmr-kv__label">Last Heartbeat Ack</div><div><span class="lmr-mono">{{if .Snapshot.LastHeartbeatAck}}{{.Snapshot.LastHeartbeatAck}}{{else}}none{{end}}</span></div></div>
+    <div class="lmr-kv__row"><div class="lmr-kv__label">Ingest Queue Depth</div><div>{{.Snapshot.IngestQueueDepth}}</div></div>
+    <div class="lmr-kv__row"><div class="lmr-kv__label">Last Packet Ack</div><div><span class="lmr-mono">{{if .Snapshot.LastPacketAck}}{{.Snapshot.LastPacketAck}}{{else}}none{{end}}</span></div></div>
+    <div class="lmr-kv__row"><div class="lmr-kv__label">Started At</div><div><span class="lmr-mono">{{.Snapshot.StartedAt}}</span></div></div>
+    <div class="lmr-kv__row"><div class="lmr-kv__label">Updated At</div><div><span class="lmr-mono">{{.Snapshot.UpdatedAt}}</span></div></div>
+    <div class="lmr-kv__row"><div class="lmr-kv__label">Cloud Endpoint</div><div><span class="lmr-mono">{{.Snapshot.CloudEndpoint}}</span></div></div>
+    <div class="lmr-kv__row"><div class="lmr-kv__label">Mode</div><div><span class="lmr-mono">{{.Snapshot.Mode}}</span></div></div>
+    <div class="lmr-kv__row"><div class="lmr-kv__label">Runtime Profile</div><div><span class="lmr-mono">{{.Snapshot.RuntimeProfile}}</span></div></div>
+    <div class="lmr-kv__row"><div class="lmr-kv__label">Issue Summary</div><div>{{if .Snapshot.FailureSummary}}{{.Snapshot.FailureSummary}}{{else}}none{{end}}</div></div>
+    <div class="lmr-kv__row"><div class="lmr-kv__label">Issue Guidance</div><div>{{if .Snapshot.FailureHint}}{{.Snapshot.FailureHint}}{{else}}none{{end}}</div></div>
+    <div class="lmr-kv__row"><div class="lmr-kv__label">Attention State</div><div><span class="lmr-mono">{{if .Attention.State}}{{.Attention.State}}{{else}}none{{end}}</span></div></div>
+    <div class="lmr-kv__row"><div class="lmr-kv__label">Attention Category</div><div><span class="lmr-mono">{{if .Attention.Category}}{{.Attention.Category}}{{else}}none{{end}}</span></div></div>
+    <div class="lmr-kv__row"><div class="lmr-kv__label">Attention Summary</div><div>{{if .Attention.Summary}}{{.Attention.Summary}}{{else}}none{{end}}</div></div>
+    <div class="lmr-kv__row"><div class="lmr-kv__label">Attention Guidance</div><div>{{if .Attention.Hint}}{{.Attention.Hint}}{{else}}none{{end}}</div></div>
+    <div class="lmr-kv__row"><div class="lmr-kv__label">Update Summary</div><div>{{if .Snapshot.UpdateSummary}}{{.Snapshot.UpdateSummary}}{{else}}none{{end}}</div></div>
+    <div class="lmr-kv__row"><div class="lmr-kv__label">Update Guidance</div><div>{{if .Snapshot.UpdateHint}}{{.Snapshot.UpdateHint}}{{else}}none{{end}}</div></div>
+    <div class="lmr-kv__row"><div class="lmr-kv__label">Recommended Version</div><div><span class="lmr-mono">{{if .Snapshot.UpdateRecommendedVersion}}{{.Snapshot.UpdateRecommendedVersion}}{{else}}unknown{{end}}</span></div></div>
+    <div class="lmr-kv__row"><div class="lmr-kv__label">Manifest Channel</div><div><span class="lmr-mono">{{if .Snapshot.UpdateManifestChannel}}{{.Snapshot.UpdateManifestChannel}}{{else}}unknown{{end}}</span></div></div>
+    <div class="lmr-kv__row"><div class="lmr-kv__label">Last Update Check</div><div><span class="lmr-mono">{{if .Snapshot.UpdateCheckedAt}}{{.Snapshot.UpdateCheckedAt}}{{else}}never{{end}}</span></div></div>
+    <div class="lmr-kv__row"><div class="lmr-kv__label">Last Error</div><div>{{if .Snapshot.LastError}}{{.Snapshot.LastError}}{{else}}none{{end}}</div></div>
+  </div>
 </section>
-<section class="panel">
-  <h2>Field-Node Pairing Data (Read-Only)</h2>
-  <p>Use these home-node communication settings when pairing a field node. This section is read-only.</p>
+<section class="lmr-card">
+  <h2 class="lmr-card__title">Field-Node Pairing Data (Read-Only)</h2>
+  <p class="lmr-card__desc">Use these home-node communication settings when pairing a field node. This section is read-only.</p>
   {{if .Snapshot.MeshtasticConfig.Available}}
-  <table>
-    <tr><th>Region</th><td class="mono">{{if .Snapshot.MeshtasticConfig.Region}}{{.Snapshot.MeshtasticConfig.Region}}{{else}}unknown{{end}}</td></tr>
-    <tr><th>Primary Channel</th><td>{{if .Snapshot.MeshtasticConfig.PrimaryChannel}}{{.Snapshot.MeshtasticConfig.PrimaryChannel}}{{else}}unknown{{end}}</td></tr>
-    <tr><th>Primary Channel Index</th><td>{{.Snapshot.MeshtasticConfig.PrimaryChannelIdx}}</td></tr>
-    <tr><th>PSK State</th><td class="mono">{{if .Snapshot.MeshtasticConfig.PSKState}}{{.Snapshot.MeshtasticConfig.PSKState}}{{else}}unknown{{end}}</td></tr>
-    <tr><th>LoRa Preset</th><td class="mono">{{if .Snapshot.MeshtasticConfig.LoRaPreset}}{{.Snapshot.MeshtasticConfig.LoRaPreset}}{{else}}unknown{{end}}</td></tr>
-    <tr><th>LoRa Bandwidth</th><td class="mono">{{if .Snapshot.MeshtasticConfig.LoRaBandwidth}}{{.Snapshot.MeshtasticConfig.LoRaBandwidth}}{{else}}unknown{{end}}</td></tr>
-    <tr><th>LoRa Spreading</th><td class="mono">{{if .Snapshot.MeshtasticConfig.LoRaSpreading}}{{.Snapshot.MeshtasticConfig.LoRaSpreading}}{{else}}unknown{{end}}</td></tr>
-    <tr><th>LoRa Coding Rate</th><td class="mono">{{if .Snapshot.MeshtasticConfig.LoRaCodingRate}}{{.Snapshot.MeshtasticConfig.LoRaCodingRate}}{{else}}unknown{{end}}</td></tr>
-    <tr><th>Share URL Available</th><td>{{if .Snapshot.MeshtasticConfig.ShareURLAvailable}}yes{{else}}no{{end}}</td></tr>
+  <div class="lmr-kv">
+    <div class="lmr-kv__row"><div class="lmr-kv__label">Region</div><div><span class="lmr-mono">{{if .Snapshot.MeshtasticConfig.Region}}{{.Snapshot.MeshtasticConfig.Region}}{{else}}unknown{{end}}</span></div></div>
+    <div class="lmr-kv__row"><div class="lmr-kv__label">Primary Channel</div><div>{{if .Snapshot.MeshtasticConfig.PrimaryChannel}}{{.Snapshot.MeshtasticConfig.PrimaryChannel}}{{else}}unknown{{end}}</div></div>
+    <div class="lmr-kv__row"><div class="lmr-kv__label">Primary Channel Index</div><div>{{.Snapshot.MeshtasticConfig.PrimaryChannelIdx}}</div></div>
+    <div class="lmr-kv__row"><div class="lmr-kv__label">PSK State</div><div><span class="lmr-mono">{{if .Snapshot.MeshtasticConfig.PSKState}}{{.Snapshot.MeshtasticConfig.PSKState}}{{else}}unknown{{end}}</span></div></div>
+    <div class="lmr-kv__row"><div class="lmr-kv__label">LoRa Preset</div><div><span class="lmr-mono">{{if .Snapshot.MeshtasticConfig.LoRaPreset}}{{.Snapshot.MeshtasticConfig.LoRaPreset}}{{else}}unknown{{end}}</span></div></div>
+    <div class="lmr-kv__row"><div class="lmr-kv__label">LoRa Bandwidth</div><div><span class="lmr-mono">{{if .Snapshot.MeshtasticConfig.LoRaBandwidth}}{{.Snapshot.MeshtasticConfig.LoRaBandwidth}}{{else}}unknown{{end}}</span></div></div>
+    <div class="lmr-kv__row"><div class="lmr-kv__label">LoRa Spreading</div><div><span class="lmr-mono">{{if .Snapshot.MeshtasticConfig.LoRaSpreading}}{{.Snapshot.MeshtasticConfig.LoRaSpreading}}{{else}}unknown{{end}}</span></div></div>
+    <div class="lmr-kv__row"><div class="lmr-kv__label">LoRa Coding Rate</div><div><span class="lmr-mono">{{if .Snapshot.MeshtasticConfig.LoRaCodingRate}}{{.Snapshot.MeshtasticConfig.LoRaCodingRate}}{{else}}unknown{{end}}</span></div></div>
+    <div class="lmr-kv__row"><div class="lmr-kv__label">Share URL Available</div><div><span class="lmr-pill {{lmrBoolTone .Snapshot.MeshtasticConfig.ShareURLAvailable}}"><span class="lmr-pill__dot"></span>{{lmrBoolLabel .Snapshot.MeshtasticConfig.ShareURLAvailable}}</span></div></div>
     {{if .Snapshot.MeshtasticConfig.ShareURLAvailable}}
-    <tr><th>Share URL</th><td class="mono">{{if .Snapshot.MeshtasticConfig.ShareURL}}{{.Snapshot.MeshtasticConfig.ShareURL}}{{else}}unavailable{{end}}</td></tr>
-    <tr><th>Share URL (Redacted)</th><td class="mono">{{if .Snapshot.MeshtasticConfig.ShareURLRedacted}}{{.Snapshot.MeshtasticConfig.ShareURLRedacted}}{{else}}none{{end}}</td></tr>
+    <div class="lmr-kv__row"><div class="lmr-kv__label">Share URL</div><div><span class="lmr-mono">{{if .Snapshot.MeshtasticConfig.ShareURL}}{{.Snapshot.MeshtasticConfig.ShareURL}}{{else}}unavailable{{end}}</span></div></div>
+    <div class="lmr-kv__row"><div class="lmr-kv__label">Share URL (Redacted)</div><div><span class="lmr-mono">{{if .Snapshot.MeshtasticConfig.ShareURLRedacted}}{{.Snapshot.MeshtasticConfig.ShareURLRedacted}}{{else}}none{{end}}</span></div></div>
     {{end}}
-    <tr><th>Config Source</th><td class="mono">{{if .Snapshot.MeshtasticConfig.Source}}{{.Snapshot.MeshtasticConfig.Source}}{{else}}unknown{{end}}</td></tr>
-    <tr><th>Updated At</th><td class="mono">{{if .Snapshot.MeshtasticConfig.UpdatedAt}}{{.Snapshot.MeshtasticConfig.UpdatedAt}}{{else}}unknown{{end}}</td></tr>
-  </table>
-  <div class="hint warn">
-    Share URLs may include channel secrets. Only use this on trusted local networks and trusted field devices.
+    <div class="lmr-kv__row"><div class="lmr-kv__label">Config Source</div><div><span class="lmr-mono">{{if .Snapshot.MeshtasticConfig.Source}}{{.Snapshot.MeshtasticConfig.Source}}{{else}}unknown{{end}}</span></div></div>
+    <div class="lmr-kv__row"><div class="lmr-kv__label">Updated At</div><div><span class="lmr-mono">{{if .Snapshot.MeshtasticConfig.UpdatedAt}}{{.Snapshot.MeshtasticConfig.UpdatedAt}}{{else}}unknown{{end}}</span></div></div>
+  </div>
+  <div class="lmr-callout">
+    <span class="lmr-callout__icon">!</span>
+    <div>Share URLs may include channel secrets. Only use this on trusted local networks and trusted field devices.</div>
   </div>
   {{else}}
-  <div class="hint warn">
-    Home-node config summary is not available yet.
-    {{if .Snapshot.MeshtasticConfig.UnavailableReason}}Reason: {{.Snapshot.MeshtasticConfig.UnavailableReason}}{{else}}Wait for a connected node status/config event or use manual Meshtastic app sharing.{{end}}
+  <div class="lmr-callout">
+    <span class="lmr-callout__icon">!</span>
+    <div>
+      Home-node config summary is not available yet.
+      {{if .Snapshot.MeshtasticConfig.UnavailableReason}}Reason: {{.Snapshot.MeshtasticConfig.UnavailableReason}}{{else}}Wait for a connected node status/config event or use manual Meshtastic app sharing.{{end}}
+    </div>
   </div>
   {{end}}
 </section>

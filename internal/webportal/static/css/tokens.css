@@ -1,0 +1,131 @@
+/* ============================================================
+   LoRaMapr Receiver Portal — Design Tokens  (Direction: "Soft")
+   ------------------------------------------------------------
+   CSS custom properties only. No web fonts, no JS, no images.
+   Safe to serve from a Raspberry Pi Zero 2 W (a few KB, parsed once).
+
+   Theming model:
+     - Default  : follows the visitor's OS via prefers-color-scheme.
+     - Force dark : <html data-theme="dark">
+     - Force light: <html data-theme="light">
+   The optional theme button only needs to flip that one attribute
+   (see js/theme-toggle.js). With no JS at all, OS preference still works.
+
+   Colors are authored in oklch (supported by all current browsers).
+   If you must support very old browsers, ask for a hex fallback sheet.
+   ============================================================ */
+
+:root {
+  /* Type */
+  --lmr-sans: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --lmr-mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+
+  /* Radius */
+  --lmr-r-card: 8px;
+  --lmr-r-control: 7px;
+  --lmr-r-pill: 999px;
+
+  /* ---- Light palette (default) ---- */
+  --lmr-bg:        oklch(0.984 0.005 240);
+  --lmr-panel:     oklch(1 0 0);
+  --lmr-panel-2:   oklch(0.982 0.005 240);
+  --lmr-border:    oklch(0.93 0.007 240);
+  --lmr-border-2:  oklch(0.89 0.009 240);
+
+  --lmr-ink:       oklch(0.33 0.025 262);
+  --lmr-ink-soft:  oklch(0.52 0.02 262);
+  --lmr-ink-faint: oklch(0.63 0.016 262);
+
+  --lmr-accent:        oklch(0.62 0.10 205);
+  --lmr-accent-strong: oklch(0.54 0.11 205);
+  --lmr-accent-bg:     oklch(0.95 0.03 205);
+  --lmr-accent-bd:     oklch(0.84 0.05 205);
+
+  --lmr-bar:        oklch(1 0 0);
+  --lmr-bar-ink:    oklch(0.33 0.025 262);
+  --lmr-bar-soft:   oklch(0.55 0.02 262);
+  --lmr-bar-border: oklch(0.93 0.007 240);
+
+  --lmr-ok-bg:  oklch(0.95 0.04 160); --lmr-ok-fg:  oklch(0.50 0.10 160); --lmr-ok-bd:  oklch(0.88 0.05 160); --lmr-ok-dot:  oklch(0.66 0.13 160);
+  --lmr-warn-bg:oklch(0.96 0.05 85);  --lmr-warn-fg:oklch(0.55 0.10 65);  --lmr-warn-bd:oklch(0.89 0.07 85);  --lmr-warn-dot:oklch(0.74 0.13 75);
+  --lmr-fail-bg:oklch(0.96 0.03 20);  --lmr-fail-fg:oklch(0.57 0.16 22);  --lmr-fail-bd:oklch(0.90 0.05 22);  --lmr-fail-dot:oklch(0.64 0.19 24);
+  --lmr-neutral-bg:oklch(0.95 0.005 240); --lmr-neutral-fg:oklch(0.52 0.02 250); --lmr-neutral-bd:oklch(0.90 0.008 240); --lmr-neutral-dot:oklch(0.66 0.02 250);
+
+  --lmr-warn-soft: oklch(0.97 0.03 85);
+  --lmr-fail-soft: oklch(0.975 0.018 22);
+  --lmr-info-soft: oklch(0.97 0.02 205);
+
+  --lmr-shadow: 0 1px 2px rgba(30,40,60,0.04), 0 8px 24px rgba(30,40,60,0.06);
+}
+
+/* ---- Dark palette ---- */
+/* Applied when the OS prefers dark (and the user hasn't forced light)… */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --lmr-bg:        oklch(0.20 0.02 262);
+    --lmr-panel:     oklch(0.24 0.022 262);
+    --lmr-panel-2:   oklch(0.27 0.024 262);
+    --lmr-border:    oklch(0.34 0.02 262);
+    --lmr-border-2:  oklch(0.42 0.022 262);
+
+    --lmr-ink:       oklch(0.94 0.01 250);
+    --lmr-ink-soft:  oklch(0.74 0.014 255);
+    --lmr-ink-faint: oklch(0.60 0.016 255);
+
+    --lmr-accent:        oklch(0.74 0.11 205);
+    --lmr-accent-strong: oklch(0.80 0.11 205);
+    --lmr-accent-bg:     oklch(0.34 0.06 210);
+    --lmr-accent-bd:     oklch(0.46 0.08 208);
+
+    --lmr-bar:        oklch(0.24 0.022 262);
+    --lmr-bar-ink:    oklch(0.94 0.01 250);
+    --lmr-bar-soft:   oklch(0.66 0.016 255);
+    --lmr-bar-border: oklch(0.34 0.02 262);
+
+    --lmr-ok-bg:  oklch(0.34 0.06 162); --lmr-ok-fg:  oklch(0.84 0.13 162); --lmr-ok-bd:  oklch(0.44 0.08 162); --lmr-ok-dot:  oklch(0.72 0.14 162);
+    --lmr-warn-bg:oklch(0.34 0.05 82);  --lmr-warn-fg:oklch(0.86 0.12 88);  --lmr-warn-bd:oklch(0.46 0.07 82);  --lmr-warn-dot:oklch(0.80 0.13 85);
+    --lmr-fail-bg:oklch(0.34 0.06 24);  --lmr-fail-fg:oklch(0.84 0.12 26);  --lmr-fail-bd:oklch(0.46 0.09 24);  --lmr-fail-dot:oklch(0.72 0.17 26);
+    --lmr-neutral-bg:oklch(0.32 0.014 262); --lmr-neutral-fg:oklch(0.76 0.014 255); --lmr-neutral-bd:oklch(0.42 0.016 262); --lmr-neutral-dot:oklch(0.64 0.018 255);
+
+    --lmr-warn-soft: oklch(0.30 0.04 85);
+    --lmr-fail-soft: oklch(0.30 0.05 24);
+    --lmr-info-soft: oklch(0.28 0.03 210);
+
+    --lmr-shadow: 0 1px 2px rgba(0,0,0,0.30), 0 8px 24px rgba(0,0,0,0.22);
+  }
+}
+
+/* …and whenever the user explicitly forces dark. Values intentionally
+   duplicated (plain CSS has no variable indirection for this). */
+[data-theme="dark"] {
+  --lmr-bg:        oklch(0.20 0.02 262);
+  --lmr-panel:     oklch(0.24 0.022 262);
+  --lmr-panel-2:   oklch(0.27 0.024 262);
+  --lmr-border:    oklch(0.34 0.02 262);
+  --lmr-border-2:  oklch(0.42 0.022 262);
+
+  --lmr-ink:       oklch(0.94 0.01 250);
+  --lmr-ink-soft:  oklch(0.74 0.014 255);
+  --lmr-ink-faint: oklch(0.60 0.016 255);
+
+  --lmr-accent:        oklch(0.74 0.11 205);
+  --lmr-accent-strong: oklch(0.80 0.11 205);
+  --lmr-accent-bg:     oklch(0.34 0.06 210);
+  --lmr-accent-bd:     oklch(0.46 0.08 208);
+
+  --lmr-bar:        oklch(0.24 0.022 262);
+  --lmr-bar-ink:    oklch(0.94 0.01 250);
+  --lmr-bar-soft:   oklch(0.66 0.016 255);
+  --lmr-bar-border: oklch(0.34 0.02 262);
+
+  --lmr-ok-bg:  oklch(0.34 0.06 162); --lmr-ok-fg:  oklch(0.84 0.13 162); --lmr-ok-bd:  oklch(0.44 0.08 162); --lmr-ok-dot:  oklch(0.72 0.14 162);
+  --lmr-warn-bg:oklch(0.34 0.05 82);  --lmr-warn-fg:oklch(0.86 0.12 88);  --lmr-warn-bd:oklch(0.46 0.07 82);  --lmr-warn-dot:oklch(0.80 0.13 85);
+  --lmr-fail-bg:oklch(0.34 0.06 24);  --lmr-fail-fg:oklch(0.84 0.12 26);  --lmr-fail-bd:oklch(0.46 0.09 24);  --lmr-fail-dot:oklch(0.72 0.17 26);
+  --lmr-neutral-bg:oklch(0.32 0.014 262); --lmr-neutral-fg:oklch(0.76 0.014 255); --lmr-neutral-bd:oklch(0.42 0.016 262); --lmr-neutral-dot:oklch(0.64 0.018 255);
+
+  --lmr-warn-soft: oklch(0.30 0.04 85);
+  --lmr-fail-soft: oklch(0.30 0.05 24);
+  --lmr-info-soft: oklch(0.28 0.03 210);
+
+  --lmr-shadow: 0 1px 2px rgba(0,0,0,0.30), 0 8px 24px rgba(0,0,0,0.22);
+}

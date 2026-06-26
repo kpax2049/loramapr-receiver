@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"html/template"
 	"io"
+	"io/fs"
 	"log/slog"
 	"net/http"
 	goruntime "runtime"
@@ -23,6 +24,9 @@ import (
 
 //go:embed templates/*.tmpl
 var portalTemplateFiles embed.FS
+
+//go:embed static/css/*.css static/js/*.js
+var portalStaticFiles embed.FS
 
 type StatusProvider interface {
 	CurrentStatus() status.Snapshot
@@ -116,6 +120,7 @@ func New(addr string, statusProvider StatusProvider, pairing PairingCodeSubmitte
 	mux.HandleFunc("/api/ops", s.handleOps)
 	mux.HandleFunc("/api/pairing/code", s.handlePairingCode)
 	mux.HandleFunc("/api/lifecycle/reset", s.handleLifecycleReset)
+	mux.Handle("/static/", http.StripPrefix("/static/", portalStaticHandler()))
 	mux.HandleFunc("/pairing", s.routePairing)
 	mux.HandleFunc("/reset", s.routeReset)
 	mux.HandleFunc("/progress", s.handleProgress)
@@ -646,7 +651,15 @@ func loadTemplates() (map[string]*template.Template, error) {
 	pages := []string{"welcome", "pairing", "progress", "home_auto_session", "troubleshooting", "advanced"}
 	out := make(map[string]*template.Template, len(pages))
 	for _, page := range pages {
-		parsed, err := template.ParseFS(
+		parsed, err := template.New(page).Funcs(template.FuncMap{
+			"lmrActive":        lmrActive,
+			"lmrAttentionTone": lmrAttentionTone,
+			"lmrBoolLabel":     lmrBoolLabel,
+			"lmrBoolTone":      lmrBoolTone,
+			"lmrCalloutClass":  lmrCalloutClass,
+			"lmrLevelTone":     lmrLevelTone,
+			"lmrTone":          lmrTone,
+		}).ParseFS(
 			portalTemplateFiles,
 			"templates/layout.tmpl",
 			fmt.Sprintf("templates/%s.tmpl", page),
@@ -657,6 +670,88 @@ func loadTemplates() (map[string]*template.Template, error) {
 		out[page] = parsed
 	}
 	return out, nil
+}
+
+func portalStaticHandler() http.Handler {
+	staticFS, err := fs.Sub(portalStaticFiles, "static")
+	if err != nil {
+		panic(err)
+	}
+	return http.FileServer(http.FS(staticFS))
+}
+
+func lmrActive(current, tab string) string {
+	if strings.EqualFold(strings.TrimSpace(current), strings.TrimSpace(tab)) {
+		return "is-active"
+	}
+	return ""
+}
+
+func lmrBoolLabel(value bool) string {
+	if value {
+		return "yes"
+	}
+	return "no"
+}
+
+func lmrBoolTone(value bool) string {
+	if value {
+		return "is-ok"
+	}
+	return "is-neutral"
+}
+
+func lmrAttentionTone(state any) string {
+	switch strings.ToLower(strings.TrimSpace(fmt.Sprint(state))) {
+	case "urgent":
+		return "is-fail"
+	case "action_required", "info":
+		return "is-warn"
+	default:
+		return "is-neutral"
+	}
+}
+
+func lmrLevelTone(level any) string {
+	switch strings.ToLower(strings.TrimSpace(fmt.Sprint(level))) {
+	case "ok":
+		return "is-ok"
+	case "warn":
+		return "is-warn"
+	case "fail":
+		return "is-fail"
+	default:
+		return "is-neutral"
+	}
+}
+
+func lmrCalloutClass(value any) string {
+	switch strings.ToLower(strings.TrimSpace(fmt.Sprint(value))) {
+	case "err", "error", "fail", "urgent":
+		return "is-fail"
+	case "ok", "none", "info":
+		return "is-info"
+	default:
+		return ""
+	}
+}
+
+func lmrTone(s any) string {
+	switch strings.ToLower(strings.TrimSpace(fmt.Sprint(s))) {
+	case "running", "available", "yes", "ok", "paired", "connected", "clean_idle", "healthy", "active",
+		"ready", "reachable", "steady_state", "activated", "compatible", "enabled", "present",
+		"control_ready", "observe_ready":
+		return "is-ok"
+	case "warn", "warning", "unknown", "degraded", "missing", "not currently reachable", "not configured",
+		"connecting", "detected", "activating", "pairing_code_entered", "bootstrap_exchanged", "outdated",
+		"cooldown", "misconfigured", "unreachable":
+		return "is-warn"
+	case "unpaired", "not_present", "fail", "failed", "blocked", "error", "not connected", "unavailable",
+		"unsupported", "receiver_replaced", "receiver_revoked":
+		return "is-fail"
+	default:
+		return "is-neutral"
+	}
 }
 
 func componentState(snap status.Snapshot, component string) string {

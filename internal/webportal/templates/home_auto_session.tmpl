@@ -1,110 +1,98 @@
 {{define "content"}}
-<section class="panel">
-  <h2>Home Auto Session</h2>
-  <p>Optional embedded automation module. It is included in every receiver build, but stays off until you enable it.</p>
+<section class="lmr-card">
+  <h2 class="lmr-card__title">Home Auto Session</h2>
+  <p class="lmr-card__desc">Optional embedded automation module. It is included in every receiver build, but stays off until you enable it.</p>
   {{if .Flash}}
-  <div class="hint {{.FlashClass}}">{{.Flash}}</div>
-  {{end}}
-  <div class="status-grid">
-    <div class="status-chip"><div class="label">Enabled</div><div class="value">{{if .Snapshot.HomeAutoSession.Enabled}}yes{{else}}no{{end}}</div></div>
-    <div class="status-chip"><div class="label">Mode</div><div class="value mono">{{if .Snapshot.HomeAutoSession.Mode}}{{.Snapshot.HomeAutoSession.Mode}}{{else}}off{{end}}</div></div>
-    <div class="status-chip"><div class="label">Config Source</div><div class="value mono">{{if .Snapshot.HomeAutoSession.EffectiveConfigSource}}{{.Snapshot.HomeAutoSession.EffectiveConfigSource}}{{else}}local_fallback{{end}}</div></div>
-    <div class="status-chip"><div class="label">Config Version</div><div class="value mono">{{if .Snapshot.HomeAutoSession.EffectiveConfigVer}}{{.Snapshot.HomeAutoSession.EffectiveConfigVer}}{{else}}local-default{{end}}</div></div>
-    <div class="status-chip"><div class="label">Cloud Config Present</div><div class="value">{{if .Snapshot.HomeAutoSession.CloudConfigPresent}}yes{{else}}no{{end}}</div></div>
-    <div class="status-chip"><div class="label">Config Apply Result</div><div class="value mono">{{if .Snapshot.HomeAutoSession.LastConfigApplyResult}}{{.Snapshot.HomeAutoSession.LastConfigApplyResult}}{{else}}unknown{{end}}</div></div>
-    <div class="status-chip"><div class="label">Module State</div><div class="value mono">{{if .Snapshot.HomeAutoSession.State}}{{.Snapshot.HomeAutoSession.State}}{{else}}disabled{{end}}</div></div>
-    <div class="status-chip"><div class="label">Control State</div><div class="value mono">{{if .Snapshot.HomeAutoSession.ControlState}}{{.Snapshot.HomeAutoSession.ControlState}}{{else}}disabled{{end}}</div></div>
-    <div class="status-chip"><div class="label">Active State Source</div><div class="value mono">{{if .Snapshot.HomeAutoSession.ActiveStateSource}}{{.Snapshot.HomeAutoSession.ActiveStateSource}}{{else}}none{{end}}</div></div>
-    <div class="status-chip"><div class="label">Reconciliation</div><div class="value mono">{{if .Snapshot.HomeAutoSession.ReconciliationState}}{{.Snapshot.HomeAutoSession.ReconciliationState}}{{else}}clean_idle{{end}}</div></div>
-    <div class="status-chip"><div class="label">Pending Action</div><div class="value mono">{{if .Snapshot.HomeAutoSession.PendingAction}}{{.Snapshot.HomeAutoSession.PendingAction}}{{else}}none{{end}}</div></div>
-    <div class="status-chip"><div class="label">Active Session</div><div class="value mono">{{if .Snapshot.HomeAutoSession.ActiveSessionID}}{{.Snapshot.HomeAutoSession.ActiveSessionID}}{{else}}none{{end}}</div></div>
-    <div class="status-chip"><div class="label">Trigger Node</div><div class="value mono">{{if .Snapshot.HomeAutoSession.ActiveTriggerNode}}{{.Snapshot.HomeAutoSession.ActiveTriggerNode}}{{else}}none{{end}}</div></div>
-    <div class="status-chip"><div class="label">Tracked Node State</div><div class="value">{{if .Snapshot.HomeAutoSession.TrackedNodeState}}{{.Snapshot.HomeAutoSession.TrackedNodeState}}{{else}}no tracked node data yet{{end}}</div></div>
-    <div class="status-chip"><div class="label">Home Geofence</div><div class="value">{{if .Snapshot.HomeAutoSession.HomeSummary}}{{.Snapshot.HomeAutoSession.HomeSummary}}{{else}}not configured{{end}}</div></div>
-    <div class="status-chip"><div class="label">GPS Status</div><div class="value mono">{{if .Snapshot.HomeAutoSession.GPSStatus}}{{.Snapshot.HomeAutoSession.GPSStatus}}{{else}}unknown{{end}}</div></div>
-    <div class="status-chip"><div class="label">Last Action</div><div class="value mono">{{if .Snapshot.HomeAutoSession.LastAction}}{{.Snapshot.HomeAutoSession.LastAction}}{{else}}none{{end}}</div></div>
-    <div class="status-chip"><div class="label">Last Action Result</div><div class="value mono">{{if .Snapshot.HomeAutoSession.LastActionResult}}{{.Snapshot.HomeAutoSession.LastActionResult}}{{else}}none{{end}}</div></div>
-    <div class="status-chip"><div class="label">Last Success</div><div class="value mono">{{if .Snapshot.HomeAutoSession.LastSuccessfulAction}}{{.Snapshot.HomeAutoSession.LastSuccessfulAction}}{{else}}none{{end}}</div></div>
-    <div class="status-chip"><div class="label">Observed Drops</div><div class="value">{{.Snapshot.HomeAutoSession.ObservedDropped}}</div></div>
+  <div class="lmr-callout {{lmrCalloutClass .FlashClass}}">
+    <span class="lmr-callout__icon">{{if eq .FlashClass "err"}}x{{else}}!{{end}}</span>
+    <div>{{.Flash}}</div>
   </div>
-  <div class="hint {{if eq .Snapshot.HomeAutoSession.State "degraded"}}err{{else if eq .Snapshot.HomeAutoSession.State "misconfigured"}}warn{{else}}none{{end}}">
-    {{if .HomeAutoConfigHint}}<strong>Config:</strong> {{.HomeAutoConfigHint}}<br>{{end}}
-    {{.HomeAutoStateHint}}
-    {{if .Snapshot.HomeAutoSession.LastConfigApplyError}}<br><strong>Config apply error:</strong> {{.Snapshot.HomeAutoSession.LastConfigApplyError}}{{end}}
-    {{if .Snapshot.HomeAutoSession.LastActionAt}}<br><strong>Last action time:</strong> {{.Snapshot.HomeAutoSession.LastActionAt}}{{end}}
-    {{if .Snapshot.HomeAutoSession.LastDecisionReason}}<br><strong>Last decision:</strong> {{.Snapshot.HomeAutoSession.LastDecisionReason}}{{end}}
-    {{if .Snapshot.HomeAutoSession.GPSReason}}<br><strong>GPS reason:</strong> {{.Snapshot.HomeAutoSession.GPSReason}}{{end}}
-    {{if .Snapshot.HomeAutoSession.BlockedReason}}<br><strong>Blocked reason:</strong> {{.Snapshot.HomeAutoSession.BlockedReason}}{{end}}
-    {{if .Snapshot.HomeAutoSession.LastError}}<br><strong>Last error:</strong> {{.Snapshot.HomeAutoSession.LastError}}{{end}}
+  {{end}}
+  <div class="lmr-tiles">
+    <div class="lmr-tile"><div class="lmr-tile__label">Enabled</div><div class="lmr-tile__value"><span class="lmr-pill {{lmrBoolTone .Snapshot.HomeAutoSession.Enabled}}"><span class="lmr-pill__dot"></span>{{lmrBoolLabel .Snapshot.HomeAutoSession.Enabled}}</span></div></div>
+    <div class="lmr-tile"><div class="lmr-tile__label">Mode</div><div class="lmr-tile__value"><span class="lmr-pill {{lmrTone .Snapshot.HomeAutoSession.Mode}}"><span class="lmr-pill__dot"></span>{{if .Snapshot.HomeAutoSession.Mode}}{{.Snapshot.HomeAutoSession.Mode}}{{else}}off{{end}}</span></div></div>
+    <div class="lmr-tile"><div class="lmr-tile__label">Config Source</div><div class="lmr-tile__value"><span class="lmr-pill {{lmrTone .Snapshot.HomeAutoSession.EffectiveConfigSource}}"><span class="lmr-pill__dot"></span>{{if .Snapshot.HomeAutoSession.EffectiveConfigSource}}{{.Snapshot.HomeAutoSession.EffectiveConfigSource}}{{else}}local_fallback{{end}}</span></div></div>
+    <div class="lmr-tile"><div class="lmr-tile__label">Config Version</div><div class="lmr-tile__value"><span class="lmr-mono">{{if .Snapshot.HomeAutoSession.EffectiveConfigVer}}{{.Snapshot.HomeAutoSession.EffectiveConfigVer}}{{else}}local-default{{end}}</span></div></div>
+    <div class="lmr-tile"><div class="lmr-tile__label">Cloud Config Present</div><div class="lmr-tile__value"><span class="lmr-pill {{lmrBoolTone .Snapshot.HomeAutoSession.CloudConfigPresent}}"><span class="lmr-pill__dot"></span>{{lmrBoolLabel .Snapshot.HomeAutoSession.CloudConfigPresent}}</span></div></div>
+    <div class="lmr-tile"><div class="lmr-tile__label">Config Apply Result</div><div class="lmr-tile__value"><span class="lmr-chip {{lmrTone .Snapshot.HomeAutoSession.LastConfigApplyResult}}">{{if .Snapshot.HomeAutoSession.LastConfigApplyResult}}{{.Snapshot.HomeAutoSession.LastConfigApplyResult}}{{else}}unknown{{end}}</span></div></div>
+    <div class="lmr-tile"><div class="lmr-tile__label">Module State</div><div class="lmr-tile__value"><span class="lmr-pill {{lmrTone .Snapshot.HomeAutoSession.State}}"><span class="lmr-pill__dot"></span>{{if .Snapshot.HomeAutoSession.State}}{{.Snapshot.HomeAutoSession.State}}{{else}}disabled{{end}}</span></div></div>
+    <div class="lmr-tile"><div class="lmr-tile__label">Control State</div><div class="lmr-tile__value"><span class="lmr-pill {{lmrTone .Snapshot.HomeAutoSession.ControlState}}"><span class="lmr-pill__dot"></span>{{if .Snapshot.HomeAutoSession.ControlState}}{{.Snapshot.HomeAutoSession.ControlState}}{{else}}disabled{{end}}</span></div></div>
+    <div class="lmr-tile"><div class="lmr-tile__label">Active State Source</div><div class="lmr-tile__value"><span class="lmr-mono">{{if .Snapshot.HomeAutoSession.ActiveStateSource}}{{.Snapshot.HomeAutoSession.ActiveStateSource}}{{else}}none{{end}}</span></div></div>
+    <div class="lmr-tile"><div class="lmr-tile__label">Reconciliation</div><div class="lmr-tile__value"><span class="lmr-pill {{lmrTone .Snapshot.HomeAutoSession.ReconciliationState}}"><span class="lmr-pill__dot"></span>{{if .Snapshot.HomeAutoSession.ReconciliationState}}{{.Snapshot.HomeAutoSession.ReconciliationState}}{{else}}clean_idle{{end}}</span></div></div>
+    <div class="lmr-tile"><div class="lmr-tile__label">Pending Action</div><div class="lmr-tile__value"><span class="lmr-mono">{{if .Snapshot.HomeAutoSession.PendingAction}}{{.Snapshot.HomeAutoSession.PendingAction}}{{else}}none{{end}}</span></div></div>
+    <div class="lmr-tile"><div class="lmr-tile__label">Active Session</div><div class="lmr-tile__value"><span class="lmr-mono">{{if .Snapshot.HomeAutoSession.ActiveSessionID}}{{.Snapshot.HomeAutoSession.ActiveSessionID}}{{else}}none{{end}}</span></div></div>
+    <div class="lmr-tile"><div class="lmr-tile__label">Trigger Node</div><div class="lmr-tile__value"><span class="lmr-mono">{{if .Snapshot.HomeAutoSession.ActiveTriggerNode}}{{.Snapshot.HomeAutoSession.ActiveTriggerNode}}{{else}}none{{end}}</span></div></div>
+    <div class="lmr-tile"><div class="lmr-tile__label">Tracked Node State</div><div class="lmr-tile__value">{{if .Snapshot.HomeAutoSession.TrackedNodeState}}{{.Snapshot.HomeAutoSession.TrackedNodeState}}{{else}}no tracked node data yet{{end}}</div></div>
+    <div class="lmr-tile"><div class="lmr-tile__label">Home Geofence</div><div class="lmr-tile__value"><span class="{{if not .Snapshot.HomeAutoSession.HomeSummary}}lmr-mono lmr-mono--warn{{end}}">{{if .Snapshot.HomeAutoSession.HomeSummary}}{{.Snapshot.HomeAutoSession.HomeSummary}}{{else}}not configured{{end}}</span></div></div>
+    <div class="lmr-tile"><div class="lmr-tile__label">GPS Status</div><div class="lmr-tile__value"><span class="lmr-pill {{lmrTone .Snapshot.HomeAutoSession.GPSStatus}}"><span class="lmr-pill__dot"></span>{{if .Snapshot.HomeAutoSession.GPSStatus}}{{.Snapshot.HomeAutoSession.GPSStatus}}{{else}}unknown{{end}}</span></div></div>
+    <div class="lmr-tile"><div class="lmr-tile__label">Last Action</div><div class="lmr-tile__value"><span class="lmr-mono">{{if .Snapshot.HomeAutoSession.LastAction}}{{.Snapshot.HomeAutoSession.LastAction}}{{else}}none{{end}}</span></div></div>
+    <div class="lmr-tile"><div class="lmr-tile__label">Last Action Result</div><div class="lmr-tile__value"><span class="lmr-mono">{{if .Snapshot.HomeAutoSession.LastActionResult}}{{.Snapshot.HomeAutoSession.LastActionResult}}{{else}}none{{end}}</span></div></div>
+    <div class="lmr-tile"><div class="lmr-tile__label">Last Success</div><div class="lmr-tile__value"><span class="lmr-mono">{{if .Snapshot.HomeAutoSession.LastSuccessfulAction}}{{.Snapshot.HomeAutoSession.LastSuccessfulAction}}{{else}}none{{end}}</span></div></div>
+    <div class="lmr-tile"><div class="lmr-tile__label">Observed Drops</div><div class="lmr-tile__value">{{.Snapshot.HomeAutoSession.ObservedDropped}}</div></div>
+  </div>
+  <div class="lmr-callout {{if eq .Snapshot.HomeAutoSession.State "degraded"}}is-fail{{else if eq .Snapshot.HomeAutoSession.State "misconfigured"}}{{else}}is-info{{end}}">
+    <span class="lmr-callout__icon">{{if eq .Snapshot.HomeAutoSession.State "degraded"}}x{{else}}!{{end}}</span>
+    <div>
+      {{if .HomeAutoConfigHint}}<strong>Config:</strong> {{.HomeAutoConfigHint}}<br>{{end}}
+      {{.HomeAutoStateHint}}
+      {{if .Snapshot.HomeAutoSession.LastConfigApplyError}}<br><strong>Config apply error:</strong> {{.Snapshot.HomeAutoSession.LastConfigApplyError}}{{end}}
+      {{if .Snapshot.HomeAutoSession.LastActionAt}}<br><strong>Last action time:</strong> {{.Snapshot.HomeAutoSession.LastActionAt}}{{end}}
+      {{if .Snapshot.HomeAutoSession.LastDecisionReason}}<br><strong>Last decision:</strong> {{.Snapshot.HomeAutoSession.LastDecisionReason}}{{end}}
+      {{if .Snapshot.HomeAutoSession.GPSReason}}<br><strong>GPS reason:</strong> {{.Snapshot.HomeAutoSession.GPSReason}}{{end}}
+      {{if .Snapshot.HomeAutoSession.BlockedReason}}<br><strong>Blocked reason:</strong> {{.Snapshot.HomeAutoSession.BlockedReason}}{{end}}
+      {{if .Snapshot.HomeAutoSession.LastError}}<br><strong>Last error:</strong> {{.Snapshot.HomeAutoSession.LastError}}{{end}}
+    </div>
   </div>
 </section>
 
-<section class="panel">
-  <h2>Configuration</h2>
-  <p class="muted">This form edits local fallback configuration. If config source is <code>cloud_managed</code>, cloud policy remains authoritative until cloud removes or changes it.</p>
+<section class="lmr-card">
+  <h2 class="lmr-card__title">Configuration</h2>
+  <p class="lmr-card__desc">This form edits local fallback configuration. If config source is <span class="lmr-code">cloud_managed</span>, cloud policy remains authoritative until cloud removes or changes it.</p>
   <form method="post" action="/home-auto-session">
-    <label>
-      <input type="checkbox" name="enabled" value="1" {{if .HomeAutoConfig.Enabled}}checked{{end}}>
-      Enable Home Auto Session
-    </label>
+    <label class="lmr-check"><input type="checkbox" name="enabled" value="1" {{if .HomeAutoConfig.Enabled}}checked{{end}}> Enable Home Auto Session</label>
 
-    <label for="mode">Mode</label>
-    <select id="mode" name="mode">
-      <option value="off" {{if eq .HomeAutoConfig.Mode "off"}}selected{{end}}>off</option>
-      <option value="observe" {{if eq .HomeAutoConfig.Mode "observe"}}selected{{end}}>observe</option>
-      <option value="control" {{if eq .HomeAutoConfig.Mode "control"}}selected{{end}}>control</option>
-    </select>
+    <div class="lmr-formgrid">
+      <div>
+        <label class="lmr-label" for="mode">Mode</label>
+        <select class="lmr-select" id="mode" name="mode">
+          <option value="off" {{if eq .HomeAutoConfig.Mode "off"}}selected{{end}}>off</option>
+          <option value="observe" {{if eq .HomeAutoConfig.Mode "observe"}}selected{{end}}>observe</option>
+          <option value="control" {{if eq .HomeAutoConfig.Mode "control"}}selected{{end}}>control</option>
+        </select>
+      </div>
+      <div><label class="lmr-label" for="home_lat">Home Latitude</label><input class="lmr-input" id="home_lat" type="text" name="home_lat" value="{{printf "%.6f" .HomeAutoConfig.Home.Lat}}"></div>
+      <div><label class="lmr-label" for="home_lon">Home Longitude</label><input class="lmr-input" id="home_lon" type="text" name="home_lon" value="{{printf "%.6f" .HomeAutoConfig.Home.Lon}}"></div>
+      <div><label class="lmr-label" for="home_radius_m">Home Radius <span class="lmr-label__hint">(meters)</span></label><input class="lmr-input" id="home_radius_m" type="text" name="home_radius_m" value="{{printf "%.0f" .HomeAutoConfig.Home.RadiusM}}"></div>
+      <div><label class="lmr-label" for="start_debounce">Start Debounce <span class="lmr-label__hint">(duration)</span></label><input class="lmr-input" id="start_debounce" type="text" name="start_debounce" value="{{.HomeAutoStartDeb}}"></div>
+      <div><label class="lmr-label" for="stop_debounce">Stop Debounce <span class="lmr-label__hint">(duration)</span></label><input class="lmr-input" id="stop_debounce" type="text" name="stop_debounce" value="{{.HomeAutoStopDeb}}"></div>
+      <div><label class="lmr-label" for="idle_stop_timeout">Idle Stop Timeout <span class="lmr-label__hint">(duration)</span></label><input class="lmr-input" id="idle_stop_timeout" type="text" name="idle_stop_timeout" value="{{.HomeAutoIdleTimeout}}"></div>
+      <div><label class="lmr-label" for="cloud_start_endpoint">Cloud Start Endpoint</label><input class="lmr-input" id="cloud_start_endpoint" type="text" name="cloud_start_endpoint" value="{{.HomeAutoConfig.Cloud.StartEndpoint}}"></div>
+      <div><label class="lmr-label" for="cloud_stop_endpoint">Cloud Stop Endpoint</label><input class="lmr-input" id="cloud_stop_endpoint" type="text" name="cloud_stop_endpoint" value="{{.HomeAutoConfig.Cloud.StopEndpoint}}"></div>
+    </div>
 
-    <label for="home_lat">Home Latitude</label>
-    <input id="home_lat" type="text" name="home_lat" value="{{printf "%.6f" .HomeAutoConfig.Home.Lat}}">
+    <label class="lmr-check"><input type="checkbox" name="startup_reconcile" value="1" {{if .HomeAutoConfig.StartupReconcile}}checked{{end}}> Startup reconcile existing local session state</label>
 
-    <label for="home_lon">Home Longitude</label>
-    <input id="home_lon" type="text" name="home_lon" value="{{printf "%.6f" .HomeAutoConfig.Home.Lon}}">
+    <label class="lmr-label" for="tracked_node_ids">Tracked Node IDs <span class="lmr-label__hint">(comma or newline separated)</span></label>
+    <textarea class="lmr-textarea" id="tracked_node_ids" name="tracked_node_ids" rows="3">{{.HomeAutoTrackedText}}</textarea>
 
-    <label for="home_radius_m">Home Radius (meters)</label>
-    <input id="home_radius_m" type="text" name="home_radius_m" value="{{printf "%.0f" .HomeAutoConfig.Home.RadiusM}}">
+    <label class="lmr-label" for="session_name_template">Session Name Template</label>
+    <input class="lmr-input" id="session_name_template" type="text" name="session_name_template" value="{{.HomeAutoConfig.SessionNameTemplate}}">
 
-    <label for="tracked_node_ids">Tracked Node IDs (comma or newline separated)</label>
-    <input id="tracked_node_ids" type="text" name="tracked_node_ids" value="{{.HomeAutoTrackedText}}">
+    <label class="lmr-label" for="session_notes_template">Session Notes Template</label>
+    <input class="lmr-input" id="session_notes_template" type="text" name="session_notes_template" value="{{.HomeAutoConfig.SessionNotesTemplate}}">
 
-    <label for="start_debounce">Start Debounce (duration)</label>
-    <input id="start_debounce" type="text" name="start_debounce" value="{{.HomeAutoStartDeb}}">
-
-    <label for="stop_debounce">Stop Debounce (duration)</label>
-    <input id="stop_debounce" type="text" name="stop_debounce" value="{{.HomeAutoStopDeb}}">
-
-    <label for="idle_stop_timeout">Idle Stop Timeout (duration)</label>
-    <input id="idle_stop_timeout" type="text" name="idle_stop_timeout" value="{{.HomeAutoIdleTimeout}}">
-
-    <label>
-      <input type="checkbox" name="startup_reconcile" value="1" {{if .HomeAutoConfig.StartupReconcile}}checked{{end}}>
-      Startup reconcile existing local session state
-    </label>
-
-    <label for="session_name_template">Session Name Template</label>
-    <input id="session_name_template" type="text" name="session_name_template" value="{{.HomeAutoConfig.SessionNameTemplate}}">
-
-    <label for="session_notes_template">Session Notes Template</label>
-    <input id="session_notes_template" type="text" name="session_notes_template" value="{{.HomeAutoConfig.SessionNotesTemplate}}">
-
-    <label for="cloud_start_endpoint">Cloud Start Endpoint</label>
-    <input id="cloud_start_endpoint" type="text" name="cloud_start_endpoint" value="{{.HomeAutoConfig.Cloud.StartEndpoint}}">
-
-    <label for="cloud_stop_endpoint">Cloud Stop Endpoint</label>
-    <input id="cloud_stop_endpoint" type="text" name="cloud_stop_endpoint" value="{{.HomeAutoConfig.Cloud.StopEndpoint}}">
-
-    <button type="submit">Save Home Auto Session Config</button>
+    <button class="lmr-btn" type="submit">Save Home Auto Session Config</button>
   </form>
 </section>
 
-<section class="panel">
-  <h2>Safe Local Actions</h2>
-  <p class="muted">These actions do not alter pairing credentials or packet forwarding.</p>
+<section class="lmr-card">
+  <h2 class="lmr-card__title">Safe Local Actions</h2>
+  <p class="lmr-card__desc">These actions do not alter pairing credentials or packet forwarding.</p>
   <form method="post" action="/home-auto-session/reevaluate">
-    <button type="submit">Reevaluate Now</button>
+    <button class="lmr-btn" type="submit">Reevaluate Now</button>
   </form>
   <form method="post" action="/home-auto-session/reset">
-    <button type="submit">Reset Degraded/Cooldown State</button>
+    <button class="lmr-btn" type="submit">Reset Degraded/Cooldown State</button>
   </form>
 </section>
 {{end}}
