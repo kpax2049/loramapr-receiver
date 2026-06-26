@@ -1,3 +1,4 @@
+/* global document, localStorage, window */
 /* ------------------------------------------------------------------
    LoRaMapr Portal — optional theme toggle (the ONLY JS in the reskin)
    ------------------------------------------------------------------
@@ -19,7 +20,15 @@
   var root = document.documentElement;
 
   function stored() {
-    try { return localStorage.getItem(KEY); } catch (e) { return null; }
+    try { return localStorage.getItem(KEY); } catch { return null; }
+  }
+  function remember(theme) {
+    try {
+      localStorage.setItem(KEY, theme);
+      return true;
+    } catch {
+      return false;
+    }
   }
   function apply(theme) {
     // theme is "light", "dark", or null (= follow OS)
@@ -39,7 +48,7 @@
     var btn = ev.target.closest("[data-lmr-theme-toggle]");
     if (!btn) return;
     var next = current() === "dark" ? "light" : "dark";
-    try { localStorage.setItem(KEY, next); } catch (e) {}
+    remember(next);
     apply(next);
   });
 })();
