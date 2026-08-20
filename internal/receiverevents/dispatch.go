@@ -55,17 +55,22 @@ type DispatchResult struct {
 	Duplicate    bool
 	Disposition  Disposition
 	Quarantined  int
+	Reconciled   outbox.BindingReconcileResult
 }
 
-func (d Dispatcher) DispatchOnce(ctx context.Context, apiKey string, now time.Time) (DispatchResult, error) {
+func (d Dispatcher) DispatchOnce(ctx context.Context, apiKey string, binding outbox.Binding, now time.Time) (DispatchResult, error) {
 	if d.Outbox == nil || d.Client == nil {
 		return DispatchResult{}, errors.New("normalized dispatcher requires an outbox and cloud client")
 	}
-	delivery, err := d.Outbox.NextDue(now)
-	if err != nil || delivery == nil {
+	reconciled, err := d.Outbox.ReconcileBinding(binding)
+	if err != nil {
 		return DispatchResult{}, err
 	}
-	result := DispatchResult{DeliveryID: delivery.DeliveryID, Attempted: true}
+	delivery, err := d.Outbox.NextDue(now)
+	if err != nil || delivery == nil {
+		return DispatchResult{Reconciled: reconciled}, err
+	}
+	result := DispatchResult{DeliveryID: delivery.DeliveryID, Attempted: true, Reconciled: reconciled}
 	if err := d.Outbox.MarkInflight(delivery.DeliveryID); err != nil {
 		return result, err
 	}

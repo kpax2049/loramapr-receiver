@@ -124,6 +124,16 @@ func (e *Engine) QuarantineByReceiver(receiverAgentID string, reason string, fai
 	return quarantined, err
 }
 
+func (e *Engine) ReconcileBinding(binding Binding) (BindingReconcileResult, error) {
+	result := BindingReconcileResult{}
+	err := e.write(func(store *Store) error {
+		var err error
+		result, err = store.ReconcileBinding(binding)
+		return err
+	})
+	return result, err
+}
+
 func (e *Engine) Delete(deliveryID string) error {
 	return e.write(func(store *Store) error { return store.Delete(deliveryID) })
 }

@@ -270,6 +270,88 @@ func (s *Store) QuarantineByReceiver(receiverAgentID string, reason string, fail
 	return quarantined, err
 }
 
+// ReconcileBinding prevents a pending immutable delivery from ever being sent
+// with credentials for a different authenticated principal. Ordinary API-key
+// rotation preserves deliveries because the key itself is not part of this
+// binding; receiver-agent or installation replacement quarantines old bytes.
+func (s *Store) ReconcileBinding(binding Binding) (BindingReconcileResult, error) {
+	binding.OwnerID = strings.TrimSpace(binding.OwnerID)
+	binding.ReceiverAgentID = strings.TrimSpace(binding.ReceiverAgentID)
+	binding.InstallationID = strings.TrimSpace(binding.InstallationID)
+	if binding.OwnerID == "" || binding.ReceiverAgentID == "" || binding.InstallationID == "" {
+		return BindingReconcileResult{}, errors.New("complete outbox binding is required")
+	}
+
+	now := s.cfg.Now().UTC()
+	result := BindingReconcileResult{}
+	err := s.update(func(tx *bolt.Tx) error {
+		deliveries := tx.Bucket(deliveriesBucket)
+		quarantine := tx.Bucket(quarantineBucket)
+		type matched struct {
+			key    []byte
+			raw    []byte
+			record *Delivery
+			reason string
+		}
+		matches := make([]matched, 0)
+		if err := deliveries.ForEach(func(key, raw []byte) error {
+			record, err := decodeDelivery(raw)
+			if err != nil {
+				return err
+			}
+			reason := ""
+			switch {
+			case record.InstallationID != binding.InstallationID:
+				reason = "installation_reset"
+			case record.OwnerID != binding.OwnerID || record.ReceiverAgentIDSnapshot != binding.ReceiverAgentID:
+				reason = "credential_rebind_required"
+			default:
+				result.Kept++
+			}
+			if reason != "" {
+				matches = append(matches, matched{
+					key: append([]byte(nil), key...), raw: append([]byte(nil), raw...), record: record, reason: reason,
+				})
+			}
+			return nil
+		}); err != nil {
+			return err
+		}
+
+		count, used := readCounters(tx)
+		for _, item := range matches {
+			record := item.record
+			_ = tx.Bucket(dueIndexBucket).Delete(dueKey(record.NextAttemptAt, record.Sequence, record.DeliveryID))
+			record.State = StateQuarantined
+			record.QuarantinedAt = now
+			record.QuarantineReason = item.reason
+			record.LastErrorCode = "OUTBOX_BINDING_CHANGED"
+			record.LastError = "pending normalized delivery binding no longer matches active receiver credentials"
+			encoded, err := json.Marshal(record)
+			if err != nil {
+				return err
+			}
+			used = used - int64(len(item.raw)) + int64(len(encoded))
+			if used > s.cfg.MaxBytes {
+				return ErrOutboxFull
+			}
+			if err := quarantine.Put(item.key, encoded); err != nil {
+				return err
+			}
+			if err := deliveries.Delete(item.key); err != nil {
+				return err
+			}
+			if item.reason == "installation_reset" {
+				result.InstallationResetQuarantined++
+			} else {
+				result.CredentialRebindQuarantined++
+			}
+		}
+		return writeCounters(tx, count, used)
+	})
+	return result, err
+}
+
 func (s *Store) Delete(deliveryID string) error {
 	return s.update(func(tx *bolt.Tx) error {
 		key := []byte(deliveryID)

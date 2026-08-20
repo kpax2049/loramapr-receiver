@@ -44,7 +44,7 @@ func TestDispatcherAcknowledgesNewAndDuplicateDeliveries(t *testing.T) {
 			client := &fakeDeliveryClient{result: cloudclient.NormalizedDeliveryResult{
 				StatusCode: 202, Duplicate: duplicate, DeliveryID: delivery.DeliveryID,
 			}}
-			result, err := (Dispatcher{Outbox: engine, Client: client}).DispatchOnce(context.Background(), "secret", now)
+			result, err := (Dispatcher{Outbox: engine, Client: client}).DispatchOnce(context.Background(), "secret", testBinding(), now)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -69,7 +69,7 @@ func TestDispatcherRetriesWithoutMutatingEnvelope(t *testing.T) {
 	client := &fakeDeliveryClient{err: &cloudclient.APIError{
 		StatusCode: 503, Code: "RECEIVER_EVENTS_V1_DISABLED", Retryable: true, RetryAfter: 45 * time.Second,
 	}}
-	result, err := (Dispatcher{Outbox: engine, Client: client}).DispatchOnce(context.Background(), "secret", now)
+	result, err := (Dispatcher{Outbox: engine, Client: client}).DispatchOnce(context.Background(), "secret", testBinding(), now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -98,7 +98,7 @@ func TestDispatcherQuarantinesConflictsAndTerminalAgentDeliveries(t *testing.T) 
 			t.Fatal(err)
 		}
 		client := &fakeDeliveryClient{err: &cloudclient.APIError{StatusCode: 409, Code: "DELIVERY_ID_PAYLOAD_MISMATCH"}}
-		result, err := (Dispatcher{Outbox: engine, Client: client}).DispatchOnce(context.Background(), "secret", now)
+		result, err := (Dispatcher{Outbox: engine, Client: client}).DispatchOnce(context.Background(), "secret", testBinding(), now)
 		if err != nil || result.Quarantined != 1 {
 			t.Fatalf("result=%#v err=%v", result, err)
 		}
@@ -114,25 +114,60 @@ func TestDispatcherQuarantinesConflictsAndTerminalAgentDeliveries(t *testing.T) 
 		for _, delivery := range []outbox.Delivery{
 			testDelivery("0198c7a2-e395-7000-8000-000000000013", "agent-old", []byte(`{"n":1}`)),
 			testDelivery("0198c7a2-e395-7000-8000-000000000014", "agent-old", []byte(`{"n":2}`)),
-			testDelivery("0198c7a2-e395-7000-8000-000000000015", "agent-other", []byte(`{"n":3}`)),
 		} {
 			if err := store.Enqueue(delivery); err != nil {
 				t.Fatal(err)
 			}
 		}
 		client := &fakeDeliveryClient{err: &cloudclient.APIError{StatusCode: 403, Code: "RECEIVER_REVOKED"}}
-		result, err := (Dispatcher{Outbox: engine, Client: client}).DispatchOnce(context.Background(), "secret", now)
+		binding := testBinding()
+		binding.ReceiverAgentID = "agent-old"
+		result, err := (Dispatcher{Outbox: engine, Client: client}).DispatchOnce(context.Background(), "secret", binding, now)
 		if err != nil {
 			t.Fatal(err)
 		}
 		if result.Quarantined != 2 || !result.Disposition.ClearBinding || !result.Disposition.PairingRequired {
 			t.Fatalf("terminal result = %#v", result)
 		}
-		other, err := engine.Get("0198c7a2-e395-7000-8000-000000000015")
-		if err != nil || other.State != outbox.StatePending {
-			t.Fatalf("other agent delivery changed: %#v err=%v", other, err)
-		}
 	})
+}
+
+func TestDispatcherQuarantinesStaleBindingBeforeNetworkDelivery(t *testing.T) {
+	now := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
+	engine, store := testEngine(t, now)
+	defer closeTestEngine(t, engine, store)
+	for _, delivery := range []outbox.Delivery{
+		testDelivery("0198c7a2-e395-7000-8000-000000000020", "agent-old", []byte(`{"oldAgent":true}`)),
+		testDelivery("0198c7a2-e395-7000-8000-000000000021", "agent-1", []byte(`{"current":true}`)),
+		func() outbox.Delivery {
+			value := testDelivery("0198c7a2-e395-7000-8000-000000000022", "agent-1", []byte(`{"oldInstallation":true}`))
+			value.InstallationID = "ffffffffffffffffffffffffffffffff"
+			return value
+		}(),
+	} {
+		if err := store.Enqueue(delivery); err != nil {
+			t.Fatal(err)
+		}
+	}
+	client := &fakeDeliveryClient{result: cloudclient.NormalizedDeliveryResult{
+		StatusCode: 202, DeliveryID: "0198c7a2-e395-7000-8000-000000000021",
+	}}
+	result, err := (Dispatcher{Outbox: engine, Client: client}).DispatchOnce(context.Background(), "rotated-key", testBinding(), now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Acknowledged || result.Reconciled.CredentialRebindQuarantined != 1 || result.Reconciled.InstallationResetQuarantined != 1 {
+		t.Fatalf("unexpected binding reconciliation result: %#v", result)
+	}
+	for id, reason := range map[string]string{
+		"0198c7a2-e395-7000-8000-000000000020": "credential_rebind_required",
+		"0198c7a2-e395-7000-8000-000000000022": "installation_reset",
+	} {
+		record, err := engine.Get(id)
+		if err != nil || record.State != outbox.StateQuarantined || record.QuarantineReason != reason {
+			t.Fatalf("delivery %s = %#v err=%v, want quarantine %q", id, record, err, reason)
+		}
+	}
 }
 
 func TestClassifyPauseAndCredentialActions(t *testing.T) {
@@ -193,5 +228,11 @@ func testDelivery(id, agent string, body []byte) outbox.Delivery {
 		ReceiverAgentIDSnapshot: agent,
 		InstallationID:          "0123456789abcdef0123456789abcdef",
 		Endpoint:                EndpointPath,
+	}
+}
+
+func testBinding() outbox.Binding {
+	return outbox.Binding{
+		OwnerID: "owner-1", ReceiverAgentID: "agent-1", InstallationID: "0123456789abcdef0123456789abcdef",
 	}
 }

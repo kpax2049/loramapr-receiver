@@ -65,6 +65,18 @@ type AttemptFailure struct {
 	Message    string
 }
 
+type Binding struct {
+	OwnerID         string
+	ReceiverAgentID string
+	InstallationID  string
+}
+
+type BindingReconcileResult struct {
+	Kept                         int
+	CredentialRebindQuarantined  int
+	InstallationResetQuarantined int
+}
+
 type Stats struct {
 	PendingCount     int
 	QuarantinedCount int
