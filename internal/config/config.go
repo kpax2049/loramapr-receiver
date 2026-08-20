@@ -17,7 +17,7 @@ const (
 	// DefaultPath is the local development fallback.
 	DefaultPath = "./receiver.json"
 
-	CurrentSchemaVersion = 3
+	CurrentSchemaVersion = 4
 )
 
 type RunMode string
@@ -37,6 +37,7 @@ type Config struct {
 	Cloud            CloudConfig           `json:"cloud"`
 	Update           UpdateConfig          `json:"update"`
 	Meshtastic       MeshtasticConfig      `json:"meshtastic"`
+	MeshCore         MeshCoreConfig        `json:"meshcore"`
 	HomeAutoSession  HomeAutoSessionConfig `json:"home_auto_session,omitempty"`
 	Logging          LoggingConfig         `json:"logging"`
 	LoadedFromConfig string                `json:"-"`
@@ -53,7 +54,8 @@ type RuntimeConfig struct {
 }
 
 type PathsConfig struct {
-	StateFile string `json:"state_file"`
+	StateFile  string `json:"state_file"`
+	OutboxFile string `json:"outbox_file"`
 }
 
 type PortalConfig struct {
@@ -79,6 +81,11 @@ type MeshtasticConfig struct {
 	BootstrapWrite bool     `json:"bootstrap_write,omitempty"`
 	BridgeCommand  string   `json:"bridge_command,omitempty"`
 	BridgeArgs     []string `json:"bridge_args,omitempty"`
+}
+
+type MeshCoreConfig struct {
+	Transport string `json:"transport,omitempty"`
+	Device    string `json:"device,omitempty"`
 }
 
 type HomeAutoSessionMode string
@@ -168,7 +175,8 @@ func Default() Config {
 			Profile: "auto",
 		},
 		Paths: PathsConfig{
-			StateFile: "./data/receiver-state.json",
+			StateFile:  "./data/receiver-state.json",
+			OutboxFile: "./data/ingest-outbox.db",
 		},
 		Portal: PortalConfig{
 			BindAddress: "127.0.0.1:8080",
@@ -183,6 +191,9 @@ func Default() Config {
 		},
 		Meshtastic: MeshtasticConfig{
 			Transport: "serial",
+		},
+		MeshCore: MeshCoreConfig{
+			Transport: "disabled",
 		},
 		HomeAutoSession: HomeAutoSessionConfig{
 			Enabled:          false,
@@ -274,6 +285,9 @@ func (c Config) Validate() error {
 	if strings.TrimSpace(c.Paths.StateFile) == "" {
 		return errors.New("paths.state_file is required")
 	}
+	if strings.TrimSpace(c.Paths.OutboxFile) == "" {
+		return errors.New("paths.outbox_file is required")
+	}
 
 	if _, _, err := net.SplitHostPort(c.Portal.BindAddress); err != nil {
 		return fmt.Errorf("invalid portal.bind_address %q: %w", c.Portal.BindAddress, err)
@@ -301,6 +315,11 @@ func (c Config) Validate() error {
 	case "serial", "bridge", "json_stream", "disabled":
 	default:
 		return fmt.Errorf("invalid meshtastic.transport %q", c.Meshtastic.Transport)
+	}
+	switch strings.ToLower(strings.TrimSpace(c.MeshCore.Transport)) {
+	case "physical_serial", "disabled":
+	default:
+		return fmt.Errorf("invalid meshcore.transport %q", c.MeshCore.Transport)
 	}
 	if err := c.validateHomeAutoSession(); err != nil {
 		return err
@@ -358,6 +377,9 @@ func (c *Config) applyDefaults() {
 	if c.Paths.StateFile == "" {
 		c.Paths.StateFile = defaults.Paths.StateFile
 	}
+	if c.Paths.OutboxFile == "" {
+		c.Paths.OutboxFile = defaults.Paths.OutboxFile
+	}
 	if c.Portal.BindAddress == "" {
 		c.Portal.BindAddress = defaults.Portal.BindAddress
 	}
@@ -375,6 +397,10 @@ func (c *Config) applyDefaults() {
 	}
 	c.Meshtastic.BridgeCommand = strings.TrimSpace(c.Meshtastic.BridgeCommand)
 	c.Meshtastic.BridgeArgs = normalizeStringSlice(c.Meshtastic.BridgeArgs)
+	if c.MeshCore.Transport == "" {
+		c.MeshCore.Transport = defaults.MeshCore.Transport
+	}
+	c.MeshCore.Device = strings.TrimSpace(c.MeshCore.Device)
 	if c.HomeAutoSession.Mode == "" {
 		c.HomeAutoSession.Mode = defaults.HomeAutoSession.Mode
 	}
@@ -415,6 +441,9 @@ func (c *Config) migrate() error {
 	}
 	if version <= 2 {
 		version = 3
+	}
+	if version <= 3 {
+		version = 4
 	}
 	if version > CurrentSchemaVersion {
 		return fmt.Errorf("config schema version %d is newer than runtime supports (%d)", version, CurrentSchemaVersion)

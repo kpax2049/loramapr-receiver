@@ -37,6 +37,9 @@ func TestLoadMissingFileReturnsDefaults(t *testing.T) {
 	if cfg.Update.RequestTimeout.Std() != 4*time.Second {
 		t.Fatalf("unexpected update request timeout: %s", cfg.Update.RequestTimeout.Std())
 	}
+	if cfg.MeshCore.Transport != "disabled" || cfg.Paths.OutboxFile != "./data/ingest-outbox.db" {
+		t.Fatalf("unexpected MeshCore/outbox defaults: meshcore=%#v paths=%#v", cfg.MeshCore, cfg.Paths)
+	}
 }
 
 func TestLoadRejectsInvalidMode(t *testing.T) {
@@ -94,6 +97,33 @@ func TestLoadAcceptsBridgeMeshtasticTransport(t *testing.T) {
 	}
 	if len(cfg.Meshtastic.BridgeArgs) != 2 {
 		t.Fatalf("unexpected bridge args: %#v", cfg.Meshtastic.BridgeArgs)
+	}
+}
+
+func TestLoadValidatesMeshCorePhysicalSerialConfig(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "receiver.json")
+	raw := `{
+  "schema_version": 3,
+  "meshcore": {"transport":"physical_serial","device":"  /dev/ttyACM9  "}
+}`
+	if err := os.WriteFile(path, []byte(raw), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+	if cfg.SchemaVersion != CurrentSchemaVersion || cfg.MeshCore.Transport != "physical_serial" || cfg.MeshCore.Device != "/dev/ttyACM9" {
+		t.Fatalf("unexpected migrated MeshCore config: %#v", cfg)
+	}
+
+	if err := os.WriteFile(path, []byte(`{"meshcore":{"transport":"ble"}}`), 0o600); err != nil {
+		t.Fatalf("write invalid config: %v", err)
+	}
+	if _, err := Load(path); err == nil {
+		t.Fatal("expected validation error for unsupported MeshCore transport")
 	}
 }
 
@@ -197,6 +227,7 @@ func TestSaveAndLoadRoundTrip(t *testing.T) {
 	cfg.Service.Heartbeat = Duration(45 * time.Second)
 	cfg.Portal.BindAddress = "0.0.0.0:9080"
 	cfg.Paths.StateFile = "/var/lib/loramapr/state.json"
+	cfg.Paths.OutboxFile = "/var/lib/loramapr/ingest-outbox.db"
 	cfg.Cloud.BaseURL = "https://api.example.com"
 	cfg.Logging.Format = "text"
 	cfg.Logging.Level = "debug"
@@ -208,6 +239,8 @@ func TestSaveAndLoadRoundTrip(t *testing.T) {
 	cfg.Meshtastic.Transport = "bridge"
 	cfg.Meshtastic.BridgeCommand = "meshtastic-json-bridge"
 	cfg.Meshtastic.BridgeArgs = []string{"--port", "{{device}}", ""}
+	cfg.MeshCore.Transport = "physical_serial"
+	cfg.MeshCore.Device = "/dev/ttyACM1"
 	cfg.HomeAutoSession.Enabled = true
 	cfg.HomeAutoSession.Mode = HomeAutoSessionModeObserve
 	cfg.HomeAutoSession.Home = HomeGeofenceConfig{
@@ -245,6 +278,9 @@ func TestSaveAndLoadRoundTrip(t *testing.T) {
 	if loaded.Paths.StateFile != "/var/lib/loramapr/state.json" {
 		t.Fatalf("unexpected state file: %s", loaded.Paths.StateFile)
 	}
+	if loaded.Paths.OutboxFile != "/var/lib/loramapr/ingest-outbox.db" {
+		t.Fatalf("unexpected outbox file: %s", loaded.Paths.OutboxFile)
+	}
 	if loaded.Runtime.Profile != "appliance-pi" {
 		t.Fatalf("unexpected runtime profile: %s", loaded.Runtime.Profile)
 	}
@@ -265,6 +301,9 @@ func TestSaveAndLoadRoundTrip(t *testing.T) {
 	}
 	if len(loaded.Meshtastic.BridgeArgs) != 2 {
 		t.Fatalf("unexpected bridge args: %#v", loaded.Meshtastic.BridgeArgs)
+	}
+	if loaded.MeshCore.Transport != "physical_serial" || loaded.MeshCore.Device != "/dev/ttyACM1" {
+		t.Fatalf("unexpected MeshCore config: %#v", loaded.MeshCore)
 	}
 	if !loaded.HomeAutoSession.Enabled || loaded.HomeAutoSession.Mode != HomeAutoSessionModeObserve {
 		t.Fatalf("unexpected home_auto_session config: %#v", loaded.HomeAutoSession)
