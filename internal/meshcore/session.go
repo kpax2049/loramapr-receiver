@@ -86,14 +86,16 @@ type SelfInfo struct {
 // post-signature-validation NEW_ADVERT push. It is a compatibility assertion,
 // not device attestation: the serial response is self-reported by the device.
 type TrustProfile struct {
-	Trusted         bool
-	ProtocolVersion byte
-	FirmwareBuild   string
-	FirmwareVersion string
-	Model           string
-	AllowlistCommit string
-	DeviceAttested  bool
-	Reason          string
+	Trusted            bool
+	ProtocolCompatible bool
+	ProfileMatched     bool
+	ProtocolVersion    byte
+	FirmwareBuild      string
+	FirmwareVersion    string
+	Model              string
+	AllowlistCommit    string
+	DeviceAttested     bool
+	Reason             string
 }
 
 type Snapshot struct {
@@ -183,27 +185,30 @@ func (s *CompanionSession) Handle(payload []byte) (HandleResult, error) {
 		if device.ProtocolVersion != ProtocolVersion {
 			return s.fail(fmt.Errorf("%w: got %d, want %d", ErrUnsupportedProtocol, device.ProtocolVersion, ProtocolVersion))
 		}
-		if device.FirmwareBuild != PinnedFirmwareBuild ||
-			device.FirmwareVersion != PinnedFirmwareVersion ||
-			strings.TrimSpace(device.Model) == "" {
-			return s.fail(fmt.Errorf(
-				"%w: build=%q version=%q model=%q",
-				ErrTrustProfileMismatch,
-				device.FirmwareBuild,
-				device.FirmwareVersion,
-				device.Model,
-			))
-		}
+		profileMatched := device.FirmwareBuild == PinnedFirmwareBuild &&
+			device.FirmwareVersion == PinnedFirmwareVersion &&
+			strings.TrimSpace(device.Model) != ""
 
 		s.device = device
+		s.trust.ProtocolCompatible = true
+		s.trust.ProfileMatched = profileMatched
 		s.trust.ProtocolVersion = device.ProtocolVersion
 		s.trust.FirmwareBuild = device.FirmwareBuild
 		s.trust.FirmwareVersion = device.FirmwareVersion
 		s.trust.Model = device.Model
-		s.trust.Reason = "pinned profile matched; awaiting SELF_INFO"
+		if !profileMatched {
+			s.trust.Reason = fmt.Sprintf(
+				"%v: build=%q version=%q model=%q; protocol-compatible raw capture only",
+				ErrTrustProfileMismatch,
+				device.FirmwareBuild,
+				device.FirmwareVersion,
+				device.Model,
+			)
+		} else {
+			s.trust.Reason = "pinned profile matched; awaiting SELF_INFO"
+		}
 		s.state = SessionAwaitSelfInfo
 		return HandleResult{Outbound: buildAppStart(s.appName)}, nil
-
 	case SessionAwaitSelfInfo:
 		if payload[0] != ResponseSelfInfo {
 			return s.fail(fmt.Errorf("%w: got opcode 0x%02x, want 0x%02x", ErrUnexpectedHandshakeFrame, payload[0], ResponseSelfInfo))
@@ -214,13 +219,17 @@ func (s *CompanionSession) Handle(payload []byte) (HandleResult, error) {
 		}
 		s.self = self
 		s.state = SessionReady
-		s.trust.Trusted = true
+		s.trust.Trusted = s.trust.ProfileMatched
 		s.trust.DeviceAttested = false
-		s.trust.Reason = "pinned self-reported firmware profile negotiated over physical serial; not device attestation"
+		if s.trust.Trusted {
+			s.trust.Reason = "pinned self-reported firmware profile negotiated over physical serial; not device attestation"
+		} else {
+			s.trust.Reason = "protocol-compatible Companion profile mismatch; delegated trust disabled, raw capture enabled"
+		}
 		return HandleResult{Ready: true}, nil
 
 	case SessionReady:
-		if err := validatePush(payload); err != nil {
+		if err := validateCapturedPush(payload); err != nil {
 			return HandleResult{}, err
 		}
 		copied := append([]byte(nil), payload...)
@@ -308,18 +317,15 @@ func buildAppStart(appName string) []byte {
 }
 
 func validatePush(payload []byte) error {
-	if len(payload) == 0 {
-		return fmt.Errorf("%w: empty payload", ErrInvalidPush)
-	}
-	if len(payload) > MaxPayloadSize {
-		return fmt.Errorf("%w: got %d bytes, maximum is %d", ErrOversizedFrame, len(payload), MaxPayloadSize)
+	if err := validateCapturedPush(payload); err != nil {
+		return err
 	}
 	minimum := 0
 	switch payload[0] {
 	case PushRawData:
 		minimum = 4
 	case PushLogRXData:
-		minimum = 4
+		minimum = 3
 	case PushNewAdvert:
 		if len(payload) != newAdvertLength {
 			return fmt.Errorf("%w: NEW_ADVERT got %d bytes, want %d", ErrInvalidPush, len(payload), newAdvertLength)
@@ -332,6 +338,16 @@ func validatePush(payload []byte) error {
 	}
 	if len(payload) < minimum {
 		return fmt.Errorf("%w: opcode 0x%02x got %d bytes, need at least %d", ErrInvalidPush, payload[0], len(payload), minimum)
+	}
+	return nil
+}
+
+func validateCapturedPush(payload []byte) error {
+	if len(payload) == 0 {
+		return fmt.Errorf("%w: empty payload", ErrInvalidPush)
+	}
+	if len(payload) > MaxPayloadSize {
+		return fmt.Errorf("%w: got %d bytes, maximum is %d", ErrOversizedFrame, len(payload), MaxPayloadSize)
 	}
 	return nil
 }

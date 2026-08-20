@@ -1,6 +1,7 @@
 package meshcore
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/hex"
 	"os"
@@ -20,9 +21,12 @@ const (
 
 func TestNormalizeSignedLogRXAdvertRetainsRawVerifiedEvidence(t *testing.T) {
 	payload := readNormalizeHexFixture(t, "signed-log-rx-advert-v1.hex")
+	if got := sha256Hex(payload); got != "5f761d58e5785b361f771fc259c3c94f1ec23b5926ae0d4d8e115c44b343b6af" {
+		t.Fatalf("LOG_RX golden payload SHA-256 changed: %s", got)
+	}
 	observedAt := time.Date(2026, 8, 20, 12, 5, 0, 0, time.UTC)
 
-	event := normalizeFixture(t, payload, observedAt, Snapshot{})
+	event := normalizeFixture(t, payload, observedAt, pinnedReadySnapshot())
 	if got := stringField(t, event, "eventType"); got != "device_advertisement" {
 		t.Fatalf("eventType = %q, want device_advertisement", got)
 	}
@@ -86,28 +90,49 @@ func TestNormalizeSignedLogRXAdvertRetainsRawVerifiedEvidence(t *testing.T) {
 	assertContractValid(t, event)
 }
 
-func TestNormalizeInvalidSignedAdvertFailsClosedAndRetainsRaw(t *testing.T) {
-	payload := readNormalizeHexFixture(t, "signed-log-rx-advert-v1.hex")
-	payload[len(payload)-1] ^= 0x01
-	event := normalizeFixture(t, payload, time.Date(2026, 8, 20, 12, 5, 0, 0, time.UTC), Snapshot{})
-
-	if got := stringField(t, event, "eventType"); got != "packet_observed" {
-		t.Fatalf("eventType = %q, want packet_observed", got)
+func TestNormalizeInvalidSignedAdvertMutationsFailClosedAndRetainRaw(t *testing.T) {
+	original := readNormalizeHexFixture(t, "signed-log-rx-advert-v1.hex")
+	publicKey, err := hex.DecodeString("03a107bff3ce10be1d70dd18e74bc09967e4d6309ba50d5f1ddc8664125531b8")
+	if err != nil {
+		t.Fatal(err)
 	}
-	if _, ok := event["subject"]; ok {
-		t.Fatal("invalid signed advert must not gain a subject")
+	keyIndex := bytes.Index(original, publicKey)
+	if keyIndex < 0 {
+		t.Fatal("fixture public key not found")
 	}
-	if _, ok := event["position"]; ok {
-		t.Fatal("invalid signed advert must not gain a position")
+	tests := []struct {
+		name   string
+		mutate func([]byte) []byte
+	}{
+		{name: "coordinate", mutate: func(value []byte) []byte { value[keyIndex+101] ^= 1; return value }},
+		{name: "public key", mutate: func(value []byte) []byte { value[keyIndex] ^= 1; return value }},
+		{name: "signature", mutate: func(value []byte) []byte { value[keyIndex+36] ^= 1; return value }},
+		{name: "truncation", mutate: func(value []byte) []byte { return value[:len(value)-1] }},
+		{name: "payload version", mutate: func(value []byte) []byte { value[3] ^= 0x40; return value }},
 	}
-	if got := mapField(t, event, "authenticity")["state"]; got != "unverified" {
-		t.Fatalf("authenticity state = %#v, want unverified", got)
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			payload := test.mutate(append([]byte(nil), original...))
+			event := normalizeFixture(t, payload, time.Date(2026, 8, 20, 12, 5, 0, 0, time.UTC), pinnedReadySnapshot())
+			if got := stringField(t, event, "eventType"); got != "packet_observed" {
+				t.Fatalf("eventType = %q, want packet_observed", got)
+			}
+			if _, ok := event["subject"]; ok {
+				t.Fatal("invalid signed advert must not gain a subject")
+			}
+			if _, ok := event["position"]; ok {
+				t.Fatal("invalid signed advert must not gain a position")
+			}
+			if got := mapField(t, event, "authenticity")["state"]; got != "unverified" {
+				t.Fatalf("authenticity state = %#v, want unverified", got)
+			}
+			source := mapField(t, event, "source")
+			if source["raw"] != base64.StdEncoding.EncodeToString(payload) || source["rawSha256"] != sha256Hex(payload) {
+				t.Fatal("invalid signed advert did not retain exact raw evidence")
+			}
+			assertContractValid(t, event)
+		})
 	}
-	source := mapField(t, event, "source")
-	if source["raw"] != base64.StdEncoding.EncodeToString(payload) || source["rawSha256"] != sha256Hex(payload) {
-		t.Fatal("invalid signed advert did not retain exact raw evidence")
-	}
-	assertContractValid(t, event)
 }
 
 func TestNormalizeDelegatedAdvertRequiresExactPinnedTrustProfile(t *testing.T) {
@@ -122,6 +147,7 @@ func TestNormalizeDelegatedAdvertRequiresExactPinnedTrustProfile(t *testing.T) {
 	if _, ok := event["radio"]; ok {
 		t.Fatal("delegated NEW_ADVERT must not fabricate receiver-local RF")
 	}
+	assertRFNotObservable(t, event)
 	subject := mapField(t, event, "subject")
 	if got := stringField(t, subject, "protocolNamespace"); got != "ed25519" {
 		t.Fatalf("subject namespace = %q, want ed25519", got)
@@ -172,7 +198,70 @@ func TestNormalizeDelegatedAdvertRequiresExactPinnedTrustProfile(t *testing.T) {
 			if _, ok := actual["subject"]; ok {
 				t.Fatal("mismatched profile must not gain a subject")
 			}
+			assertRFNotObservable(t, actual)
 			assertContractValid(t, actual)
+		})
+	}
+}
+
+func TestNormalizeDelegatedAdvertMalformedIsRawOnlyWithoutRF(t *testing.T) {
+	payload := readNormalizeHexFixture(t, "new-advert-v1.17.1.hex")[:20]
+	event := normalizeFixture(t, payload, time.Date(2026, 8, 20, 12, 5, 0, 0, time.UTC), pinnedReadySnapshot())
+	if event["eventType"] != "packet_observed" || mapField(t, event, "authenticity")["state"] != "unverified" {
+		t.Fatalf("malformed delegated advert was not raw-only: %#v", event)
+	}
+	if _, ok := event["radio"]; ok {
+		t.Fatal("malformed delegated advert fabricated RF")
+	}
+	assertRFNotObservable(t, event)
+	assertContractValid(t, event)
+}
+
+func TestNormalizeUnknownOpcodeIsRawOnly(t *testing.T) {
+	payload := []byte{0x99, 0x01, 0x02}
+	event := normalizeFixture(t, payload, time.Date(2026, 8, 20, 12, 5, 0, 0, time.UTC), pinnedReadySnapshot())
+	if event["eventType"] != "packet_observed" || mapField(t, event, "authenticity")["state"] != "unverified" {
+		t.Fatalf("unknown opcode was not raw-only: %#v", event)
+	}
+	if mapField(t, event, "source")["raw"] != base64.StdEncoding.EncodeToString(payload) {
+		t.Fatal("unknown opcode raw payload changed")
+	}
+	assertRFNotObservable(t, event)
+	assertContractValid(t, event)
+}
+
+func TestNormalizeProfileMismatchRetainsKnownPushesWithoutSemanticEvidence(t *testing.T) {
+	observedAt := time.Date(2026, 8, 20, 12, 5, 0, 0, time.UTC)
+	mismatched := pinnedReadySnapshot()
+	mismatched.Trust.Trusted = false
+	mismatched.Trust.ProfileMatched = false
+	mismatched.Trust.FirmwareBuild = "13 Aug 2026"
+	tests := []struct {
+		name    string
+		payload []byte
+	}{
+		{name: "raw data", payload: []byte{PushRawData, 4, 0x91, 0xff, 1}},
+		{name: "log rx signed advert", payload: readNormalizeHexFixture(t, "signed-log-rx-advert-v1.hex")},
+		{name: "delegated advert", payload: readNormalizeHexFixture(t, "new-advert-v1.17.1.hex")},
+		{name: "control data", payload: []byte{PushControlData, 8, 0x90, 0, 2}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			event := normalizeFixture(t, test.payload, observedAt, mismatched)
+			if event["eventType"] != "packet_observed" || mapField(t, event, "authenticity")["state"] != "unverified" {
+				t.Fatalf("profile-mismatched push was not raw-only: %#v", event)
+			}
+			if _, ok := event["radio"]; ok {
+				t.Fatal("profile-mismatched push fabricated RF")
+			}
+			if _, ok := event["subject"]; ok {
+				t.Fatal("profile-mismatched push gained a subject")
+			}
+			if _, ok := event["position"]; ok {
+				t.Fatal("profile-mismatched push gained a position")
+			}
+			assertRFNotObservable(t, event)
+			assertContractValid(t, event)
 		})
 	}
 }
@@ -189,11 +278,15 @@ func TestNormalizeRawAndControlDataPreserveLocalRFWithoutAttribution(t *testing.
 	}
 	for _, testCase := range tests {
 		t.Run(testCase.name, func(t *testing.T) {
-			event := normalizeFixture(t, testCase.payload, observedAt, Snapshot{})
+			event := normalizeFixture(t, testCase.payload, observedAt, pinnedReadySnapshot())
 			if _, ok := event["subject"]; ok {
 				t.Fatal("raw/control event must not fabricate sender identity")
 			}
 			radio := mapField(t, event, "radio")
+			capabilities := mapField(t, event, "capabilities")
+			if capabilities["receiver_rssi"] != "available" || capabilities["receiver_snr"] != "available" {
+				t.Fatalf("validated RF frame lacks local RF capabilities: %#v", capabilities)
+			}
 			if testCase.wantRoute != "" && radio["routeKind"] != testCase.wantRoute {
 				t.Fatalf("routeKind = %#v, want %q", radio["routeKind"], testCase.wantRoute)
 			}
@@ -207,7 +300,6 @@ func TestNormalizeRejectsMalformedAdapterBoundary(t *testing.T) {
 	binding := testBinding()
 	tests := []protocoladapter.Event{
 		{Adapter: "meshcore", ObservedAt: observedAt, Value: PushFrame{}},
-		{Adapter: "meshcore", ObservedAt: observedAt, Value: PushFrame{Opcode: 0x99, Payload: []byte{0x99}}},
 		{Adapter: "meshcore", ObservedAt: observedAt, Value: PushFrame{Opcode: PushRawData, Payload: []byte{PushControlData, 0, 0, 0}}},
 		{Adapter: "meshcore", ObservedAt: observedAt, Value: PushFrame{Opcode: PushRawData, Payload: append([]byte{PushRawData, 0, 0, 0}, make([]byte, MaxPayloadSize)...)}},
 		{Adapter: "meshcore", ObservedAt: observedAt, Value: "wrong"},
@@ -219,6 +311,14 @@ func TestNormalizeRejectsMalformedAdapterBoundary(t *testing.T) {
 	}
 	if _, err := NormalizeAdapterEvent(protocoladapter.Event{Adapter: "meshcore", ObservedAt: observedAt, Value: PushFrame{Opcode: PushRawData, Payload: []byte{PushRawData, 0, 0, 0}}}, ReceiverBinding{}, Snapshot{}); err == nil {
 		t.Fatal("missing receiver binding unexpectedly normalized")
+	}
+}
+
+func assertRFNotObservable(t *testing.T, event map[string]any) {
+	t.Helper()
+	capabilities := mapField(t, event, "capabilities")
+	if capabilities["receiver_rssi"] != "not_observable" || capabilities["receiver_snr"] != "not_observable" {
+		t.Fatalf("RF capabilities must be not_observable: %#v", capabilities)
 	}
 }
 
@@ -247,13 +347,15 @@ func pinnedReadySnapshot() Snapshot {
 	return Snapshot{
 		State: SessionReady,
 		Trust: TrustProfile{
-			Trusted:         true,
-			ProtocolVersion: ProtocolVersion,
-			FirmwareBuild:   PinnedFirmwareBuild,
-			FirmwareVersion: PinnedFirmwareVersion,
-			Model:           "Fixture Companion Board",
-			AllowlistCommit: PinnedSourceCommit,
-			DeviceAttested:  false,
+			Trusted:            true,
+			ProtocolCompatible: true,
+			ProfileMatched:     true,
+			ProtocolVersion:    ProtocolVersion,
+			FirmwareBuild:      PinnedFirmwareBuild,
+			FirmwareVersion:    PinnedFirmwareVersion,
+			Model:              "Fixture Companion Board",
+			AllowlistCommit:    PinnedSourceCommit,
+			DeviceAttested:     false,
 		},
 	}
 }

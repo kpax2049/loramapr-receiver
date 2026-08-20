@@ -34,7 +34,7 @@ func NormalizeAdapterEvent(event protocoladapter.Event, binding ReceiverBinding,
 	if !ok {
 		return nil, fmt.Errorf("meshcore adapter event has unsupported value %T", event.Value)
 	}
-	if err := validatePush(frame.Payload); err != nil {
+	if err := validateCapturedPush(frame.Payload); err != nil {
 		return nil, err
 	}
 	if frame.Opcode != frame.Payload[0] {
@@ -42,6 +42,12 @@ func NormalizeAdapterEvent(event protocoladapter.Event, binding ReceiverBinding,
 	}
 
 	base := normalizedBase(event, binding, frame)
+	if !semanticProfileMatched(session) {
+		return normalizeCapturedRaw(base, frame.Payload), nil
+	}
+	if err := validatePush(frame.Payload); err != nil {
+		return normalizeCapturedRaw(base, frame.Payload), nil
+	}
 	switch frame.Opcode {
 	case PushLogRXData:
 		return normalizeLogRX(base, frame.Payload, event.ObservedAt), nil
@@ -52,8 +58,19 @@ func NormalizeAdapterEvent(event protocoladapter.Event, binding ReceiverBinding,
 	case PushNewAdvert:
 		return normalizeDelegatedAdvert(base, frame.Payload, event.ObservedAt, session), nil
 	default:
-		return nil, fmt.Errorf("%w: opcode 0x%02x", ErrUnsupportedPush, frame.Opcode)
+		return normalizeCapturedRaw(base, frame.Payload), nil
 	}
+}
+
+func semanticProfileMatched(session Snapshot) bool {
+	return session.State == SessionReady &&
+		session.Trust.ProtocolCompatible &&
+		session.Trust.ProfileMatched &&
+		session.Trust.ProtocolVersion == ProtocolVersion &&
+		session.Trust.FirmwareVersion == PinnedFirmwareVersion &&
+		session.Trust.FirmwareBuild == PinnedFirmwareBuild &&
+		strings.TrimSpace(session.Trust.Model) != "" &&
+		session.Trust.AllowlistCommit == PinnedSourceCommit
 }
 
 func adapterPushFrame(value any) (PushFrame, bool) {
@@ -87,8 +104,8 @@ func normalizedBase(event protocoladapter.Event, binding ReceiverBinding, frame 
 		"protocol":        "meshcore",
 		"receiver":        receiver,
 		"capabilities": map[string]any{
-			"receiver_rssi":   "available",
-			"receiver_snr":    "available",
+			"receiver_rssi":   "not_observable",
+			"receiver_snr":    "not_observable",
 			"sender_identity": "not_observable",
 		},
 		"timeConfidence": "receiver_clock",
@@ -108,7 +125,19 @@ func normalizedBase(event protocoladapter.Event, binding ReceiverBinding, frame 
 	}
 }
 
+func normalizeCapturedRaw(base map[string]any, payload []byte) map[string]any {
+	base["contentKey"] = "meshcore:packet:v1:" + sha256Hex(payload)
+	return base
+}
+
+func markReceiverRFObservable(base map[string]any) {
+	capabilities := base["capabilities"].(map[string]any)
+	capabilities["receiver_rssi"] = "available"
+	capabilities["receiver_snr"] = "available"
+}
+
 func normalizeLogRX(base map[string]any, payload []byte, observedAt time.Time) map[string]any {
+	markReceiverRFObservable(base)
 	onAir := append([]byte(nil), payload[3:]...)
 	base["contentKey"] = "meshcore:log-rx:v1:" + sha256Hex(onAir)
 	packet, packetErr := parseWirePacket(onAir)
@@ -167,6 +196,7 @@ func normalizeLogRX(base map[string]any, payload []byte, observedAt time.Time) m
 }
 
 func normalizeRawData(base map[string]any, payload []byte) map[string]any {
+	markReceiverRFObservable(base)
 	content := append([]byte(nil), payload[4:]...)
 	base["contentKey"] = "meshcore:raw-data:v1:" + sha256Hex(content)
 	base["radio"] = radioEvidence(payload[1], payload[2], wirePacket{}, false)
@@ -174,6 +204,7 @@ func normalizeRawData(base map[string]any, payload []byte) map[string]any {
 }
 
 func normalizeControlData(base map[string]any, payload []byte) map[string]any {
+	markReceiverRFObservable(base)
 	content := append([]byte(nil), payload[4:]...)
 	base["contentKey"] = "meshcore:control-data:v1:" + sha256Hex(content)
 	radio := radioEvidence(payload[1], payload[2], wirePacket{}, false)
@@ -260,13 +291,9 @@ type delegatedAdvert struct {
 }
 
 func trustedDelegatedSession(session Snapshot) bool {
-	return session.State == SessionReady &&
+	return semanticProfileMatched(session) &&
 		session.Trust.Trusted &&
 		!session.Trust.DeviceAttested &&
-		session.Trust.ProtocolVersion == ProtocolVersion &&
-		session.Trust.FirmwareVersion == PinnedFirmwareVersion &&
-		session.Trust.FirmwareBuild == PinnedFirmwareBuild &&
-		strings.TrimSpace(session.Trust.Model) != "" &&
 		session.Trust.AllowlistCommit == PinnedSourceCommit
 }
 

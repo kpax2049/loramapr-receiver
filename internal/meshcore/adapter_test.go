@@ -97,6 +97,39 @@ func TestAdapterReconnectInvalidatesAndReestablishesProfile(t *testing.T) {
 	}
 }
 
+func TestAdapterProfileMismatchStaysConnectedForRawCapture(t *testing.T) {
+	device := existingDeviceFixture(t)
+	adapter := NewAdapter(Config{Transport: "physical_serial", Device: device}, nil, protocoladapter.NewSerialLeaseRegistry())
+	adapter.openFn = func(string) (io.ReadWriteCloser, error) {
+		host, radio := net.Pipe()
+		go serveCompatibleMismatchedCompanion(t, radio, []byte{0x99, 0x01, 0x02})
+		return host, nil
+	}
+	manager, err := protocoladapter.NewManager(adapter)
+	if err != nil {
+		t.Fatal(err)
+	}
+	events, err := manager.Start(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case event := <-events:
+		value := event.Value.(AdapterEvent)
+		if value.Frame.Opcode != 0x99 || value.Session.Trust.Trusted || !value.Session.Trust.ProtocolCompatible || value.Session.Trust.ProfileMatched {
+			t.Fatalf("unexpected raw-compatible event/session: %#v", value)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for mismatched-profile raw event")
+	}
+	if status := adapter.DetailedSnapshot(); status.State != StateConnected || status.Reconnects != 0 {
+		t.Fatalf("profile mismatch forced reconnect: %#v", status)
+	}
+	if err := manager.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestAdapterPreservesLeaseAcrossReconnectAttempts(t *testing.T) {
 	device := existingDeviceFixture(t)
 	leases := protocoladapter.NewSerialLeaseRegistry()
@@ -235,6 +268,40 @@ func serveCompanion(t *testing.T, connection net.Conn, push []byte) {
 		return
 	}
 	_ = writeCompanionFrame(connection, push)
+}
+
+func serveCompatibleMismatchedCompanion(t *testing.T, connection net.Conn, push []byte) {
+	t.Helper()
+	defer connection.Close()
+	query, err := readHostFrame(connection)
+	if err != nil {
+		return
+	}
+	if !bytes.Equal(query, []byte{CommandDeviceQuery, ProtocolVersion}) {
+		t.Errorf("unexpected DEVICE_QUERY: %x", query)
+		return
+	}
+	deviceInfo := readHexFixture(t, "device-info-v1.17.1.hex")
+	clear(deviceInfo[8:20])
+	copy(deviceInfo[8:20], []byte("13 Aug 2026"))
+	if err := writeCompanionFrame(connection, deviceInfo); err != nil {
+		return
+	}
+	appStart, err := readHostFrame(connection)
+	if err != nil {
+		return
+	}
+	if len(appStart) < 8 || appStart[0] != CommandAppStart {
+		t.Errorf("profile mismatch did not continue APP_START: %x", appStart)
+		return
+	}
+	if err := writeCompanionFrame(connection, readHexFixture(t, "self-info-v1.17.1.hex")); err != nil {
+		return
+	}
+	if err := writeCompanionFrame(connection, push); err != nil {
+		return
+	}
+	_, _ = io.Copy(io.Discard, connection)
 }
 
 func readHostFrame(reader io.Reader) ([]byte, error) {

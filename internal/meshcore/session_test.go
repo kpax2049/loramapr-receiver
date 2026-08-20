@@ -57,7 +57,7 @@ func TestCompanionSessionNegotiatesPinnedProfileInOrder(t *testing.T) {
 	}
 
 	ready := session.Snapshot()
-	if ready.State != SessionReady || !ready.Trust.Trusted || ready.Trust.DeviceAttested {
+	if ready.State != SessionReady || !ready.Trust.ProtocolCompatible || !ready.Trust.ProfileMatched || !ready.Trust.Trusted || ready.Trust.DeviceAttested {
 		t.Fatalf("unexpected ready trust state: %#v", ready)
 	}
 	if ready.Trust.FirmwareBuild != PinnedFirmwareBuild || ready.Trust.FirmwareVersion != PinnedFirmwareVersion {
@@ -87,33 +87,50 @@ func TestCompanionSessionRejectsOutOfOrderHandshake(t *testing.T) {
 	}
 }
 
-func TestCompanionSessionRejectsWrongProtocolAndProfile(t *testing.T) {
+func TestCompanionSessionRejectsWrongProtocolBeforeAppStart(t *testing.T) {
 	t.Parallel()
+	frame := readHexFixture(t, "device-info-v1.17.1.hex")
+	frame[1] = ProtocolVersion - 1
+	session := NewCompanionSession("")
+	session.Begin()
+	result, err := session.Handle(frame)
+	if !errors.Is(err, ErrUnsupportedProtocol) || len(result.Outbound) != 0 {
+		t.Fatalf("wrong protocol must fail before APP_START: result=%#v err=%v", result, err)
+	}
+	snapshot := session.Snapshot()
+	if snapshot.Trust.ProtocolCompatible || snapshot.Trust.ProfileMatched || snapshot.Trust.Trusted {
+		t.Fatalf("wrong protocol gained compatibility/trust: %#v", snapshot.Trust)
+	}
+}
 
+func TestCompanionSessionProfileMismatchContinuesRawCompatibleHandshake(t *testing.T) {
+	t.Parallel()
 	valid := readHexFixture(t, "device-info-v1.17.1.hex")
 	tests := []struct {
 		name string
 		edit func([]byte)
-		want error
 	}{
-		{name: "wrong protocol", edit: func(value []byte) { value[1] = ProtocolVersion - 1 }, want: ErrUnsupportedProtocol},
-		{name: "wrong build", edit: func(value []byte) { copy(value[8:20], []byte("13 Aug 2026\x00")) }, want: ErrTrustProfileMismatch},
-		{name: "wrong version", edit: func(value []byte) { copy(value[60:80], []byte("v1.17.0\x00")) }, want: ErrTrustProfileMismatch},
-		{name: "blank model", edit: func(value []byte) { clear(value[20:60]) }, want: ErrTrustProfileMismatch},
+		{name: "wrong build", edit: func(value []byte) { clear(value[8:20]); copy(value[8:20], []byte("13 Aug 2026")) }},
+		{name: "wrong version", edit: func(value []byte) { clear(value[60:80]); copy(value[60:80], []byte("v1.17.0")) }},
+		{name: "blank model", edit: func(value []byte) { clear(value[20:60]) }},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			t.Parallel()
 			frame := append([]byte(nil), valid...)
 			test.edit(frame)
 			session := NewCompanionSession("")
 			session.Begin()
-			_, err := session.Handle(frame)
-			if !errors.Is(err, test.want) {
-				t.Fatalf("expected %v, got %v", test.want, err)
+			result, err := session.Handle(frame)
+			if err != nil || len(result.Outbound) == 0 || result.Outbound[0] != CommandAppStart {
+				t.Fatalf("profile mismatch did not continue APP_START: result=%#v err=%v", result, err)
 			}
-			if session.Snapshot().Trust.Trusted {
-				t.Fatal("profile mismatch must never establish trust")
+			negotiating := session.Snapshot()
+			if !negotiating.Trust.ProtocolCompatible || negotiating.Trust.ProfileMatched || negotiating.Trust.Trusted {
+				t.Fatalf("unexpected compatibility/trust axes: %#v", negotiating.Trust)
+			}
+			ready, err := session.Handle(readHexFixture(t, "self-info-v1.17.1.hex"))
+			if err != nil || !ready.Ready || session.Snapshot().Trust.Trusted {
+				t.Fatalf("profile mismatch did not reach raw-compatible ready state: result=%#v snapshot=%#v err=%v", ready, session.Snapshot(), err)
 			}
 		})
 	}
@@ -172,26 +189,38 @@ func TestCompanionSessionRejectsUnsupportedAndMalformedPushFrames(t *testing.T) 
 	tests := []struct {
 		name  string
 		frame []byte
-		want  error
 	}{
-		{name: "unsupported", frame: []byte{0x80}, want: ErrUnsupportedPush},
-		{name: "raw too short", frame: []byte{PushRawData, 0, 0}, want: ErrInvalidPush},
-		{name: "log missing raw packet", frame: []byte{PushLogRXData, 0, 0}, want: ErrInvalidPush},
-		{name: "advert too short", frame: []byte{PushNewAdvert, 0}, want: ErrInvalidPush},
-		{name: "control too short", frame: []byte{PushControlData, 0, 0}, want: ErrInvalidPush},
+		{name: "unsupported", frame: []byte{0x80}},
+		{name: "raw too short", frame: []byte{PushRawData, 0, 0}},
+		{name: "advert too short", frame: []byte{PushNewAdvert, 0}},
+		{name: "control too short", frame: []byte{PushControlData, 0, 0}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			session := readySession(t)
-			_, err := session.Handle(test.frame)
-			if !errors.Is(err, test.want) {
-				t.Fatalf("expected %v, got %v", test.want, err)
+			result, err := session.Handle(test.frame)
+			if err != nil || result.Push == nil || !bytes.Equal(result.Push.Payload, test.frame) {
+				t.Fatalf("bounded raw push was not retained: result=%#v err=%v", result, err)
 			}
 			if !session.Snapshot().Trust.Trusted {
 				t.Fatal("unsupported post-handshake data must not mutate negotiated trust")
 			}
 		})
+	}
+}
+
+func TestCompanionSessionUnknownOpcodeDoesNotDisconnect(t *testing.T) {
+	t.Parallel()
+	session := readySession(t)
+	unknown := []byte{0x99, 0x01, 0x02}
+	result, err := session.Handle(unknown)
+	if err != nil || result.Push == nil || !bytes.Equal(result.Push.Payload, unknown) {
+		t.Fatalf("unknown push not captured: result=%#v err=%v", result, err)
+	}
+	result, err = session.Handle([]byte{PushLogRXData, 0, 0})
+	if err != nil || result.Push == nil || session.Snapshot().State != SessionReady {
+		t.Fatalf("unknown opcode disrupted ready session: result=%#v snapshot=%#v err=%v", result, session.Snapshot(), err)
 	}
 }
 
