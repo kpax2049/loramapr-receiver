@@ -308,6 +308,12 @@ func buildAppStart(appName string) []byte {
 }
 
 func validatePush(payload []byte) error {
+	if len(payload) == 0 {
+		return fmt.Errorf("%w: empty payload", ErrInvalidPush)
+	}
+	if len(payload) > MaxPayloadSize {
+		return fmt.Errorf("%w: got %d bytes, maximum is %d", ErrOversizedFrame, len(payload), MaxPayloadSize)
+	}
 	minimum := 0
 	switch payload[0] {
 	case PushRawData:

@@ -28,8 +28,17 @@ and node name `Fixture Node`. Decoded-byte SHA-256:
 position and timestamps are deterministic test values. The Companion push is
 evidence that pinned firmware already accepted an advert; it does not contain
 the original on-air signature and is not itself device attestation.
+
+`signed-log-rx-advert-v1.hex` is a source-derived `PUSH_CODE_LOG_RX_DATA`
+control payload containing a complete version-1 direct-route ADVERT packet.
+It is generated with Go/Node-compatible RFC 8032 Ed25519 using the fixed
+32-byte seed `000102...1f`, timestamp `2026-08-20T12:00:00Z`, direct path
+hashes `aa,bb`, signed E6 coordinates, and UTF-8 name `Fixture Node`. The
+signature covers the exact upstream `Mesh.cpp` bytes: public key, four
+little-endian timestamp bytes, and application data. This deterministic key is
+test-only and must never be used as an operational identity.
 Decoded-byte SHA-256:
-`38dcdca8bb70ebc2e05641fff38f4b4d4609262b816bf4a95329850c34ee363d`.
+`5f761d58e5785b361f771fc259c3c94f1ec23b5926ae0d4d8e115c44b343b6af`.
 
 The generation recipe is the field order and little-endian integer encoding in
 the pinned `MyMesh.cpp` response writers, with fixed strings NUL-padded to their
