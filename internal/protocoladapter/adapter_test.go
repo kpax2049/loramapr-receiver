@@ -3,6 +3,8 @@ package protocoladapter
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -80,6 +82,20 @@ func TestManagerRejectsDuplicateNames(t *testing.T) {
 	}
 }
 
+func TestTryPublishFailsFastWhenManagerBufferIsFull(t *testing.T) {
+	t.Parallel()
+
+	sink := &channelSink{
+		ctx: context.Background(), adapter: "meshcore-companion", events: make(chan Event, 1),
+	}
+	if err := TryPublish(sink, Event{Value: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if err := TryPublish(sink, Event{Value: 2}); !errors.Is(err, ErrEventBufferFull) {
+		t.Fatalf("expected buffer-full error, got %v", err)
+	}
+}
+
 func TestSerialLeaseRegistryPreventsContentionAndReleases(t *testing.T) {
 	registry := NewSerialLeaseRegistry()
 	release, err := registry.Acquire(" /dev/ttyUSB0 ", "meshtastic")
@@ -99,5 +115,28 @@ func TestSerialLeaseRegistryPreventsContentionAndReleases(t *testing.T) {
 	}
 	if _, err := registry.Acquire("/dev/ttyUSB0", "meshcore-companion"); err != nil {
 		t.Fatalf("reacquire released lease: %v", err)
+	}
+}
+
+func TestSerialLeaseRegistryCanonicalizesSymlinkAliases(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	device := filepath.Join(dir, "ttyACM0")
+	if err := os.WriteFile(device, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	alias := filepath.Join(dir, "by-id-radio")
+	if err := os.Symlink(device, alias); err != nil {
+		t.Skipf("symlink unsupported: %v", err)
+	}
+	registry := NewSerialLeaseRegistry()
+	release, err := registry.Acquire(alias, "meshtastic")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	if _, err := registry.Acquire(device, "meshcore-companion"); err == nil {
+		t.Fatal("expected canonical device alias lease conflict")
 	}
 }

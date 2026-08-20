@@ -12,6 +12,8 @@ import (
 
 const defaultEventBuffer = 128
 
+var ErrEventBufferFull = errors.New("protocol adapter event buffer is full")
+
 type Event struct {
 	Adapter    string
 	Value      any
@@ -30,6 +32,23 @@ type AdapterSnapshot struct {
 
 type AdapterSink interface {
 	Publish(Event) error
+}
+
+type NonBlockingAdapterSink interface {
+	TryPublish(Event) error
+}
+
+// TryPublish submits without waiting for a shared runtime consumer. Physical
+// radio read loops use it so local disk/network backpressure cannot stall the
+// serial transport. Manager-owned sinks always implement this path.
+func TryPublish(sink AdapterSink, event Event) error {
+	if sink == nil {
+		return errors.New("protocol adapter sink is nil")
+	}
+	if nonBlocking, ok := sink.(NonBlockingAdapterSink); ok {
+		return nonBlocking.TryPublish(event)
+	}
+	return errors.New("protocol adapter sink has no non-blocking publish path")
 }
 
 type RadioAdapter interface {
@@ -168,16 +187,33 @@ type channelSink struct {
 }
 
 func (s *channelSink) Publish(event Event) error {
-	if strings.TrimSpace(event.Adapter) == "" {
-		event.Adapter = s.adapter
-	}
-	if event.ObservedAt.IsZero() {
-		event.ObservedAt = time.Now().UTC()
-	}
+	event = s.normalize(event)
 	select {
 	case <-s.ctx.Done():
 		return s.ctx.Err()
 	case s.events <- event:
 		return nil
 	}
+}
+
+func (s *channelSink) TryPublish(event Event) error {
+	event = s.normalize(event)
+	select {
+	case <-s.ctx.Done():
+		return s.ctx.Err()
+	case s.events <- event:
+		return nil
+	default:
+		return ErrEventBufferFull
+	}
+}
+
+func (s *channelSink) normalize(event Event) Event {
+	if strings.TrimSpace(event.Adapter) == "" {
+		event.Adapter = s.adapter
+	}
+	if event.ObservedAt.IsZero() {
+		event.ObservedAt = time.Now().UTC()
+	}
+	return event
 }
