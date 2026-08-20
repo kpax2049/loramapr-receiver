@@ -108,6 +108,7 @@ type Container struct {
 	MeshCore        *meshcore.Adapter
 	Adapters        *protocoladapter.Manager
 	SerialLeases    *protocoladapter.SerialLeaseRegistry
+	SerialReleases  []func()
 	HomeAutoSession *homeautosession.Module
 	AdapterEvents   <-chan protocoladapter.Event
 	OutboxStore     *outbox.Store
@@ -236,8 +237,12 @@ func New(cfg config.Config, logger *slog.Logger) (*Service, error) {
 
 	cloud := cloudclient.NewHTTPClient(cfg.Cloud.BaseURL, 10*time.Second)
 	serialLeases := protocoladapter.NewSerialLeaseRegistry()
+	serialReleases, err := reserveConfiguredSerialPaths(cfg, serialLeases)
+	if err != nil {
+		return nil, err
+	}
 	mesh := meshtastic.NewAdapterWithLeases(cfg.Meshtastic, logger.With("component", "meshtastic"), serialLeases)
-	radioAdapters := []protocoladapter.RadioAdapter{newMeshtasticRadioAdapter(mesh)}
+	radioAdapters := make([]protocoladapter.RadioAdapter, 0, 2)
 	var meshCoreAdapter *meshcore.Adapter
 	meshCoreEnabled := strings.EqualFold(strings.TrimSpace(cfg.MeshCore.Transport), "physical_serial")
 	if meshCoreEnabled {
@@ -247,8 +252,10 @@ func New(cfg config.Config, logger *slog.Logger) (*Service, error) {
 		}, logger.With("component", meshcore.AdapterName), serialLeases)
 		radioAdapters = append(radioAdapters, meshCoreAdapter)
 	}
+	radioAdapters = append(radioAdapters, newMeshtasticRadioAdapter(mesh))
 	adapters, err := protocoladapter.NewManager(radioAdapters...)
 	if err != nil {
+		releaseSerialReservations(serialReleases)
 		return nil, fmt.Errorf("configure protocol adapters: %w", err)
 	}
 
@@ -258,11 +265,13 @@ func New(cfg config.Config, logger *slog.Logger) (*Service, error) {
 	if meshCoreEnabled {
 		outboxStore, err = outbox.Open(outbox.Config{Path: cfg.Paths.OutboxFile})
 		if err != nil {
+			releaseSerialReservations(serialReleases)
 			return nil, fmt.Errorf("open normalized event outbox: %w", err)
 		}
 		outboxEngine, err = outbox.NewEngine(outboxStore, outbox.EngineConfig{})
 		if err != nil {
 			_ = outboxStore.Close()
+			releaseSerialReservations(serialReleases)
 			return nil, fmt.Errorf("start normalized event outbox: %w", err)
 		}
 		normalizedDispatcher = &receiverevents.Dispatcher{Outbox: outboxEngine, Client: cloud}
@@ -280,18 +289,19 @@ func New(cfg config.Config, logger *slog.Logger) (*Service, error) {
 	statusModel.SetComponent("ingest", "idle", "no queued packets")
 
 	svc.container = &Container{
-		Config:       cfg,
-		Logger:       logger.With("component", "runtime"),
-		State:        store,
-		Status:       statusModel,
-		Cloud:        cloud,
-		Meshtastic:   mesh,
-		MeshCore:     meshCoreAdapter,
-		Adapters:     adapters,
-		SerialLeases: serialLeases,
-		OutboxStore:  outboxStore,
-		OutboxEngine: outboxEngine,
-		Normalized:   normalizedDispatcher,
+		Config:         cfg,
+		Logger:         logger.With("component", "runtime"),
+		State:          store,
+		Status:         statusModel,
+		Cloud:          cloud,
+		Meshtastic:     mesh,
+		MeshCore:       meshCoreAdapter,
+		Adapters:       adapters,
+		SerialLeases:   serialLeases,
+		SerialReleases: serialReleases,
+		OutboxStore:    outboxStore,
+		OutboxEngine:   outboxEngine,
+		Normalized:     normalizedDispatcher,
 		Pairing: pairing.NewManager(
 			store,
 			statusModel,
@@ -350,6 +360,7 @@ func (s *Service) Run(ctx context.Context) (runErr error) {
 
 	adapterEvents, err := c.Adapters.Start(ctx)
 	if err != nil {
+		releaseSerialReservations(c.SerialReleases)
 		return errors.Join(err, s.shutdownNormalizedOutbox())
 	}
 	c.AdapterEvents = adapterEvents
@@ -358,6 +369,7 @@ func (s *Service) Run(ctx context.Context) (runErr error) {
 			c.Logger.Warn("protocol adapter shutdown failed", "err", err)
 			runErr = errors.Join(runErr, err)
 		}
+		releaseSerialReservations(c.SerialReleases)
 		if err := s.shutdownNormalizedOutbox(); err != nil {
 			c.Logger.Error("normalized outbox shutdown failed", "err", err)
 			runErr = errors.Join(runErr, err)
@@ -957,6 +969,10 @@ func (s *Service) refreshNormalizedOutboxStatus() {
 	}
 	if stats.Recovered {
 		stateName = "recovered"
+	}
+	if stats.MaintenanceErrorCode != "" {
+		c.Status.SetComponent("normalized_outbox", "degraded", stats.MaintenanceErrorCode+": "+stats.MaintenanceError)
+		return
 	}
 	messageSuffix := ""
 	if s.normalizedPaused {

@@ -6,12 +6,13 @@ import (
 )
 
 const (
-	SchemaVersion                    = 1
-	DefaultMaxEvents                 = 10_000
-	DefaultMaxBytes            int64 = 64 * 1024 * 1024
-	DefaultStageMaxEvents            = 256
-	DefaultStageMaxBytes       int64 = 2 * 1024 * 1024
-	DefaultQuarantineRetention       = 30 * 24 * time.Hour
+	SchemaVersion                        = 1
+	DefaultMaxEvents                     = 10_000
+	DefaultMaxBytes                int64 = 64 * 1024 * 1024
+	DefaultStageMaxEvents                = 256
+	DefaultStageMaxBytes           int64 = 2 * 1024 * 1024
+	DefaultQuarantineRetention           = 30 * 24 * time.Hour
+	DefaultQuarantinePruneInterval       = time.Hour
 )
 
 type State string
@@ -23,10 +24,11 @@ const (
 )
 
 var (
-	ErrDeliveryExists   = errors.New("outbox delivery already exists")
-	ErrDeliveryNotFound = errors.New("outbox delivery not found")
-	ErrOutboxFull       = errors.New("outbox storage bound reached")
-	ErrUnknownSchema    = errors.New("outbox schema version is unsupported")
+	ErrDeliveryExists    = errors.New("outbox delivery already exists")
+	ErrDeliveryNotFound  = errors.New("outbox delivery not found")
+	ErrOutboxFull        = errors.New("outbox storage bound reached")
+	ErrUnknownSchema     = errors.New("outbox schema version is unsupported")
+	ErrOutboxPruneFailed = errors.New("outbox_prune_failed")
 )
 
 type Config struct {
@@ -78,11 +80,13 @@ type BindingReconcileResult struct {
 }
 
 type Stats struct {
-	PendingCount     int
-	QuarantinedCount int
-	TotalCount       int
-	UsedBytes        int64
-	OldestPendingAt  *time.Time
-	Recovered        bool
-	RecoveryCode     string
+	PendingCount         int
+	QuarantinedCount     int
+	TotalCount           int
+	UsedBytes            int64
+	OldestPendingAt      *time.Time
+	Recovered            bool
+	RecoveryCode         string
+	MaintenanceErrorCode string
+	MaintenanceError     string
 }

@@ -1,7 +1,9 @@
 package protocoladapter
 
 import (
+	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -29,6 +31,9 @@ func (r *SerialLeaseRegistry) Acquire(path string, adapter string) (func(), erro
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if owner := r.owners[path]; owner != "" {
+		if owner == adapter {
+			return func() {}, nil
+		}
 		return nil, fmt.Errorf("serial device %q is leased by %s", path, owner)
 	}
 	r.owners[path] = adapter
@@ -72,9 +77,30 @@ func normalizeDevicePath(path string) string {
 	if path == "" {
 		return ""
 	}
-	path = filepath.Clean(path)
-	if resolved, err := filepath.EvalSymlinks(path); err == nil {
-		return filepath.Clean(resolved)
+	absolute, err := filepath.Abs(filepath.Clean(path))
+	if err != nil {
+		return filepath.Clean(path)
 	}
-	return path
+	current := absolute
+	remaining := make([]string, 0)
+	for {
+		if _, err := os.Lstat(current); err == nil {
+			resolved, resolveErr := filepath.EvalSymlinks(current)
+			if resolveErr != nil {
+				return absolute
+			}
+			for index := len(remaining) - 1; index >= 0; index-- {
+				resolved = filepath.Join(resolved, remaining[index])
+			}
+			return filepath.Clean(resolved)
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return absolute
+		}
+		parent := filepath.Dir(current)
+		if parent == current {
+			return absolute
+		}
+		remaining = append(remaining, filepath.Base(current))
+		current = parent
+	}
 }

@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -124,6 +125,59 @@ func TestLoadValidatesMeshCorePhysicalSerialConfig(t *testing.T) {
 	}
 	if _, err := Load(path); err == nil {
 		t.Fatal("expected validation error for unsupported MeshCore transport")
+	}
+}
+
+func TestValidateRequiresExplicitMeshCorePhysicalSerialDevice(t *testing.T) {
+	t.Parallel()
+	cfg := Default()
+	cfg.MeshCore.Transport = "physical_serial"
+	cfg.MeshCore.Device = ""
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "meshcore.device is required") {
+		t.Fatalf("expected explicit MeshCore device validation, got %v", err)
+	}
+}
+
+func TestValidateRejectsStateOutboxPathAliases(t *testing.T) {
+	dir := t.TempDir()
+	realDir := filepath.Join(dir, "real")
+	if err := os.Mkdir(realDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	aliasDir := filepath.Join(dir, "alias")
+	if err := os.Symlink(realDir, aliasDir); err != nil {
+		t.Skipf("symlink unsupported: %v", err)
+	}
+	existing := filepath.Join(realDir, "existing.db")
+	if err := os.WriteFile(existing, []byte("fixture"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	hardlink := filepath.Join(realDir, "hardlink.db")
+	if err := os.Link(existing, hardlink); err != nil {
+		t.Skipf("hardlink unsupported: %v", err)
+	}
+
+	tests := []struct {
+		name   string
+		state  string
+		outbox string
+	}{
+		{name: "exact", state: existing, outbox: existing},
+		{name: "relative", state: existing, outbox: filepath.Join(realDir, ".", "existing.db")},
+		{name: "symlink ancestor", state: existing, outbox: filepath.Join(aliasDir, "existing.db")},
+		{name: "hardlink", state: existing, outbox: hardlink},
+		{name: "nonexisting descendants", state: filepath.Join(realDir, "future", "..", "same.db"), outbox: filepath.Join(aliasDir, "same.db")},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			cfg := Default()
+			cfg.Paths.StateFile = test.state
+			cfg.Paths.OutboxFile = test.outbox
+			err := cfg.Validate()
+			if err == nil || !strings.Contains(err.Error(), StateOutboxPathConflictCode) {
+				t.Fatalf("expected %s, got %v", StateOutboxPathConflictCode, err)
+			}
+		})
 	}
 }
 

@@ -29,11 +29,13 @@ var (
 )
 
 type Store struct {
-	mu           sync.RWMutex
-	db           *bolt.DB
-	cfg          Config
-	recovered    bool
-	recoveryCode string
+	mu                   sync.RWMutex
+	db                   *bolt.DB
+	cfg                  Config
+	recovered            bool
+	recoveryCode         string
+	maintenanceErrorCode string
+	maintenanceError     string
 }
 
 func Open(cfg Config) (*Store, error) {
@@ -68,6 +70,7 @@ func Open(cfg Config) (*Store, error) {
 		_ = db.Close()
 		return nil, err
 	}
+	_, _ = store.PruneQuarantine(cfg.Now())
 	return store, nil
 }
 
@@ -87,7 +90,7 @@ func (s *Store) Enqueue(input Delivery) error {
 		return errors.New("delivery id and envelope bytes are required")
 	}
 	now := s.cfg.Now().UTC()
-	return s.update(func(tx *bolt.Tx) error {
+	enqueue := func(tx *bolt.Tx) error {
 		deliveries := tx.Bucket(deliveriesBucket)
 		quarantine := tx.Bucket(quarantineBucket)
 		key := []byte(input.DeliveryID)
@@ -126,7 +129,15 @@ func (s *Store) Enqueue(input Delivery) error {
 			return err
 		}
 		return writeCounters(tx, count+1, used+int64(len(encoded)))
-	})
+	}
+	err := s.update(enqueue)
+	if !errors.Is(err, ErrOutboxFull) {
+		return err
+	}
+	if _, pruneErr := s.PruneQuarantine(now); pruneErr != nil {
+		return fmt.Errorf("%w: %v", ErrOutboxPruneFailed, pruneErr)
+	}
+	return s.update(enqueue)
 }
 
 func (s *Store) NextDue(now time.Time) (*Delivery, error) {
@@ -402,32 +413,50 @@ func (s *Store) Get(deliveryID string) (*Delivery, error) {
 func (s *Store) PruneQuarantine(now time.Time) (int, error) {
 	removed := 0
 	err := s.update(func(tx *bolt.Tx) error {
-		bucket := tx.Bucket(quarantineBucket)
-		cursor := bucket.Cursor()
-		count, used := readCounters(tx)
-		cutoff := now.UTC().Add(-s.cfg.QuarantineRetention)
-		for key, raw := cursor.First(); key != nil; key, raw = cursor.Next() {
-			record, err := decodeDelivery(raw)
-			if err != nil {
-				return err
-			}
-			if record.QuarantinedAt.IsZero() || record.QuarantinedAt.After(cutoff) {
-				continue
-			}
-			if err := cursor.Delete(); err != nil {
-				return err
-			}
-			count--
-			used -= int64(len(raw))
-			removed++
-		}
-		return writeCounters(tx, count, used)
+		var err error
+		removed, err = pruneQuarantineTx(tx, now, s.cfg.QuarantineRetention)
+		return err
 	})
+	s.mu.Lock()
+	if err != nil {
+		s.maintenanceErrorCode = "outbox_prune_failed"
+		s.maintenanceError = err.Error()
+	} else {
+		s.maintenanceErrorCode = ""
+		s.maintenanceError = ""
+	}
+	s.mu.Unlock()
 	return removed, err
 }
 
+func pruneQuarantineTx(tx *bolt.Tx, now time.Time, retention time.Duration) (int, error) {
+	removed := 0
+	bucket := tx.Bucket(quarantineBucket)
+	cursor := bucket.Cursor()
+	count, used := readCounters(tx)
+	cutoff := now.UTC().Add(-retention)
+	for key, raw := cursor.First(); key != nil; key, raw = cursor.Next() {
+		record, err := decodeDelivery(raw)
+		if err != nil {
+			return 0, err
+		}
+		if record.QuarantinedAt.IsZero() || record.QuarantinedAt.After(cutoff) {
+			continue
+		}
+		if err := cursor.Delete(); err != nil {
+			return 0, err
+		}
+		count--
+		used -= int64(len(raw))
+		removed++
+	}
+	return removed, writeCounters(tx, count, used)
+}
+
 func (s *Store) Stats() (Stats, error) {
-	result := Stats{Recovered: s.recovered, RecoveryCode: s.recoveryCode}
+	s.mu.RLock()
+	result := Stats{Recovered: s.recovered, RecoveryCode: s.recoveryCode, MaintenanceErrorCode: s.maintenanceErrorCode, MaintenanceError: s.maintenanceError}
+	s.mu.RUnlock()
 	err := s.view(func(tx *bolt.Tx) error {
 		result.TotalCount, result.UsedBytes = readCounters(tx)
 		result.PendingCount = tx.Bucket(deliveriesBucket).Stats().KeyN
@@ -612,6 +641,11 @@ func recoverCorrupt(cfg Config, cause error) (*Store, error) {
 		_ = db.Close()
 		return nil, err
 	}
+	if err := store.resetInflight(); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	_, _ = store.PruneQuarantine(cfg.Now())
 	return store, nil
 }
 

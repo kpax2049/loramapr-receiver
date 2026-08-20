@@ -288,6 +288,9 @@ func (c Config) Validate() error {
 	if strings.TrimSpace(c.Paths.OutboxFile) == "" {
 		return errors.New("paths.outbox_file is required")
 	}
+	if err := validateDistinctStateAndOutboxPaths(c.Paths.StateFile, c.Paths.OutboxFile); err != nil {
+		return err
+	}
 
 	if _, _, err := net.SplitHostPort(c.Portal.BindAddress); err != nil {
 		return fmt.Errorf("invalid portal.bind_address %q: %w", c.Portal.BindAddress, err)
@@ -317,7 +320,11 @@ func (c Config) Validate() error {
 		return fmt.Errorf("invalid meshtastic.transport %q", c.Meshtastic.Transport)
 	}
 	switch strings.ToLower(strings.TrimSpace(c.MeshCore.Transport)) {
-	case "physical_serial", "disabled":
+	case "physical_serial":
+		if strings.TrimSpace(c.MeshCore.Device) == "" {
+			return errors.New("meshcore.device is required when meshcore.transport is physical_serial")
+		}
+	case "disabled":
 	default:
 		return fmt.Errorf("invalid meshcore.transport %q", c.MeshCore.Transport)
 	}

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -138,5 +139,39 @@ func TestSerialLeaseRegistryCanonicalizesSymlinkAliases(t *testing.T) {
 	defer release()
 	if _, err := registry.Acquire(device, "meshcore-companion"); err == nil {
 		t.Fatal("expected canonical device alias lease conflict")
+	}
+}
+
+func TestSerialLeaseRegistryConcurrentContentionHasSingleOwner(t *testing.T) {
+	registry := NewSerialLeaseRegistry()
+	path := filepath.Join(t.TempDir(), "radio")
+	start := make(chan struct{})
+	type result struct {
+		release func()
+		err     error
+	}
+	results := make(chan result, 2)
+	var workers sync.WaitGroup
+	for _, owner := range []string{"meshtastic", "meshcore-companion"} {
+		workers.Add(1)
+		go func(owner string) {
+			defer workers.Done()
+			<-start
+			release, err := registry.Acquire(path, owner)
+			results <- result{release: release, err: err}
+		}(owner)
+	}
+	close(start)
+	workers.Wait()
+	close(results)
+	successes := 0
+	for item := range results {
+		if item.err == nil {
+			successes++
+			item.release()
+		}
+	}
+	if successes != 1 {
+		t.Fatalf("expected exactly one concurrent lease owner, got %d", successes)
 	}
 }

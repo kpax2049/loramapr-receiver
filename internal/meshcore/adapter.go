@@ -7,9 +7,6 @@ import (
 	"io"
 	"log/slog"
 	"os"
-	"path/filepath"
-	goruntime "runtime"
-	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -136,6 +133,16 @@ func (a *Adapter) Start(ctx context.Context, sink protocoladapter.AdapterSink) e
 }
 
 func (a *Adapter) run(ctx context.Context, sink protocoladapter.AdapterSink) error {
+	release, err := a.acquireLease(a.cfg.Device)
+	if err != nil {
+		a.setStatus(func(status *AdapterStatus) {
+			status.State = StateNotPresent
+			status.LastError = fmt.Sprintf("device_conflict: %v", err)
+		})
+		<-ctx.Done()
+		return nil
+	}
+	defer release()
 	for ctx.Err() == nil {
 		detection, err := a.detectFn(a.cfg)
 		if err != nil {
@@ -167,20 +174,8 @@ func (a *Adapter) run(ctx context.Context, sink protocoladapter.AdapterSink) err
 			status.Candidates = append([]string(nil), candidates...)
 			status.LastError = ""
 		})
-		release, err := a.acquireLease(device)
-		if err != nil {
-			a.setStatus(func(status *AdapterStatus) {
-				status.State = StateNotPresent
-				status.LastError = fmt.Sprintf("device_conflict: %v", err)
-			})
-			if !wait(ctx, a.reconnectDelay) {
-				break
-			}
-			continue
-		}
 		stream, err := a.openFn(device)
 		if err != nil {
-			release()
 			a.degrade(fmt.Errorf("open MeshCore serial device %s: %w", device, err))
 			if !wait(ctx, a.reconnectDelay) {
 				break
@@ -192,7 +187,6 @@ func (a *Adapter) run(ctx context.Context, sink protocoladapter.AdapterSink) err
 		err = a.consume(ctx, stream, device, sink)
 		_ = stream.Close()
 		a.clearStream(stream)
-		release()
 		if ctx.Err() != nil {
 			break
 		}
@@ -336,7 +330,7 @@ func (a *Adapter) Close() error {
 func (a *Adapter) selectDevice(detection detectionResult) (string, []string, bool) {
 	candidates := append([]string(nil), detection.Candidates...)
 	if strings.TrimSpace(a.cfg.Device) != "" {
-		return detection.Device, candidates, detection.Device == "" && len(candidates) > 0 && a.isLeased(candidates[0])
+		return detection.Device, candidates, false
 	}
 	if a.leases == nil {
 		if detection.Device != "" {
@@ -356,14 +350,6 @@ func (a *Adapter) acquireLease(device string) (func(), error) {
 		return func() {}, nil
 	}
 	return a.leases.Acquire(device, AdapterName)
-}
-
-func (a *Adapter) isLeased(device string) bool {
-	if a.leases == nil {
-		return false
-	}
-	_, leased := a.leases.Owner(device)
-	return leased
 }
 
 func (a *Adapter) setStream(stream io.ReadWriteCloser) {
@@ -399,49 +385,13 @@ func (a *Adapter) degrade(err error) {
 
 func detectDevice(cfg Config) (detectionResult, error) {
 	configured := strings.TrimSpace(cfg.Device)
-	if configured != "" {
-		if fileExists(configured) {
-			return detectionResult{Device: configured, Candidates: []string{configured}}, nil
-		}
-		return detectionResult{Candidates: []string{configured}}, nil
+	if configured == "" {
+		return detectionResult{}, errors.New("meshcore physical serial requires an explicit device path")
 	}
-	candidates := discoverCandidates(serialPatterns(goruntime.GOOS))
-	if len(candidates) == 0 {
-		return detectionResult{}, nil
+	if fileExists(configured) {
+		return detectionResult{Device: configured, Candidates: []string{configured}}, nil
 	}
-	return detectionResult{Device: candidates[0], Candidates: candidates}, nil
-}
-
-func discoverCandidates(patterns []string) []string {
-	set := map[string]struct{}{}
-	for _, pattern := range patterns {
-		matches, err := filepath.Glob(pattern)
-		if err != nil {
-			continue
-		}
-		for _, match := range matches {
-			if fileExists(match) {
-				set[match] = struct{}{}
-			}
-		}
-	}
-	result := make([]string, 0, len(set))
-	for candidate := range set {
-		result = append(result, candidate)
-	}
-	sort.Strings(result)
-	return result
-}
-
-func serialPatterns(goos string) []string {
-	switch goos {
-	case "linux":
-		return []string{"/dev/serial/by-id/*", "/dev/ttyACM*", "/dev/ttyUSB*"}
-	case "darwin":
-		return []string{"/dev/cu.usbmodem*", "/dev/cu.usbserial*", "/dev/tty.usbmodem*", "/dev/tty.usbserial*"}
-	default:
-		return nil
-	}
+	return detectionResult{Candidates: []string{configured}}, nil
 }
 
 func fileExists(path string) bool {

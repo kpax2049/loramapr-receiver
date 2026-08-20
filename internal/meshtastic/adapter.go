@@ -261,6 +261,7 @@ func (s *Service) run(ctx context.Context, out chan Event) {
 			}
 			continue
 		}
+		detection = s.filterLeasedAutoDetection(detection)
 
 		if detection.Device == "" {
 			s.setSnapshot(func(snap *Snapshot) {
@@ -324,6 +325,24 @@ func (s *Service) run(ctx context.Context, out chan Event) {
 			return
 		}
 	}
+}
+
+func (s *Service) filterLeasedAutoDetection(detection DetectionResult) DetectionResult {
+	if s.serialLeases == nil || strings.TrimSpace(s.cfg.Device) != "" {
+		return detection
+	}
+	transport := strings.ToLower(strings.TrimSpace(s.cfg.Transport))
+	if transport != "serial" && transport != "bridge" {
+		return detection
+	}
+	unleased := s.serialLeases.Unleased(detection.Candidates)
+	detection.Candidates = unleased
+	if len(unleased) == 0 {
+		detection.Device = ""
+	} else {
+		detection.Device = unleased[0]
+	}
+	return detection
 }
 
 func (s *Service) acquireSerialLease(device string) (func(), error) {

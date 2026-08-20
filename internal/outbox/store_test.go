@@ -141,6 +141,80 @@ func TestStoreQuarantineRetention(t *testing.T) {
 	}
 }
 
+func TestStorePrunesExpiredQuarantineImmediatelyOnOpen(t *testing.T) {
+	now := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
+	path := filepath.Join(t.TempDir(), "outbox.db")
+	store := openTestStore(t, Config{Path: path, QuarantineRetention: time.Hour, Now: func() time.Time { return now }})
+	delivery := testDelivery("0198cafe-0000-7000-8000-000000000016", []byte(`{"expired":true}`))
+	if err := store.Enqueue(delivery); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Quarantine(delivery.DeliveryID, "test", AttemptFailure{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(2 * time.Hour)
+	reopened := openTestStore(t, Config{Path: path, QuarantineRetention: time.Hour, Now: func() time.Time { return now }})
+	defer reopened.Close()
+	stats, err := reopened.Stats()
+	if err != nil || stats.TotalCount != 0 || stats.QuarantinedCount != 0 {
+		t.Fatalf("expired quarantine survived open: %#v err=%v", stats, err)
+	}
+}
+
+func TestStorePrunesExpiredQuarantineBeforeCapacityRejection(t *testing.T) {
+	now := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
+	store := openTestStore(t, Config{Path: filepath.Join(t.TempDir(), "outbox.db"), MaxEvents: 1, QuarantineRetention: time.Hour, Now: func() time.Time { return now }})
+	defer store.Close()
+	first := testDelivery("0198cafe-0000-7000-8000-000000000017", []byte(`{"expired":true}`))
+	if err := store.Enqueue(first); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Quarantine(first.DeliveryID, "test", AttemptFailure{}); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(2 * time.Hour)
+	second := testDelivery("0198cafe-0000-7000-8000-000000000018", []byte(`{"pending":true}`))
+	if err := store.Enqueue(second); err != nil {
+		t.Fatalf("expired quarantine should be pruned before full rejection: %v", err)
+	}
+	if _, err := store.Get(second.DeliveryID); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestStoreRetainsAndReportsQuarantinePruneFailure(t *testing.T) {
+	now := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
+	store := openTestStore(t, Config{Path: filepath.Join(t.TempDir(), "outbox.db"), MaxEvents: 1, QuarantineRetention: time.Hour, Now: func() time.Time { return now }})
+	defer store.Close()
+	first := testDelivery("0198cafe-0000-7000-8000-000000000019", []byte(`{"bad":true}`))
+	if err := store.Enqueue(first); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Quarantine(first.DeliveryID, "test", AttemptFailure{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.update(func(tx *bolt.Tx) error {
+		return tx.Bucket(quarantineBucket).Put([]byte(first.DeliveryID), []byte("not-json"))
+	}); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(2 * time.Hour)
+	err := store.Enqueue(testDelivery("0198cafe-0000-7000-8000-000000000020", []byte(`{"new":true}`)))
+	if !errors.Is(err, ErrOutboxPruneFailed) {
+		t.Fatalf("expected prune failure, got %v", err)
+	}
+	stats, statsErr := store.Stats()
+	if statsErr != nil {
+		t.Fatal(statsErr)
+	}
+	if stats.MaintenanceErrorCode != "outbox_prune_failed" || stats.TotalCount != 1 || stats.QuarantinedCount != 1 {
+		t.Fatalf("prune failure was not retained/reported: %#v", stats)
+	}
+}
+
 func TestStoreRecoversCorruptFileWithoutSilentOverwrite(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "ingest-outbox.db")

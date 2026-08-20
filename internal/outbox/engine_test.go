@@ -91,3 +91,39 @@ func TestEngineCloseDrainsAcceptedStageEntries(t *testing.T) {
 		t.Fatalf("expected closed writer rejection, got %v", err)
 	}
 }
+
+func TestEnginePrunesQuarantineOnMaintenanceInterval(t *testing.T) {
+	now := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
+	store := openTestStore(t, Config{Path: filepath.Join(t.TempDir(), "outbox.db"), QuarantineRetention: time.Nanosecond, Now: func() time.Time { return now }})
+	defer store.Close()
+	delivery := testDelivery("0198cafe-0000-7000-8000-000000000107", []byte(`{"prune":true}`))
+	if err := store.Enqueue(delivery); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Quarantine(delivery.DeliveryID, "test", AttemptFailure{}); err != nil {
+		t.Fatal(err)
+	}
+	engine, err := NewEngine(store, EngineConfig{PruneInterval: 5 * time.Millisecond})
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(time.Second)
+	for {
+		stats, statsErr := engine.Stats()
+		if statsErr != nil {
+			t.Fatal(statsErr)
+		}
+		if stats.TotalCount == 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("hourly-equivalent maintenance did not prune: %#v", stats)
+		}
+		time.Sleep(time.Millisecond)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := engine.Close(ctx); err != nil {
+		t.Fatal(err)
+	}
+}

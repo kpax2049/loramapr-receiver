@@ -97,6 +97,44 @@ func TestAdapterReconnectInvalidatesAndReestablishesProfile(t *testing.T) {
 	}
 }
 
+func TestAdapterPreservesLeaseAcrossReconnectAttempts(t *testing.T) {
+	device := existingDeviceFixture(t)
+	leases := protocoladapter.NewSerialLeaseRegistry()
+	adapter := NewAdapter(Config{Transport: "physical_serial", Device: device}, nil, leases)
+	adapter.reconnectDelay = time.Millisecond
+	var attempts atomic.Int32
+	adapter.openFn = func(string) (io.ReadWriteCloser, error) {
+		attempts.Add(1)
+		return nil, errors.New("disconnected")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- adapter.Start(ctx, &discardSink{}) }()
+	deadline := time.Now().Add(time.Second)
+	for attempts.Load() < 2 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if attempts.Load() < 2 {
+		t.Fatalf("expected reconnect attempts, got %d", attempts.Load())
+	}
+	if owner, ok := leases.Owner(device); !ok || owner != AdapterName {
+		t.Fatalf("lease was not preserved across reconnect: owner=%q ok=%v", owner, ok)
+	}
+	if _, err := leases.Acquire(device, "meshtastic"); err == nil {
+		t.Fatal("another adapter acquired the path between reconnect attempts")
+	}
+	cancel()
+	if err := adapter.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := leases.Owner(device); ok {
+		t.Fatal("lease survived adapter shutdown")
+	}
+}
+
 func TestAdapterReportsExplicitSerialLeaseConflictWithoutOpening(t *testing.T) {
 	device := existingDeviceFixture(t)
 	leases := protocoladapter.NewSerialLeaseRegistry()

@@ -16,6 +16,7 @@ var (
 type EngineConfig struct {
 	StageMaxEvents int
 	StageMaxBytes  int64
+	PruneInterval  time.Duration
 }
 
 type StageResult struct {
@@ -56,6 +57,9 @@ func NewEngine(store *Store, cfg EngineConfig) (*Engine, error) {
 	}
 	if cfg.StageMaxBytes <= 0 {
 		cfg.StageMaxBytes = DefaultStageMaxBytes
+	}
+	if cfg.PruneInterval <= 0 {
+		cfg.PruneInterval = DefaultQuarantinePruneInterval
 	}
 	engine := &Engine{
 		store:      store,
@@ -166,6 +170,8 @@ func (e *Engine) Close(ctx context.Context) error {
 func (e *Engine) run() {
 	defer close(e.done)
 	defer close(e.results)
+	pruneTicker := time.NewTicker(e.cfg.PruneInterval)
+	defer pruneTicker.Stop()
 	for {
 		select {
 		case item, ok := <-e.stage:
@@ -179,6 +185,8 @@ func (e *Engine) run() {
 			e.results <- StageResult{DeliveryID: item.delivery.DeliveryID, Err: err}
 		case operation := <-e.operations:
 			operation.result <- operation.fn(e.store)
+		case now := <-pruneTicker.C:
+			_, _ = e.store.PruneQuarantine(now)
 		}
 	}
 }

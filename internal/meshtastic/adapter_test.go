@@ -61,6 +61,27 @@ func TestServiceHonorsSerialLeaseContention(t *testing.T) {
 	}
 }
 
+func TestServiceAutoDetectionExcludesRuntimeReservedMeshCorePath(t *testing.T) {
+	registry := protocoladapter.NewSerialLeaseRegistry()
+	release, err := registry.Acquire("/tmp/ttyACM0", "meshcore-companion")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	service := NewAdapterWithLeases(config.MeshtasticConfig{Transport: "serial"}, nil, registry).(*Service)
+	filtered := service.filterLeasedAutoDetection(DetectionResult{
+		Device:     "/tmp/ttyACM0",
+		Candidates: []string{"/tmp/ttyACM0", "/tmp/ttyUSB0"},
+	})
+	tmpDir, err := filepath.EvalSymlinks("/tmp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if filtered.Device != filepath.Join(tmpDir, "ttyUSB0") || len(filtered.Candidates) != 1 {
+		t.Fatalf("unexpected filtered detection: %#v", filtered)
+	}
+}
+
 func TestServiceLifecycleAndEvents(t *testing.T) {
 	t.Parallel()
 
