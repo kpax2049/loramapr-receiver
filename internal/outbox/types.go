@@ -48,6 +48,8 @@ type Delivery struct {
 	OwnerID                 string    `json:"ownerId"`
 	ReceiverAgentIDSnapshot string    `json:"receiverAgentIdSnapshot"`
 	InstallationID          string    `json:"installationId"`
+	CredentialGeneration    uint64    `json:"credentialGeneration,omitempty"`
+	BindingGeneration       uint64    `json:"bindingGeneration,omitempty"`
 	Endpoint                string    `json:"endpoint"`
 	State                   State     `json:"state"`
 	Sequence                uint64    `json:"sequence"`
@@ -68,9 +70,11 @@ type AttemptFailure struct {
 }
 
 type Binding struct {
-	OwnerID         string
-	ReceiverAgentID string
-	InstallationID  string
+	OwnerID              string
+	ReceiverAgentID      string
+	InstallationID       string
+	CredentialGeneration uint64
+	BindingGeneration    uint64
 }
 
 type BindingReconcileResult struct {

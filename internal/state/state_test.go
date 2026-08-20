@@ -58,6 +58,54 @@ func TestOpenInitializesDefaults(t *testing.T) {
 	}
 }
 
+func TestUpdateSwapsMemoryOnlyAfterDurableWrite(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "state.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	original := store.Snapshot()
+	store.path = t.TempDir()
+	err = store.Update(func(data *Data) { data.Cloud.OwnerID = "must-not-leak" })
+	if err == nil {
+		t.Fatal("expected durable write failure")
+	}
+	if got := store.Snapshot(); got.Cloud.OwnerID != original.Cloud.OwnerID {
+		t.Fatalf("failed write changed in-memory state: %#v", got.Cloud)
+	}
+}
+
+func TestCredentialAndBindingGenerationsAreMonotonic(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "state.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Update(func(data *Data) {
+		data.Cloud.OwnerID = "owner-1"
+		data.Cloud.ReceiverID = "agent-1"
+		data.Cloud.IngestAPIKey = "secret-1"
+	}); err != nil {
+		t.Fatal(err)
+	}
+	first := store.Snapshot()
+	if first.Cloud.CredentialGeneration != 1 || first.Cloud.BindingGeneration != 1 || first.Cloud.CredentialFingerprint != credentialFingerprint("secret-1") {
+		t.Fatalf("unexpected initial generations: %#v", first.Cloud)
+	}
+	if err := store.Update(func(data *Data) { data.Cloud.IngestAPIKey = "secret-2" }); err != nil {
+		t.Fatal(err)
+	}
+	second := store.Snapshot()
+	if second.Cloud.CredentialGeneration != 2 || second.Cloud.BindingGeneration != 1 || second.Cloud.CredentialFingerprint != credentialFingerprint("secret-2") {
+		t.Fatalf("unexpected key rotation generations: %#v", second.Cloud)
+	}
+	if err := store.Update(func(data *Data) { data.Cloud.ReceiverID = "agent-2" }); err != nil {
+		t.Fatal(err)
+	}
+	third := store.Snapshot()
+	if third.Cloud.CredentialGeneration != 2 || third.Cloud.BindingGeneration != 2 {
+		t.Fatalf("unexpected binding rotation generations: %#v", third.Cloud)
+	}
+}
+
 func TestUpdatePersistsAcrossRestart(t *testing.T) {
 	t.Parallel()
 

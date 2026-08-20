@@ -721,6 +721,8 @@ func (s *Service) onMeshCoreEvent(event protocoladapter.Event, meshEvent meshcor
 		OwnerID:                 binding.OwnerID,
 		ReceiverAgentIDSnapshot: binding.ReceiverAgentID,
 		InstallationID:          binding.InstallationID,
+		CredentialGeneration:    binding.CredentialGeneration,
+		BindingGeneration:       binding.BindingGeneration,
 		Endpoint:                receiverevents.EndpointPath,
 		EnqueuedAt:              time.Now().UTC(),
 	}
@@ -757,16 +759,18 @@ func (s *Service) signalNormalizedDrain() {
 
 func normalizedBinding(snapshot state.Data) (outbox.Binding, bool) {
 	binding := outbox.Binding{
-		OwnerID:         strings.TrimSpace(snapshot.Cloud.OwnerID),
-		ReceiverAgentID: strings.TrimSpace(snapshot.Cloud.ReceiverID),
-		InstallationID:  strings.TrimSpace(snapshot.Installation.ID),
+		OwnerID:              strings.TrimSpace(snapshot.Cloud.OwnerID),
+		ReceiverAgentID:      strings.TrimSpace(snapshot.Cloud.ReceiverID),
+		InstallationID:       strings.TrimSpace(snapshot.Installation.ID),
+		CredentialGeneration: snapshot.Cloud.CredentialGeneration,
+		BindingGeneration:    snapshot.Cloud.BindingGeneration,
 	}
 	ready := credentialsReady(snapshot) && binding.OwnerID != "" && binding.ReceiverAgentID != "" && binding.InstallationID != ""
 	return binding, ready
 }
 
 func bindingKey(binding outbox.Binding) string {
-	return binding.OwnerID + "\x00" + binding.ReceiverAgentID + "\x00" + binding.InstallationID
+	return fmt.Sprintf("%s\x00%s\x00%s\x00%d\x00%d", binding.OwnerID, binding.ReceiverAgentID, binding.InstallationID, binding.CredentialGeneration, binding.BindingGeneration)
 }
 
 func (s *Service) enqueueIngestEvent(payload map[string]any, idempotencyKey string, capturedAt time.Time, now time.Time) {

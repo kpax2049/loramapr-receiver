@@ -3,6 +3,7 @@ package state
 import (
 	"bytes"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -18,7 +19,7 @@ import (
 type PairingPhase string
 
 const (
-	CurrentSchemaVersion = 7
+	CurrentSchemaVersion = 8
 
 	PairingUnpaired           PairingPhase = "unpaired"
 	PairingCodeEntered        PairingPhase = "pairing_code_entered"
@@ -62,20 +63,23 @@ type PairingState struct {
 }
 
 type CloudState struct {
-	EndpointURL       string    `json:"endpoint_url"`
-	ConfigVersion     string    `json:"config_version,omitempty"`
-	ActivateEndpoint  string    `json:"activate_endpoint,omitempty"`
-	HeartbeatEndpoint string    `json:"heartbeat_endpoint,omitempty"`
-	IngestEndpoint    string    `json:"ingest_endpoint,omitempty"`
-	OwnerID           string    `json:"owner_id,omitempty"`
-	ReceiverID        string    `json:"receiver_id,omitempty"`
-	ReceiverLabel     string    `json:"receiver_label,omitempty"`
-	SiteLabel         string    `json:"site_label,omitempty"`
-	GroupLabel        string    `json:"group_label,omitempty"`
-	IngestAPIKeyID    string    `json:"ingest_api_key_id,omitempty"`
-	IngestAPIKey      string    `json:"ingest_api_key_secret,omitempty"`
-	CredentialRef     string    `json:"credential_ref,omitempty"`
-	UpdatedAt         time.Time `json:"updated_at,omitempty"`
+	EndpointURL           string    `json:"endpoint_url"`
+	ConfigVersion         string    `json:"config_version,omitempty"`
+	ActivateEndpoint      string    `json:"activate_endpoint,omitempty"`
+	HeartbeatEndpoint     string    `json:"heartbeat_endpoint,omitempty"`
+	IngestEndpoint        string    `json:"ingest_endpoint,omitempty"`
+	OwnerID               string    `json:"owner_id,omitempty"`
+	ReceiverID            string    `json:"receiver_id,omitempty"`
+	ReceiverLabel         string    `json:"receiver_label,omitempty"`
+	SiteLabel             string    `json:"site_label,omitempty"`
+	GroupLabel            string    `json:"group_label,omitempty"`
+	IngestAPIKeyID        string    `json:"ingest_api_key_id,omitempty"`
+	IngestAPIKey          string    `json:"ingest_api_key_secret,omitempty"`
+	CredentialRef         string    `json:"credential_ref,omitempty"`
+	CredentialFingerprint string    `json:"credential_fingerprint_sha256,omitempty"`
+	CredentialGeneration  uint64    `json:"credential_generation,omitempty"`
+	BindingGeneration     uint64    `json:"binding_generation,omitempty"`
+	UpdatedAt             time.Time `json:"updated_at,omitempty"`
 }
 
 type RuntimeState struct {
@@ -270,12 +274,18 @@ func backupCorruptStateFile(path string, payload []byte) (string, error) {
 }
 
 func (s *Store) Save() error {
-	s.mu.RLock()
-	snapshot := s.data
-	s.mu.RUnlock()
-
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	snapshot, err := cloneData(s.data)
+	if err != nil {
+		return err
+	}
 	snapshot.Metadata.UpdatedAt = s.now().UTC()
-	return s.write(snapshot)
+	if err := s.write(snapshot); err != nil {
+		return err
+	}
+	s.data = snapshot
+	return nil
 }
 
 func (s *Store) Snapshot() Data {
@@ -286,12 +296,54 @@ func (s *Store) Snapshot() Data {
 
 func (s *Store) Update(fn func(*Data)) error {
 	s.mu.Lock()
-	fn(&s.data)
-	snapshot := s.data
-	s.mu.Unlock()
-
+	defer s.mu.Unlock()
+	snapshot, err := cloneData(s.data)
+	if err != nil {
+		return err
+	}
+	fn(&snapshot)
+	normalizeGenerations(s.data, &snapshot)
 	snapshot.Metadata.UpdatedAt = s.now().UTC()
-	return s.write(snapshot)
+	if err := s.write(snapshot); err != nil {
+		return err
+	}
+	s.data = snapshot
+	return nil
+}
+
+func cloneData(input Data) (Data, error) {
+	raw, err := json.Marshal(input)
+	if err != nil {
+		return Data{}, err
+	}
+	var output Data
+	if err := json.Unmarshal(raw, &output); err != nil {
+		return Data{}, err
+	}
+	return output, nil
+}
+
+func credentialFingerprint(secret string) string {
+	if secret == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(secret))
+	return hex.EncodeToString(sum[:])
+}
+
+func normalizeGenerations(previous Data, next *Data) {
+	nextFingerprint := credentialFingerprint(next.Cloud.IngestAPIKey)
+	if nextFingerprint != previous.Cloud.CredentialFingerprint {
+		if nextFingerprint != "" {
+			next.Cloud.CredentialGeneration = previous.Cloud.CredentialGeneration + 1
+		}
+		next.Cloud.CredentialFingerprint = nextFingerprint
+	}
+	previousBinding := previous.Cloud.OwnerID + "\x00" + previous.Cloud.ReceiverID + "\x00" + previous.Installation.ID
+	nextBinding := next.Cloud.OwnerID + "\x00" + next.Cloud.ReceiverID + "\x00" + next.Installation.ID
+	if nextBinding != previousBinding && next.Cloud.OwnerID != "" && next.Cloud.ReceiverID != "" {
+		next.Cloud.BindingGeneration = previous.Cloud.BindingGeneration + 1
+	}
 }
 
 func (s *Store) ensureDefaults() (bool, error) {
@@ -476,6 +528,19 @@ func (s *Store) migrate() (bool, error) {
 		version = 7
 		changed = true
 	}
+	if version <= 7 {
+		if s.data.Cloud.IngestAPIKey != "" {
+			s.data.Cloud.CredentialFingerprint = credentialFingerprint(s.data.Cloud.IngestAPIKey)
+			if s.data.Cloud.CredentialGeneration == 0 {
+				s.data.Cloud.CredentialGeneration = 1
+			}
+		}
+		if s.data.Cloud.OwnerID != "" && s.data.Cloud.ReceiverID != "" && s.data.Cloud.BindingGeneration == 0 {
+			s.data.Cloud.BindingGeneration = 1
+		}
+		version = 8
+		changed = true
+	}
 
 	if version > CurrentSchemaVersion {
 		return false, errors.New("state schema version is newer than this runtime")
@@ -533,9 +598,6 @@ func (s *Store) write(snapshot Data) error {
 		return err
 	}
 
-	s.mu.Lock()
-	s.data = snapshot
-	s.mu.Unlock()
 	return nil
 }
 
