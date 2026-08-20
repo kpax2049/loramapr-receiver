@@ -52,6 +52,25 @@ type DispatchPause struct {
 	RequestID            string            `json:"requestId,omitempty"`
 }
 
+type InstallationRotationPhase string
+
+const (
+	InstallationRotationIntent                InstallationRotationPhase = "intent"
+	InstallationRotationOldBindingQuarantined InstallationRotationPhase = "old_binding_quarantined"
+	InstallationRotationStateRotated          InstallationRotationPhase = "state_rotated"
+	InstallationRotationCompleted             InstallationRotationPhase = "completed"
+)
+
+type InstallationRotation struct {
+	OldInstallationID string                    `json:"oldInstallationId"`
+	NewInstallationID string                    `json:"newInstallationId"`
+	Reason            string                    `json:"reason"`
+	Phase             InstallationRotationPhase `json:"phase"`
+	StartedAt         time.Time                 `json:"startedAt"`
+	UpdatedAt         time.Time                 `json:"updatedAt"`
+	Quarantined       int                       `json:"quarantined"`
+}
+
 type Config struct {
 	Path                string
 	MaxEvents           int

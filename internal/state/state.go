@@ -19,7 +19,7 @@ import (
 type PairingPhase string
 
 const (
-	CurrentSchemaVersion = 8
+	CurrentSchemaVersion = 9
 
 	PairingUnpaired           PairingPhase = "unpaired"
 	PairingCodeEntered        PairingPhase = "pairing_code_entered"
@@ -41,6 +41,7 @@ type Data struct {
 
 type InstallationState struct {
 	ID            string    `json:"id"`
+	Bound         bool      `json:"bound,omitempty"`
 	LocalName     string    `json:"local_name,omitempty"`
 	Hostname      string    `json:"hostname,omitempty"`
 	CreatedAt     time.Time `json:"created_at"`
@@ -539,6 +540,13 @@ func (s *Store) migrate() (bool, error) {
 			s.data.Cloud.BindingGeneration = 1
 		}
 		version = 8
+		changed = true
+	}
+	if version <= 8 {
+		if s.data.Cloud.OwnerID != "" && s.data.Cloud.ReceiverID != "" {
+			s.data.Installation.Bound = true
+		}
+		version = 9
 		changed = true
 	}
 

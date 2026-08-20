@@ -134,6 +134,40 @@ func (e *Engine) ResolveDeliveryCollision(deliveryID string) error {
 	return e.write(func(store *Store) error { return store.ResolveDeliveryCollision(deliveryID) })
 }
 
+func (e *Engine) InstallationRotation() (*InstallationRotation, error) {
+	return e.store.InstallationRotation()
+}
+
+func (e *Engine) BeginInstallationRotation(rotation InstallationRotation) (*InstallationRotation, error) {
+	var result *InstallationRotation
+	err := e.write(func(store *Store) error {
+		var err error
+		result, err = store.BeginInstallationRotation(rotation)
+		return err
+	})
+	return result, err
+}
+
+func (e *Engine) QuarantineInstallationRotation() (*InstallationRotation, error) {
+	var result *InstallationRotation
+	err := e.write(func(store *Store) error {
+		var err error
+		result, err = store.QuarantineInstallationRotation()
+		return err
+	})
+	return result, err
+}
+
+func (e *Engine) AdvanceInstallationRotation(expected, next InstallationRotationPhase) (*InstallationRotation, error) {
+	var result *InstallationRotation
+	err := e.write(func(store *Store) error {
+		var err error
+		result, err = store.AdvanceInstallationRotation(expected, next)
+		return err
+	})
+	return result, err
+}
+
 func (e *Engine) Quarantine(deliveryID string, reason string, failure AttemptFailure) error {
 	return e.write(func(store *Store) error { return store.Quarantine(deliveryID, reason, failure) })
 }

@@ -148,7 +148,9 @@ func TestNewPersistsIdentityHints(t *testing.T) {
 	t.Parallel()
 
 	cfg := config.Default()
-	cfg.Paths.StateFile = filepath.Join(t.TempDir(), "receiver-state.json")
+	tempDir := t.TempDir()
+	cfg.Paths.StateFile = filepath.Join(tempDir, "receiver-state.json")
+	cfg.Paths.OutboxFile = filepath.Join(tempDir, "ingest-outbox.db")
 	cfg.Runtime.Profile = "linux-service"
 	cfg.Runtime.LocalName = "Kitchen Receiver"
 	cfg.Service.Mode = config.ModeSetup
@@ -157,6 +159,11 @@ func TestNewPersistsIdentityHints(t *testing.T) {
 	if err != nil {
 		t.Fatalf("runtime.New failed: %v", err)
 	}
+	defer func() {
+		if err := svc.shutdownNormalizedOutbox(); err != nil {
+			t.Errorf("shutdown normalized outbox: %v", err)
+		}
+	}()
 
 	snap := svc.StateStore().Snapshot()
 	if snap.Installation.LocalName != "Kitchen Receiver" {

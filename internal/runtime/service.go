@@ -171,6 +171,26 @@ func New(cfg config.Config, logger *slog.Logger) (*Service, error) {
 	}); err != nil {
 		return nil, fmt.Errorf("persist startup state: %w", err)
 	}
+	outboxStore, err := outbox.Open(outbox.Config{Path: cfg.Paths.OutboxFile})
+	if err != nil {
+		return nil, fmt.Errorf("open normalized event outbox: %w", err)
+	}
+	outboxEngine, err := outbox.NewEngine(outboxStore, outbox.EngineConfig{})
+	if err != nil {
+		_ = outboxStore.Close()
+		return nil, fmt.Errorf("start normalized event outbox: %w", err)
+	}
+	closeOutbox := func() {
+		closeCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		_ = outboxEngine.Close(closeCtx)
+		_ = outboxStore.Close()
+	}
+	rotator := newInstallationRotator(store, outboxEngine)
+	if _, err := rotator.Recover(); err != nil {
+		closeOutbox()
+		return nil, fmt.Errorf("recover installation rotation: %w", err)
+	}
 
 	current = store.Snapshot()
 	statusModel := status.New()
@@ -236,6 +256,7 @@ func New(cfg config.Config, logger *slog.Logger) (*Service, error) {
 	serialLeases := protocoladapter.NewSerialLeaseRegistry()
 	serialReleases, err := reserveConfiguredSerialPaths(cfg, serialLeases)
 	if err != nil {
+		closeOutbox()
 		return nil, err
 	}
 	mesh := meshtastic.NewAdapterWithLeases(cfg.Meshtastic, logger.With("component", "meshtastic"), serialLeases)
@@ -253,24 +274,12 @@ func New(cfg config.Config, logger *slog.Logger) (*Service, error) {
 	adapters, err := protocoladapter.NewManager(radioAdapters...)
 	if err != nil {
 		releaseSerialReservations(serialReleases)
+		closeOutbox()
 		return nil, fmt.Errorf("configure protocol adapters: %w", err)
 	}
 
-	var outboxStore *outbox.Store
-	var outboxEngine *outbox.Engine
 	var normalizedDispatcher *receiverevents.Dispatcher
 	if meshCoreEnabled {
-		outboxStore, err = outbox.Open(outbox.Config{Path: cfg.Paths.OutboxFile})
-		if err != nil {
-			releaseSerialReservations(serialReleases)
-			return nil, fmt.Errorf("open normalized event outbox: %w", err)
-		}
-		outboxEngine, err = outbox.NewEngine(outboxStore, outbox.EngineConfig{})
-		if err != nil {
-			_ = outboxStore.Close()
-			releaseSerialReservations(serialReleases)
-			return nil, fmt.Errorf("start normalized event outbox: %w", err)
-		}
 		normalizedDispatcher = &receiverevents.Dispatcher{Outbox: outboxEngine, Client: cloud}
 	}
 	meshSnap := mesh.Snapshot()
@@ -318,9 +327,10 @@ func New(cfg config.Config, logger *slog.Logger) (*Service, error) {
 					"installationId": current.Installation.ID,
 				},
 			},
+			rotator,
 		),
 	}
-	if outboxEngine != nil {
+	if meshCoreEnabled {
 		svc.container.OutboxResults = outboxEngine.Results()
 		svc.refreshNormalizedOutboxStatus()
 	}

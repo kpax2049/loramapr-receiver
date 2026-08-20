@@ -327,6 +327,31 @@ func TestOpenMigratesSchemaV6ToCurrent(t *testing.T) {
 	}
 }
 
+func TestOpenMigratesBoundSchemaV8Installation(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "receiver-state.json")
+	legacy := `{
+  "schema_version": 8,
+  "installation": {"id":"0123456789abcdef0123456789abcdef","created_at":"2026-08-20T00:00:00Z","last_started_at":"2026-08-20T00:00:00Z"},
+  "pairing": {"phase":"steady_state"},
+  "cloud": {"endpoint_url":"https://api.example.com","owner_id":"owner-1","receiver_id":"agent-1","ingest_api_key_secret":"secret"},
+  "runtime": {"profile":"linux-service","mode":"service"},
+  "update": {"status":"unknown"},
+  "metadata": {}
+}`
+	if err := os.WriteFile(path, []byte(legacy), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot := store.Snapshot()
+	if snapshot.SchemaVersion != CurrentSchemaVersion || !snapshot.Installation.Bound {
+		t.Fatalf("bound v8 installation was not migrated: %#v", snapshot.Installation)
+	}
+}
+
 func TestOpenRecoversStateWithLeadingNullBytes(t *testing.T) {
 	t.Parallel()
 

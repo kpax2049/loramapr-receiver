@@ -23,10 +23,11 @@ var (
 	quarantineBucket = []byte("quarantine")
 	statsBucket      = []byte("stats")
 
-	schemaVersionKey = []byte("schema_version")
-	totalCountKey    = []byte("total_count")
-	usedBytesKey     = []byte("used_bytes")
-	dispatchPauseKey = []byte("dispatch_pause")
+	schemaVersionKey        = []byte("schema_version")
+	totalCountKey           = []byte("total_count")
+	usedBytesKey            = []byte("used_bytes")
+	dispatchPauseKey        = []byte("dispatch_pause")
+	installationRotationKey = []byte("installation_rotation")
 )
 
 type Store struct {
@@ -333,6 +334,175 @@ func (s *Store) ResolveDeliveryCollision(deliveryID string) error {
 		}
 		return writeCounters(tx, count, used-int64(len(raw))+int64(len(encoded)))
 	})
+}
+
+func (s *Store) InstallationRotation() (*InstallationRotation, error) {
+	var result *InstallationRotation
+	err := s.view(func(tx *bolt.Tx) error {
+		raw := tx.Bucket(metaBucket).Get(installationRotationKey)
+		if len(raw) == 0 {
+			return nil
+		}
+		var rotation InstallationRotation
+		if err := json.Unmarshal(raw, &rotation); err != nil {
+			return fmt.Errorf("decode installation rotation: %w", err)
+		}
+		result = &rotation
+		return nil
+	})
+	return result, err
+}
+
+func (s *Store) BeginInstallationRotation(rotation InstallationRotation) (*InstallationRotation, error) {
+	rotation.OldInstallationID = strings.TrimSpace(rotation.OldInstallationID)
+	rotation.NewInstallationID = strings.TrimSpace(rotation.NewInstallationID)
+	rotation.Reason = strings.TrimSpace(rotation.Reason)
+	if rotation.OldInstallationID == "" || rotation.NewInstallationID == "" || rotation.OldInstallationID == rotation.NewInstallationID {
+		return nil, errors.New("installation rotation requires distinct old and new installation IDs")
+	}
+	var result InstallationRotation
+	err := s.update(func(tx *bolt.Tx) error {
+		meta := tx.Bucket(metaBucket)
+		if raw := meta.Get(installationRotationKey); len(raw) > 0 {
+			if err := json.Unmarshal(raw, &result); err != nil {
+				return fmt.Errorf("decode installation rotation: %w", err)
+			}
+			if result.Phase != InstallationRotationCompleted {
+				return nil
+			}
+		}
+		now := s.cfg.Now().UTC()
+		rotation.Phase = InstallationRotationIntent
+		rotation.StartedAt = now
+		rotation.UpdatedAt = now
+		rotation.Quarantined = 0
+		encoded, err := json.Marshal(rotation)
+		if err != nil {
+			return err
+		}
+		if err := meta.Put(installationRotationKey, encoded); err != nil {
+			return err
+		}
+		result = rotation
+		return nil
+	})
+	return &result, err
+}
+
+func (s *Store) QuarantineInstallationRotation() (*InstallationRotation, error) {
+	var result InstallationRotation
+	err := s.update(func(tx *bolt.Tx) error {
+		meta := tx.Bucket(metaBucket)
+		rawJournal := meta.Get(installationRotationKey)
+		if len(rawJournal) == 0 {
+			return errors.New("installation rotation journal is missing")
+		}
+		if err := json.Unmarshal(rawJournal, &result); err != nil {
+			return fmt.Errorf("decode installation rotation: %w", err)
+		}
+		if result.Phase != InstallationRotationIntent {
+			return nil
+		}
+		deliveries := tx.Bucket(deliveriesBucket)
+		quarantine := tx.Bucket(quarantineBucket)
+		type matched struct {
+			key    []byte
+			raw    []byte
+			record *Delivery
+		}
+		matches := make([]matched, 0)
+		if err := deliveries.ForEach(func(key, raw []byte) error {
+			record, err := decodeDelivery(raw)
+			if err != nil {
+				return err
+			}
+			if record.InstallationID == result.OldInstallationID {
+				matches = append(matches, matched{key: append([]byte(nil), key...), raw: append([]byte(nil), raw...), record: record})
+			}
+			return nil
+		}); err != nil {
+			return err
+		}
+		count, used := readCounters(tx)
+		now := s.cfg.Now().UTC()
+		for _, item := range matches {
+			record := item.record
+			_ = tx.Bucket(dueIndexBucket).Delete(dueKey(record.NextAttemptAt, record.Sequence, record.DeliveryID))
+			record.State = StateQuarantined
+			record.QuarantinedAt = now
+			record.QuarantineReason = "installation_rotated"
+			record.LastErrorCode = "INSTALLATION_ROTATED"
+			record.LastError = "pending normalized delivery belongs to a rotated receiver installation"
+			encoded, err := json.Marshal(record)
+			if err != nil {
+				return err
+			}
+			used = used - int64(len(item.raw)) + int64(len(encoded))
+			if used > s.cfg.MaxBytes {
+				return ErrOutboxFull
+			}
+			if err := quarantine.Put(item.key, encoded); err != nil {
+				return err
+			}
+			if err := deliveries.Delete(item.key); err != nil {
+				return err
+			}
+		}
+		if rawPause := meta.Get(dispatchPauseKey); len(rawPause) > 0 {
+			var pause DispatchPause
+			if err := json.Unmarshal(rawPause, &pause); err != nil {
+				return fmt.Errorf("decode outbox dispatch pause: %w", err)
+			}
+			for _, item := range matches {
+				if pause.DeliveryID == item.record.DeliveryID {
+					if err := meta.Delete(dispatchPauseKey); err != nil {
+						return err
+					}
+					break
+				}
+			}
+		}
+		result.Phase = InstallationRotationOldBindingQuarantined
+		result.Quarantined = len(matches)
+		result.UpdatedAt = now
+		encodedJournal, err := json.Marshal(result)
+		if err != nil {
+			return err
+		}
+		if err := meta.Put(installationRotationKey, encodedJournal); err != nil {
+			return err
+		}
+		return writeCounters(tx, count, used)
+	})
+	return &result, err
+}
+
+func (s *Store) AdvanceInstallationRotation(expected, next InstallationRotationPhase) (*InstallationRotation, error) {
+	var result InstallationRotation
+	err := s.update(func(tx *bolt.Tx) error {
+		meta := tx.Bucket(metaBucket)
+		raw := meta.Get(installationRotationKey)
+		if len(raw) == 0 {
+			return errors.New("installation rotation journal is missing")
+		}
+		if err := json.Unmarshal(raw, &result); err != nil {
+			return fmt.Errorf("decode installation rotation: %w", err)
+		}
+		if result.Phase == next {
+			return nil
+		}
+		if result.Phase != expected {
+			return fmt.Errorf("installation rotation phase is %q, expected %q", result.Phase, expected)
+		}
+		result.Phase = next
+		result.UpdatedAt = s.cfg.Now().UTC()
+		encoded, err := json.Marshal(result)
+		if err != nil {
+			return err
+		}
+		return meta.Put(installationRotationKey, encoded)
+	})
+	return &result, err
 }
 
 func (s *Store) Quarantine(deliveryID string, reason string, failure AttemptFailure) error {

@@ -37,6 +37,10 @@ type ActivationIdentity struct {
 	Metadata       map[string]any
 }
 
+type InstallationRotator interface {
+	RotateInstallation(reason string) (string, error)
+}
+
 type Manager struct {
 	store    *state.Store
 	status   *status.Model
@@ -44,6 +48,7 @@ type Manager struct {
 	logger   *slog.Logger
 	identity ActivationIdentity
 	now      func() time.Time
+	rotator  InstallationRotator
 }
 
 func NewManager(
@@ -52,6 +57,7 @@ func NewManager(
 	client cloudclient.PairingClient,
 	logger *slog.Logger,
 	identity ActivationIdentity,
+	rotators ...InstallationRotator,
 ) *Manager {
 	if logger == nil {
 		logger = slog.Default()
@@ -66,7 +72,7 @@ func NewManager(
 		identity.RuntimeVersion = "dev"
 	}
 
-	return &Manager{
+	manager := &Manager{
 		store:    store,
 		status:   statusModel,
 		client:   client,
@@ -74,6 +80,10 @@ func NewManager(
 		identity: identity,
 		now:      time.Now,
 	}
+	if len(rotators) > 0 {
+		manager.rotator = rotators[0]
+	}
+	return manager
 }
 
 func (m *Manager) SubmitPairingCode(_ context.Context, code string) error {
@@ -82,6 +92,17 @@ func (m *Manager) SubmitPairingCode(_ context.Context, code string) error {
 		return err
 	}
 
+	current := m.store.Snapshot()
+	if current.Installation.Bound {
+		if m.rotator == nil {
+			return errors.New("installation rotation is required before re-pairing")
+		}
+		newID, err := m.rotator.RotateInstallation("re_pair")
+		if err != nil {
+			return fmt.Errorf("rotate installation before re-pairing: %w", err)
+		}
+		m.status.SetInstallationID(newID)
+	}
 	now := m.now().UTC()
 	if err := m.store.Update(func(data *state.Data) {
 		data.Pairing.Phase = state.PairingCodeEntered
@@ -127,6 +148,17 @@ func (m *Manager) ApplyLifecycleChange(change LifecycleChange, detail string, cl
 	reason := sanitizeText(detail)
 	if !isLocalLifecycleChange(change) && reason == "" {
 		reason = lifecycleDefaultReason(change)
+	}
+	current := m.store.Snapshot()
+	if current.Installation.Bound && (change == LifecycleLocalDeauthorized || change == LifecycleReceiverReplaced) {
+		if m.rotator == nil {
+			return errors.New("installation rotation is required for this lifecycle change")
+		}
+		newID, err := m.rotator.RotateInstallation(string(change))
+		if err != nil {
+			return fmt.Errorf("rotate installation for lifecycle change: %w", err)
+		}
+		m.status.SetInstallationID(newID)
 	}
 
 	if err := m.store.Update(func(data *state.Data) {
@@ -283,13 +315,20 @@ func (m *Manager) activate(ctx context.Context, snapshot state.Data) error {
 	}
 
 	m.status.SetComponent("pairing", "activate", "activating receiver credential")
+	metadata := make(map[string]any, len(m.identity.Metadata)+3)
+	for key, value := range m.identity.Metadata {
+		metadata[key] = value
+	}
+	metadata["installationId"] = snapshot.Installation.ID
+	metadata["localName"] = snapshot.Installation.LocalName
+	metadata["hostname"] = snapshot.Installation.Hostname
 	response, err := m.client.ActivateReceiver(ctx, activateEndpoint, cloudclient.ActivationRequest{
 		ActivationToken: activationToken,
 		Label:           m.identity.Label,
 		RuntimeVersion:  m.identity.RuntimeVersion,
 		Platform:        m.identity.Platform,
 		Arch:            m.identity.Arch,
-		Metadata:        m.identity.Metadata,
+		Metadata:        metadata,
 	})
 	if err != nil {
 		return m.handleAttemptError(snapshot, err, state.PairingBootstrapExchanged)
@@ -332,6 +371,7 @@ func (m *Manager) activate(ctx context.Context, snapshot state.Data) error {
 			data.Cloud.CredentialRef = response.ReceiverAgentID
 		}
 		data.Cloud.UpdatedAt = now
+		data.Installation.Bound = true
 	}); err != nil {
 		return err
 	}
