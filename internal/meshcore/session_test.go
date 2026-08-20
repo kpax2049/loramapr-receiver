@@ -239,9 +239,10 @@ func readHexFixture(t *testing.T, name string) []byte {
 		t.Fatalf("decode fixture %s: %v", name, err)
 	}
 	wantHashes := map[string]string{
-		"device-info-v1.17.1.hex": "ea432a9f78717d42348bb0127c5b4b4bed69d3250f1451ae1269b94141ea3beb",
-		"new-advert-v1.17.1.hex":  "38dcdca8bb70ebc2e05641fff38f4b4d4609262b816bf4a95329850c34ee363d",
-		"self-info-v1.17.1.hex":   "e39872688d1cde81c892f31717985d44d197f76f8a2c6d4a843dcb817aa554d9",
+		"device-info-v1.17.1.hex":     "ea432a9f78717d42348bb0127c5b4b4bed69d3250f1451ae1269b94141ea3beb",
+		"new-advert-v1.17.1.hex":      "38dcdca8bb70ebc2e05641fff38f4b4d4609262b816bf4a95329850c34ee363d",
+		"self-info-v1.17.1.hex":       "e39872688d1cde81c892f31717985d44d197f76f8a2c6d4a843dcb817aa554d9",
+		"signed-log-rx-advert-v1.hex": "5f761d58e5785b361f771fc259c3c94f1ec23b5926ae0d4d8e115c44b343b6af",
 	}
 	if want := wantHashes[name]; want != "" {
 		actual := sha256.Sum256(decoded)

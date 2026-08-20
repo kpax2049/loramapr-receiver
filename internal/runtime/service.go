@@ -22,9 +22,12 @@ import (
 	"github.com/loramapr/loramapr-receiver/internal/config"
 	"github.com/loramapr/loramapr-receiver/internal/diagnostics"
 	"github.com/loramapr/loramapr-receiver/internal/homeautosession"
+	"github.com/loramapr/loramapr-receiver/internal/meshcore"
 	"github.com/loramapr/loramapr-receiver/internal/meshtastic"
+	"github.com/loramapr/loramapr-receiver/internal/outbox"
 	"github.com/loramapr/loramapr-receiver/internal/pairing"
 	"github.com/loramapr/loramapr-receiver/internal/protocoladapter"
+	"github.com/loramapr/loramapr-receiver/internal/receiverevents"
 	"github.com/loramapr/loramapr-receiver/internal/state"
 	"github.com/loramapr/loramapr-receiver/internal/status"
 	"github.com/loramapr/loramapr-receiver/internal/update"
@@ -52,6 +55,14 @@ const (
 type CloudClient interface {
 	cloudclient.PairingClient
 	PostIngestEvent(ctx context.Context, ingestEndpoint string, apiKey string, payload map[string]any, idempotencyKey string) error
+	PostNormalizedEvent(
+		ctx context.Context,
+		endpoint string,
+		apiKey string,
+		envelope []byte,
+		deliveryID string,
+		envelopeSHA256 string,
+	) (cloudclient.NormalizedDeliveryResult, error)
 	SendReceiverHeartbeat(
 		ctx context.Context,
 		heartbeatEndpoint string,
@@ -73,13 +84,17 @@ type CloudClient interface {
 }
 
 type Service struct {
-	container   *Container
-	mode        config.RunMode
-	steady      steadyState
-	build       buildinfo.Info
-	updater     *update.Checker
-	ingestWake  chan struct{}
-	ingestTrace bool
+	container             *Container
+	mode                  config.RunMode
+	steady                steadyState
+	build                 buildinfo.Info
+	updater               *update.Checker
+	ingestWake            chan struct{}
+	normalizedWake        chan struct{}
+	ingestTrace           bool
+	normalizedPaused      bool
+	normalizedPauseReason string
+	normalizedBindingKey  string
 }
 
 type Container struct {
@@ -90,10 +105,15 @@ type Container struct {
 	Cloud           CloudClient
 	Pairing         *pairing.Manager
 	Meshtastic      meshtastic.Adapter
+	MeshCore        *meshcore.Adapter
 	Adapters        *protocoladapter.Manager
 	SerialLeases    *protocoladapter.SerialLeaseRegistry
 	HomeAutoSession *homeautosession.Module
 	AdapterEvents   <-chan protocoladapter.Event
+	OutboxStore     *outbox.Store
+	OutboxEngine    *outbox.Engine
+	OutboxResults   <-chan outbox.StageResult
+	Normalized      *receiverevents.Dispatcher
 	Portal          *webportal.Server
 }
 
@@ -211,17 +231,51 @@ func New(cfg config.Config, logger *slog.Logger) (*Service, error) {
 		ingestQueue: make([]queuedIngestEvent, 0, 64),
 	}
 	svc.ingestWake = make(chan struct{}, 1)
+	svc.normalizedWake = make(chan struct{}, 1)
 	svc.ingestTrace = envFlagEnabled("LORAMAPR_INGEST_TRACE")
 
 	cloud := cloudclient.NewHTTPClient(cfg.Cloud.BaseURL, 10*time.Second)
 	serialLeases := protocoladapter.NewSerialLeaseRegistry()
 	mesh := meshtastic.NewAdapterWithLeases(cfg.Meshtastic, logger.With("component", "meshtastic"), serialLeases)
-	adapters, err := protocoladapter.NewManager(newMeshtasticRadioAdapter(mesh))
+	radioAdapters := []protocoladapter.RadioAdapter{newMeshtasticRadioAdapter(mesh)}
+	var meshCoreAdapter *meshcore.Adapter
+	meshCoreEnabled := strings.EqualFold(strings.TrimSpace(cfg.MeshCore.Transport), "physical_serial")
+	if meshCoreEnabled {
+		meshCoreAdapter = meshcore.NewAdapter(meshcore.Config{
+			Transport: cfg.MeshCore.Transport,
+			Device:    cfg.MeshCore.Device,
+		}, logger.With("component", meshcore.AdapterName), serialLeases)
+		radioAdapters = append(radioAdapters, meshCoreAdapter)
+	}
+	adapters, err := protocoladapter.NewManager(radioAdapters...)
 	if err != nil {
 		return nil, fmt.Errorf("configure protocol adapters: %w", err)
 	}
+
+	var outboxStore *outbox.Store
+	var outboxEngine *outbox.Engine
+	var normalizedDispatcher *receiverevents.Dispatcher
+	if meshCoreEnabled {
+		outboxStore, err = outbox.Open(outbox.Config{Path: cfg.Paths.OutboxFile})
+		if err != nil {
+			return nil, fmt.Errorf("open normalized event outbox: %w", err)
+		}
+		outboxEngine, err = outbox.NewEngine(outboxStore, outbox.EngineConfig{})
+		if err != nil {
+			_ = outboxStore.Close()
+			return nil, fmt.Errorf("start normalized event outbox: %w", err)
+		}
+		normalizedDispatcher = &receiverevents.Dispatcher{Outbox: outboxEngine, Client: cloud}
+	}
 	meshSnap := mesh.Snapshot()
 	statusModel.SetComponent("meshtastic", string(meshSnap.State), meshtasticStatusMessage(meshSnap))
+	if meshCoreEnabled {
+		statusModel.SetComponent(meshcore.AdapterName, string(meshcore.StateNotPresent), "MeshCore physical serial adapter awaiting startup")
+		statusModel.SetComponent("normalized_outbox", "starting", "durable normalized event outbox opened")
+	} else {
+		statusModel.SetComponent(meshcore.AdapterName, string(meshcore.StateDisabled), "MeshCore transport disabled")
+		statusModel.SetComponent("normalized_outbox", "disabled", "MeshCore normalized intake disabled")
+	}
 	statusModel.SetMeshtasticConfig(mapMeshtasticConfigStatus(meshSnap))
 	statusModel.SetComponent("ingest", "idle", "no queued packets")
 
@@ -232,8 +286,12 @@ func New(cfg config.Config, logger *slog.Logger) (*Service, error) {
 		Status:       statusModel,
 		Cloud:        cloud,
 		Meshtastic:   mesh,
+		MeshCore:     meshCoreAdapter,
 		Adapters:     adapters,
 		SerialLeases: serialLeases,
+		OutboxStore:  outboxStore,
+		OutboxEngine: outboxEngine,
+		Normalized:   normalizedDispatcher,
 		Pairing: pairing.NewManager(
 			store,
 			statusModel,
@@ -255,6 +313,10 @@ func New(cfg config.Config, logger *slog.Logger) (*Service, error) {
 			},
 		),
 	}
+	if outboxEngine != nil {
+		svc.container.OutboxResults = outboxEngine.Results()
+		svc.refreshNormalizedOutboxStatus()
+	}
 	svc.container.HomeAutoSession = homeautosession.New(
 		cfg.HomeAutoSession,
 		store,
@@ -268,7 +330,7 @@ func New(cfg config.Config, logger *slog.Logger) (*Service, error) {
 	return svc, nil
 }
 
-func (s *Service) Run(ctx context.Context) error {
+func (s *Service) Run(ctx context.Context) (runErr error) {
 	c := s.container
 	c.Logger.Info(
 		"starting loramapr-receiverd",
@@ -288,12 +350,17 @@ func (s *Service) Run(ctx context.Context) error {
 
 	adapterEvents, err := c.Adapters.Start(ctx)
 	if err != nil {
-		return err
+		return errors.Join(err, s.shutdownNormalizedOutbox())
 	}
 	c.AdapterEvents = adapterEvents
 	defer func() {
 		if err := c.Adapters.Close(); err != nil {
 			c.Logger.Warn("protocol adapter shutdown failed", "err", err)
+			runErr = errors.Join(runErr, err)
+		}
+		if err := s.shutdownNormalizedOutbox(); err != nil {
+			c.Logger.Error("normalized outbox shutdown failed", "err", err)
+			runErr = errors.Join(runErr, err)
 		}
 	}()
 	if c.HomeAutoSession != nil {
@@ -341,10 +408,19 @@ func (s *Service) Run(ctx context.Context) error {
 				continue
 			}
 			s.onAdapterEvent(event)
+		case result, ok := <-c.OutboxResults:
+			if !ok {
+				c.OutboxResults = nil
+				continue
+			}
+			s.onOutboxStageResult(result)
 		case <-s.ingestWake:
 			s.processIngestDispatch(ctx, "event")
+		case <-s.normalizedWake:
+			s.processNormalizedDispatch(ctx, "event")
 		case <-ingestTicker.C:
 			s.processIngestDispatch(ctx, "interval")
+			s.processNormalizedDispatch(ctx, "interval")
 		case <-ticker.C:
 			s.tick(ctx)
 		}
@@ -458,6 +534,17 @@ func (s *Service) tick(ctx context.Context) {
 	c.Status.SetCloud(c.Config.Cloud.BaseURL, pairingCloudStatus(snap.Pairing))
 	c.Status.SetComponent("meshtastic", string(meshSnap.State), meshtasticStatusMessage(meshSnap))
 	c.Status.SetMeshtasticConfig(mapMeshtasticConfigStatus(meshSnap))
+	for _, adapterSnapshot := range c.Adapters.Snapshots() {
+		if adapterSnapshot.Name == meshtasticAdapterName {
+			continue
+		}
+		message := adapterSnapshot.Summary
+		if message == "" {
+			message = adapterSnapshot.LastError
+		}
+		c.Status.SetComponent(adapterSnapshot.Name, adapterSnapshot.State, message)
+	}
+	s.refreshNormalizedOutboxStatus()
 
 	s.processSteadyState(ctx, snap, meshSnap)
 	s.refreshUpdateStatus(ctx, snap)
@@ -562,9 +649,112 @@ func (s *Service) onAdapterEvent(event protocoladapter.Event) {
 			return
 		}
 		s.onMeshtasticEvent(meshEvent)
+	case meshcore.AdapterName:
+		meshEvent, ok := event.Value.(meshcore.AdapterEvent)
+		if !ok {
+			s.container.Logger.Warn("MeshCore adapter emitted unexpected event type")
+			s.container.Status.SetComponent(meshcore.AdapterName, "degraded", "adapter emitted invalid event")
+			return
+		}
+		s.onMeshCoreEvent(event, meshEvent)
 	default:
 		s.container.Logger.Warn("protocol adapter event has no runtime handler", "adapter", event.Adapter)
 	}
+}
+
+func (s *Service) onMeshCoreEvent(event protocoladapter.Event, meshEvent meshcore.AdapterEvent) {
+	c := s.container
+	if c.OutboxEngine == nil {
+		c.Logger.Warn("MeshCore event rejected because durable outbox is unavailable")
+		c.Status.SetComponent("normalized_outbox", "unavailable", "MeshCore observation rejected: durable outbox unavailable")
+		return
+	}
+	snapshot := c.State.Snapshot()
+	binding, ok := normalizedBinding(snapshot)
+	if !ok {
+		c.Logger.Warn(
+			"MeshCore event rejected before acceptance because receiver binding is unavailable",
+			"pairing_phase", snapshot.Pairing.Phase,
+			"device", meshEvent.Device,
+		)
+		c.Status.SetComponent("normalized_outbox", "binding_required", "MeshCore observation not accepted until receiver owner/agent binding is ready")
+		return
+	}
+
+	normalized, err := meshcore.NormalizeAdapterEvent(protocoladapter.Event{
+		Adapter:    meshcore.AdapterName,
+		ObservedAt: event.ObservedAt,
+		Value:      meshEvent.Frame,
+	}, meshcore.ReceiverBinding{
+		ReceiverAgentID: binding.ReceiverAgentID,
+		InstallationID:  binding.InstallationID,
+		AdapterVersion:  s.build.Version,
+	}, meshEvent.Session)
+	if err != nil {
+		c.Logger.Warn("MeshCore event normalization rejected", "err", err, "device", meshEvent.Device)
+		c.Status.SetComponent("normalized_outbox", "normalize_rejected", "MeshCore observation failed normalized contract preparation")
+		return
+	}
+	prepared, err := receiverevents.Prepare(normalized, time.Now().UTC())
+	if err != nil {
+		c.Logger.Error("MeshCore normalized event failed contract validation", "err", err, "device", meshEvent.Device)
+		c.Status.SetComponent("normalized_outbox", "contract_rejected", "MeshCore observation failed vendored contract validation")
+		return
+	}
+	delivery := outbox.Delivery{
+		DeliveryID:              prepared.DeliveryID,
+		Envelope:                prepared.Envelope,
+		EnvelopeSHA256:          prepared.EnvelopeSHA256,
+		IdempotencyKey:          prepared.DeliveryID,
+		OwnerID:                 binding.OwnerID,
+		ReceiverAgentIDSnapshot: binding.ReceiverAgentID,
+		InstallationID:          binding.InstallationID,
+		Endpoint:                receiverevents.EndpointPath,
+		EnqueuedAt:              time.Now().UTC(),
+	}
+	if err := c.OutboxEngine.TryStage(delivery); err != nil {
+		c.Logger.Warn("MeshCore observation rejected by durable outbox backpressure", "delivery_id", prepared.DeliveryID, "err", err)
+		c.Status.SetComponent("normalized_outbox", "backpressure", "MeshCore observation rejected before acceptance: durable stage is full")
+		return
+	}
+	c.Status.SetComponent("normalized_outbox", "persisting", "MeshCore observation staged for durable persistence")
+}
+
+func (s *Service) onOutboxStageResult(result outbox.StageResult) {
+	c := s.container
+	if result.Err != nil {
+		c.Logger.Error("normalized event persistence failed", "delivery_id", result.DeliveryID, "err", result.Err)
+		c.Status.SetComponent("normalized_outbox", "write_failed", "normalized observation was not accepted because durable persistence failed")
+		c.Status.SetLastError("normalized outbox persistence failed")
+		return
+	}
+	c.Logger.Debug("normalized event persisted", "delivery_id", result.DeliveryID)
+	s.refreshNormalizedOutboxStatus()
+	s.signalNormalizedDrain()
+}
+
+func (s *Service) signalNormalizedDrain() {
+	if s.normalizedWake == nil {
+		return
+	}
+	select {
+	case s.normalizedWake <- struct{}{}:
+	default:
+	}
+}
+
+func normalizedBinding(snapshot state.Data) (outbox.Binding, bool) {
+	binding := outbox.Binding{
+		OwnerID:         strings.TrimSpace(snapshot.Cloud.OwnerID),
+		ReceiverAgentID: strings.TrimSpace(snapshot.Cloud.ReceiverID),
+		InstallationID:  strings.TrimSpace(snapshot.Installation.ID),
+	}
+	ready := credentialsReady(snapshot) && binding.OwnerID != "" && binding.ReceiverAgentID != "" && binding.InstallationID != ""
+	return binding, ready
+}
+
+func bindingKey(binding outbox.Binding) string {
+	return binding.OwnerID + "\x00" + binding.ReceiverAgentID + "\x00" + binding.InstallationID
 }
 
 func (s *Service) enqueueIngestEvent(payload map[string]any, idempotencyKey string, capturedAt time.Time, now time.Time) {
@@ -660,6 +850,154 @@ func (s *Service) processIngestDispatch(ctx context.Context, trigger string) {
 	} else {
 		c.Status.SetCloud(snapshot.Cloud.EndpointURL, "unreachable")
 	}
+}
+
+func (s *Service) processNormalizedDispatch(ctx context.Context, trigger string) {
+	c := s.container
+	if c == nil || c.Normalized == nil || c.OutboxEngine == nil {
+		return
+	}
+	snapshot := c.State.Snapshot()
+	binding, ready := normalizedBinding(snapshot)
+	if !ready {
+		return
+	}
+	currentBindingKey := bindingKey(binding)
+	if currentBindingKey != s.normalizedBindingKey {
+		s.normalizedBindingKey = currentBindingKey
+		s.normalizedPaused = false
+		s.normalizedPauseReason = ""
+	}
+	if s.normalizedPaused {
+		c.Logger.Debug("normalized dispatch paused", "trigger", trigger, "reason", s.normalizedPauseReason)
+		return
+	}
+
+	for attempt := 0; attempt < maxIngestBatchTick; attempt++ {
+		result, err := c.Normalized.DispatchOnce(ctx, snapshot.Cloud.IngestAPIKey, binding, time.Now().UTC())
+		if err != nil {
+			c.Logger.Warn("normalized delivery dispatch failed", "trigger", trigger, "err", err)
+			c.Status.SetComponent("normalized_outbox", "delivery_failed", coarseCloudError(err))
+			return
+		}
+		if result.Reconciled.CredentialRebindQuarantined > 0 || result.Reconciled.InstallationResetQuarantined > 0 {
+			c.Logger.Warn(
+				"normalized outbox quarantined stale binding",
+				"credential_rebind", result.Reconciled.CredentialRebindQuarantined,
+				"installation_reset", result.Reconciled.InstallationResetQuarantined,
+			)
+		}
+		if !result.Attempted {
+			s.refreshNormalizedOutboxStatus()
+			return
+		}
+		if result.Acknowledged {
+			c.Logger.Debug("normalized delivery acknowledged", "delivery_id", result.DeliveryID, "duplicate", result.Duplicate)
+			s.refreshNormalizedOutboxStatus()
+			continue
+		}
+
+		switch result.Disposition.Action {
+		case receiverevents.ActionPause, receiverevents.ActionRequirePairing:
+			s.normalizedPaused = true
+			s.normalizedPauseReason = result.Disposition.Reason
+			c.Status.SetComponent("normalized_outbox", "paused", "normalized delivery paused: "+result.Disposition.Reason)
+			if result.Disposition.PairingRequired {
+				c.Status.SetComponent("pairing", "required", "cloud rejected normalized delivery credentials; local evidence retained")
+			}
+			return
+		case receiverevents.ActionClearBinding:
+			s.normalizedPaused = true
+			s.normalizedPauseReason = result.Disposition.Reason
+			change := normalizedLifecycleChange(result.Disposition.Reason)
+			if err := s.handleLifecycleCloudError(change, errors.New(result.Disposition.Reason)); err != nil {
+				c.Logger.Error("apply normalized receiver lifecycle transition", "err", err)
+				c.Status.SetLastError("normalized receiver lifecycle transition failed")
+			}
+			c.Status.SetComponent("normalized_outbox", "lifecycle_blocked", "old receiver deliveries quarantined; re-pair required")
+			return
+		case receiverevents.ActionRetry:
+			s.refreshNormalizedOutboxStatus()
+			return
+		case receiverevents.ActionQuarantine:
+			c.Logger.Warn("normalized delivery quarantined", "delivery_id", result.DeliveryID, "reason", result.Disposition.Reason)
+			s.refreshNormalizedOutboxStatus()
+			continue
+		default:
+			s.refreshNormalizedOutboxStatus()
+			return
+		}
+	}
+}
+
+func normalizedLifecycleChange(reason string) pairing.LifecycleChange {
+	switch strings.ToLower(strings.TrimSpace(reason)) {
+	case "receiver_disabled":
+		return pairing.LifecycleReceiverDisabled
+	case "receiver_replaced":
+		return pairing.LifecycleReceiverReplaced
+	default:
+		return pairing.LifecycleCredentialRevoked
+	}
+}
+
+func (s *Service) refreshNormalizedOutboxStatus() {
+	c := s.container
+	if c == nil || c.OutboxEngine == nil {
+		return
+	}
+	stats, err := c.OutboxEngine.Stats()
+	if err != nil {
+		c.Status.SetComponent("normalized_outbox", "error", "durable outbox status unavailable")
+		return
+	}
+	stateName := "ready"
+	if stats.PendingCount > 0 {
+		stateName = "pending"
+	}
+	if stats.Recovered {
+		stateName = "recovered"
+	}
+	messageSuffix := ""
+	if s.normalizedPaused {
+		stateName = "paused"
+		messageSuffix = " paused=" + s.normalizedPauseReason
+	}
+	c.Status.SetComponent(
+		"normalized_outbox",
+		stateName,
+		fmt.Sprintf("pending=%d quarantined=%d bytes=%d recovery=%s%s", stats.PendingCount, stats.QuarantinedCount, stats.UsedBytes, stats.RecoveryCode, messageSuffix),
+	)
+}
+
+func (s *Service) shutdownNormalizedOutbox() error {
+	c := s.container
+	if c == nil || c.OutboxEngine == nil {
+		return nil
+	}
+	drainDone := make(chan struct{})
+	go func() {
+		defer close(drainDone)
+		for result := range c.OutboxEngine.Results() {
+			s.onOutboxStageResult(result)
+		}
+	}()
+	closeCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := c.OutboxEngine.Close(closeCtx); err != nil {
+		return fmt.Errorf("drain durable normalized outbox: %w", err)
+	}
+	select {
+	case <-drainDone:
+	case <-closeCtx.Done():
+		return fmt.Errorf("drain normalized outbox results: %w", closeCtx.Err())
+	}
+	if c.OutboxStore != nil {
+		if err := c.OutboxStore.Close(); err != nil {
+			return fmt.Errorf("close durable normalized outbox: %w", err)
+		}
+	}
+	return nil
 }
 
 func (s *Service) processSteadyState(ctx context.Context, snapshot state.Data, meshSnap meshtastic.Snapshot) {
@@ -1982,6 +2320,15 @@ func outboundCallResult(err error) (int, string) {
 func (s *Service) handleLifecycleCloudError(change pairing.LifecycleChange, err error) error {
 	c := s.container
 	reason := lifecycleChangeReason(err)
+	oldReceiverID := strings.TrimSpace(c.State.Snapshot().Cloud.ReceiverID)
+	if c.OutboxEngine != nil && oldReceiverID != "" {
+		if _, quarantineErr := c.OutboxEngine.QuarantineByReceiver(oldReceiverID, string(change), outbox.AttemptFailure{
+			ErrorCode: "RECEIVER_LIFECYCLE_CHANGED",
+			Message:   reason,
+		}); quarantineErr != nil {
+			return fmt.Errorf("quarantine normalized deliveries before receiver lifecycle transition: %w", quarantineErr)
+		}
+	}
 	if applyErr := c.Pairing.ApplyLifecycleChange(change, reason, true); applyErr != nil {
 		return applyErr
 	}

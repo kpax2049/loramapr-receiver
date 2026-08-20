@@ -13,8 +13,11 @@ import (
 	"github.com/loramapr/loramapr-receiver/internal/cloudclient"
 	"github.com/loramapr/loramapr-receiver/internal/config"
 	"github.com/loramapr/loramapr-receiver/internal/homeautosession"
+	"github.com/loramapr/loramapr-receiver/internal/meshcore"
 	"github.com/loramapr/loramapr-receiver/internal/meshtastic"
+	"github.com/loramapr/loramapr-receiver/internal/outbox"
 	"github.com/loramapr/loramapr-receiver/internal/pairing"
+	"github.com/loramapr/loramapr-receiver/internal/protocoladapter"
 	"github.com/loramapr/loramapr-receiver/internal/state"
 	"github.com/loramapr/loramapr-receiver/internal/status"
 )
@@ -172,6 +175,75 @@ func TestNewPersistsIdentityHints(t *testing.T) {
 	}
 }
 
+func TestNewSelectsConcurrentAdaptersAndStagesMeshCoreDurably(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+	cfg := config.Default()
+	cfg.Paths.StateFile = filepath.Join(tempDir, "receiver-state.json")
+	cfg.Paths.OutboxFile = filepath.Join(tempDir, "ingest-outbox.db")
+	cfg.Meshtastic.Transport = "disabled"
+	cfg.MeshCore.Transport = "physical_serial"
+	cfg.MeshCore.Device = filepath.Join(tempDir, "ttyACM0")
+	svc, err := New(cfg, slog.Default())
+	if err != nil {
+		t.Fatalf("runtime.New failed: %v", err)
+	}
+	defer func() {
+		if err := svc.shutdownNormalizedOutbox(); err != nil {
+			t.Errorf("shutdown normalized outbox: %v", err)
+		}
+	}()
+
+	snapshots := svc.container.Adapters.Snapshots()
+	if len(snapshots) != 2 || snapshots[0].Name != meshcore.AdapterName && snapshots[1].Name != meshcore.AdapterName {
+		t.Fatalf("expected Meshtastic and MeshCore adapters, got %#v", snapshots)
+	}
+	if svc.container.OutboxStore == nil || svc.container.OutboxEngine == nil || svc.container.Normalized == nil {
+		t.Fatal("MeshCore selection did not establish durable normalized delivery")
+	}
+	if err := svc.container.State.Update(func(data *state.Data) {
+		data.Pairing.Phase = state.PairingSteadyState
+		data.Cloud.OwnerID = "018f8f5b-8c6d-7abc-8def-0123456789aa"
+		data.Cloud.ReceiverID = "018f8f5b-8c6d-7abc-8def-0123456789ab"
+		data.Cloud.IngestAPIKey = "fixture-key"
+	}); err != nil {
+		t.Fatal(err)
+	}
+	payload := []byte{meshcore.PushRawData, 0x08, 0xa0, 0xff, 0x01, 0x02}
+	session := meshcore.Snapshot{
+		State: meshcore.SessionReady,
+		Trust: meshcore.TrustProfile{
+			Trusted: true, ProtocolVersion: meshcore.ProtocolVersion,
+			FirmwareBuild: meshcore.PinnedFirmwareBuild, FirmwareVersion: meshcore.PinnedFirmwareVersion,
+			Model: "Fixture Companion", AllowlistCommit: meshcore.PinnedSourceCommit,
+		},
+	}
+	observedAt := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
+	svc.onAdapterEvent(protocoladapter.Event{
+		Adapter: meshcore.AdapterName, ObservedAt: observedAt,
+		Value: meshcore.AdapterEvent{
+			Frame:   meshcore.PushFrame{Opcode: meshcore.PushRawData, Payload: payload},
+			Session: session, Device: cfg.MeshCore.Device, ObservedAt: observedAt,
+		},
+	})
+	select {
+	case result := <-svc.container.OutboxResults:
+		if result.Err != nil {
+			t.Fatalf("durable stage failed: %v", result.Err)
+		}
+		record, err := svc.container.OutboxEngine.Get(result.DeliveryID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if record.IdempotencyKey != record.DeliveryID || record.Endpoint != "/api/receiver/events/v1" || !strings.Contains(string(record.Envelope), `"protocol":"meshcore"`) {
+			t.Fatalf("unexpected persisted normalized delivery: %#v envelope=%s", record, record.Envelope)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for runtime durable stage")
+	}
+}
+
 type mockCloudClient struct {
 	postErr      error
 	postCalls    int
@@ -211,6 +283,17 @@ func (m *mockCloudClient) PostIngestEvent(
 	m.lastPayload = payload
 	m.lastEventKey = idempotencyKey
 	return m.postErr
+}
+
+func (m *mockCloudClient) PostNormalizedEvent(
+	_ context.Context,
+	_ string,
+	_ string,
+	_ []byte,
+	deliveryID string,
+	_ string,
+) (cloudclient.NormalizedDeliveryResult, error) {
+	return cloudclient.NormalizedDeliveryResult{StatusCode: 202, DeliveryID: deliveryID}, nil
 }
 
 func (m *mockCloudClient) SendReceiverHeartbeat(
@@ -1242,6 +1325,70 @@ func TestSendHeartbeatLifecycleTransitionRevoked(t *testing.T) {
 	}
 	if len(svc.steady.ingestQueue) != 0 {
 		t.Fatalf("expected ingest queue to be cleared after lifecycle transition")
+	}
+}
+
+func TestLifecycleTransitionQuarantinesNormalizedEvidenceBeforeClearingBinding(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
+	statePath := filepath.Join(t.TempDir(), "receiver-state.json")
+	store, err := state.Open(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Update(func(data *state.Data) {
+		data.Pairing.Phase = state.PairingSteadyState
+		data.Cloud.OwnerID = "owner-1"
+		data.Cloud.ReceiverID = "agent-old"
+		data.Cloud.IngestAPIKey = "secret"
+	}); err != nil {
+		t.Fatal(err)
+	}
+	outboxStore, err := outbox.Open(outbox.Config{Path: filepath.Join(t.TempDir(), "outbox.db"), Now: func() time.Time { return now }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	engine, err := outbox.NewEngine(outboxStore, outbox.EngineConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		if err := engine.Close(ctx); err != nil {
+			t.Errorf("close engine: %v", err)
+		}
+		if err := outboxStore.Close(); err != nil {
+			t.Errorf("close store: %v", err)
+		}
+	}()
+	deliveryID := "0198c7a2-e395-7000-8000-000000000099"
+	if err := outboxStore.Enqueue(outbox.Delivery{
+		DeliveryID: deliveryID, Envelope: []byte(`{"deliveryId":"fixture"}`), EnvelopeSHA256: strings.Repeat("a", 64),
+		IdempotencyKey: deliveryID, OwnerID: "owner-1", ReceiverAgentIDSnapshot: "agent-old",
+		InstallationID: store.Snapshot().Installation.ID, Endpoint: "/api/receiver/events/v1",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	statusModel := status.New()
+	svc := &Service{
+		container: &Container{
+			Config: config.Default(), Logger: slog.Default(), State: store, Status: statusModel,
+			Pairing:     pairing.NewManager(store, statusModel, nil, nil, pairing.ActivationIdentity{}),
+			OutboxStore: outboxStore, OutboxEngine: engine,
+		},
+	}
+	if err := svc.handleLifecycleCloudError(pairing.LifecycleReceiverReplaced, errors.New("receiver replaced")); err != nil {
+		t.Fatal(err)
+	}
+	record, err := engine.Get(deliveryID)
+	if err != nil || record.State != outbox.StateQuarantined || record.QuarantineReason != string(pairing.LifecycleReceiverReplaced) {
+		t.Fatalf("normalized evidence not quarantined: record=%#v err=%v", record, err)
+	}
+	snapshot := store.Snapshot()
+	if snapshot.Pairing.Phase != state.PairingUnpaired || snapshot.Cloud.ReceiverID != "" || snapshot.Cloud.IngestAPIKey != "" {
+		t.Fatalf("receiver binding was not cleared after quarantine: %#v", snapshot)
 	}
 }
 
