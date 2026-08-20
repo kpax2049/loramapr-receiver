@@ -18,6 +18,7 @@ type ReceiverBinding struct {
 	ReceiverAgentID string
 	InstallationID  string
 	AdapterVersion  string
+	Clock           map[string]any
 }
 
 func NormalizeAdapterEvent(event protocoladapter.Event, binding ReceiverBinding, session Snapshot) (map[string]any, error) {
@@ -98,8 +99,15 @@ func normalizedBase(event protocoladapter.Event, binding ReceiverBinding, frame 
 	if value := strings.TrimSpace(binding.ReceiverAgentID); value != "" {
 		receiver["receiverAgentId"] = value
 	}
+	contractVersion := "1.0"
+	timeConfidence := "suspect"
+	if binding.Clock != nil {
+		receiver["clock"] = binding.Clock
+		contractVersion = "1.1"
+		timeConfidence = "receiver_clock"
+	}
 	return map[string]any{
-		"contractVersion": "1.0",
+		"contractVersion": contractVersion,
 		"eventType":       "packet_observed",
 		"protocol":        "meshcore",
 		"receiver":        receiver,
@@ -107,8 +115,9 @@ func normalizedBase(event protocoladapter.Event, binding ReceiverBinding, frame 
 			"receiver_rssi":   "not_observable",
 			"receiver_snr":    "not_observable",
 			"sender_identity": "not_observable",
+			"receiver_clock":  capabilityAvailability(binding.Clock != nil),
 		},
-		"timeConfidence": "receiver_clock",
+		"timeConfidence": timeConfidence,
 		"authenticity": map[string]any{
 			"state":  "unverified",
 			"method": "none",
@@ -163,7 +172,7 @@ func normalizeLogRX(base map[string]any, payload []byte, observedAt time.Time) m
 		"value":  unixSeconds(advert.timestamp).Format(time.RFC3339),
 		"origin": "protocol",
 	}
-	base["timeConfidence"] = protocolTimeConfidence(unixSeconds(advert.timestamp), observedAt)
+	base["timeConfidence"] = protocolTimeConfidence(unixSeconds(advert.timestamp), observedAt, hasClock(base))
 	base["authenticity"] = map[string]any{
 		"state":              "verified",
 		"method":             "raw_ed25519",
@@ -239,7 +248,7 @@ func normalizeDelegatedAdvert(base map[string]any, payload []byte, observedAt ti
 		"value":  unixSeconds(contact.timestamp).Format(time.RFC3339),
 		"origin": "protocol",
 	}
-	base["timeConfidence"] = protocolTimeConfidence(unixSeconds(contact.timestamp), observedAt)
+	base["timeConfidence"] = protocolTimeConfidence(unixSeconds(contact.timestamp), observedAt, hasClock(base))
 	base["authenticity"] = map[string]any{
 		"state":           "verified",
 		"method":          "trusted_companion_validation",
@@ -371,7 +380,10 @@ func unixSeconds(value uint32) time.Time {
 	return time.Unix(int64(value), 0).UTC()
 }
 
-func protocolTimeConfidence(occurredAt time.Time, observedAt time.Time) string {
+func protocolTimeConfidence(occurredAt time.Time, observedAt time.Time, synchronized bool) string {
+	if !synchronized {
+		return "suspect"
+	}
 	difference := occurredAt.Sub(observedAt.UTC())
 	if difference < 0 {
 		difference = -difference
@@ -380,6 +392,15 @@ func protocolTimeConfidence(occurredAt time.Time, observedAt time.Time) string {
 		return "authoritative_protocol"
 	}
 	return "suspect"
+}
+
+func hasClock(base map[string]any) bool {
+	receiver, ok := base["receiver"].(map[string]any)
+	if !ok {
+		return false
+	}
+	_, ok = receiver["clock"]
+	return ok
 }
 
 func capabilityAvailability(available bool) string {

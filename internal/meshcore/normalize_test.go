@@ -46,8 +46,8 @@ func TestNormalizeSignedLogRXAdvertRetainsRawVerifiedEvidence(t *testing.T) {
 	if position["lat"] != float64(49.395919) || position["lon"] != float64(11.351234) || position["verification"] != "verified" {
 		t.Fatalf("unexpected verified position: %#v", position)
 	}
-	if got := stringField(t, event, "timeConfidence"); got != "authoritative_protocol" {
-		t.Fatalf("timeConfidence = %q, want authoritative_protocol", got)
+	if got := stringField(t, event, "timeConfidence"); got != "suspect" {
+		t.Fatalf("timeConfidence = %q, want suspect without cloud clock attestation", got)
 	}
 
 	authenticity := mapField(t, event, "authenticity")

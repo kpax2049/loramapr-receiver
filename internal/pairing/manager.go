@@ -188,6 +188,7 @@ func (m *Manager) ApplyLifecycleChange(change LifecycleChange, detail string, cl
 			data.Cloud.IngestAPIKeyID = ""
 			data.Cloud.IngestAPIKey = ""
 			data.Cloud.CredentialRef = ""
+			data.Cloud.ClockSamples = nil
 			data.Cloud.UpdatedAt = now
 		}
 	}); err != nil {

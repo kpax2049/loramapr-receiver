@@ -14,12 +14,14 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/loramapr/loramapr-receiver/internal/clockattestation"
 )
 
 type PairingPhase string
 
 const (
-	CurrentSchemaVersion = 9
+	CurrentSchemaVersion = 10
 
 	PairingUnpaired           PairingPhase = "unpaired"
 	PairingCodeEntered        PairingPhase = "pairing_code_entered"
@@ -64,23 +66,24 @@ type PairingState struct {
 }
 
 type CloudState struct {
-	EndpointURL           string    `json:"endpoint_url"`
-	ConfigVersion         string    `json:"config_version,omitempty"`
-	ActivateEndpoint      string    `json:"activate_endpoint,omitempty"`
-	HeartbeatEndpoint     string    `json:"heartbeat_endpoint,omitempty"`
-	IngestEndpoint        string    `json:"ingest_endpoint,omitempty"`
-	OwnerID               string    `json:"owner_id,omitempty"`
-	ReceiverID            string    `json:"receiver_id,omitempty"`
-	ReceiverLabel         string    `json:"receiver_label,omitempty"`
-	SiteLabel             string    `json:"site_label,omitempty"`
-	GroupLabel            string    `json:"group_label,omitempty"`
-	IngestAPIKeyID        string    `json:"ingest_api_key_id,omitempty"`
-	IngestAPIKey          string    `json:"ingest_api_key_secret,omitempty"`
-	CredentialRef         string    `json:"credential_ref,omitempty"`
-	CredentialFingerprint string    `json:"credential_fingerprint_sha256,omitempty"`
-	CredentialGeneration  uint64    `json:"credential_generation,omitempty"`
-	BindingGeneration     uint64    `json:"binding_generation,omitempty"`
-	UpdatedAt             time.Time `json:"updated_at,omitempty"`
+	EndpointURL           string                    `json:"endpoint_url"`
+	ConfigVersion         string                    `json:"config_version,omitempty"`
+	ActivateEndpoint      string                    `json:"activate_endpoint,omitempty"`
+	HeartbeatEndpoint     string                    `json:"heartbeat_endpoint,omitempty"`
+	IngestEndpoint        string                    `json:"ingest_endpoint,omitempty"`
+	OwnerID               string                    `json:"owner_id,omitempty"`
+	ReceiverID            string                    `json:"receiver_id,omitempty"`
+	ReceiverLabel         string                    `json:"receiver_label,omitempty"`
+	SiteLabel             string                    `json:"site_label,omitempty"`
+	GroupLabel            string                    `json:"group_label,omitempty"`
+	IngestAPIKeyID        string                    `json:"ingest_api_key_id,omitempty"`
+	IngestAPIKey          string                    `json:"ingest_api_key_secret,omitempty"`
+	CredentialRef         string                    `json:"credential_ref,omitempty"`
+	CredentialFingerprint string                    `json:"credential_fingerprint_sha256,omitempty"`
+	CredentialGeneration  uint64                    `json:"credential_generation,omitempty"`
+	BindingGeneration     uint64                    `json:"binding_generation,omitempty"`
+	ClockSamples          []clockattestation.Sample `json:"clock_samples,omitempty"`
+	UpdatedAt             time.Time                 `json:"updated_at,omitempty"`
 }
 
 type RuntimeState struct {
@@ -342,6 +345,9 @@ func normalizeGenerations(previous Data, next *Data) {
 	}
 	previousBinding := previous.Cloud.OwnerID + "\x00" + previous.Cloud.ReceiverID + "\x00" + previous.Installation.ID
 	nextBinding := next.Cloud.OwnerID + "\x00" + next.Cloud.ReceiverID + "\x00" + next.Installation.ID
+	if nextBinding != previousBinding {
+		next.Cloud.ClockSamples = nil
+	}
 	if nextBinding != previousBinding && next.Cloud.OwnerID != "" && next.Cloud.ReceiverID != "" {
 		next.Cloud.BindingGeneration = previous.Cloud.BindingGeneration + 1
 	}
@@ -547,6 +553,13 @@ func (s *Store) migrate() (bool, error) {
 			s.data.Installation.Bound = true
 		}
 		version = 9
+		changed = true
+	}
+	if version <= 9 {
+		if len(s.data.Cloud.ClockSamples) > 2 {
+			s.data.Cloud.ClockSamples = append([]clockattestation.Sample(nil), s.data.Cloud.ClockSamples[len(s.data.Cloud.ClockSamples)-2:]...)
+		}
+		version = 10
 		changed = true
 	}
 

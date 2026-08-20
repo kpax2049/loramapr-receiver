@@ -113,6 +113,7 @@ func (r *installationRotator) recover(journal *outbox.InstallationRotation) (str
 				data.Cloud.IngestAPIKeyID = ""
 				data.Cloud.IngestAPIKey = ""
 				data.Cloud.CredentialRef = ""
+				data.Cloud.ClockSamples = nil
 				data.Cloud.UpdatedAt = r.now().UTC()
 			}); err != nil {
 				return "", fmt.Errorf("persist rotated installation identity: %w", err)
@@ -151,6 +152,9 @@ func validateRotatedState(current state.Data) error {
 	if current.Installation.Bound || strings.TrimSpace(current.Cloud.OwnerID) != "" ||
 		strings.TrimSpace(current.Cloud.ReceiverID) != "" || strings.TrimSpace(current.Cloud.IngestAPIKey) != "" {
 		return errors.New("rotated installation state still contains the old cloud binding")
+	}
+	if len(current.Cloud.ClockSamples) != 0 {
+		return errors.New("rotated installation state still contains cloud clock samples")
 	}
 	return nil
 }

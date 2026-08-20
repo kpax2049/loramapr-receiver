@@ -5,11 +5,13 @@
   "valid": [
     "valid/meshtastic-position.json",
     "valid/meshcore-radio-route.json",
+    "valid/meshcore-synchronized-clock.json",
     "valid/unknown-minor-event.json"
   ],
   "invalid": [
     "invalid/invalid-envelope.json",
-    "invalid/invalid-meshcore-radio-source.json"
+    "invalid/invalid-meshcore-radio-source.json",
+    "invalid/invalid-synchronized-clock-cardinality.json"
   ],
   "jcs": [
     "jcs/order-and-numbers.json"

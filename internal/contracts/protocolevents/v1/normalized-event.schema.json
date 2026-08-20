@@ -3,6 +3,20 @@
   "$id": "https://loramapr.dev/contracts/protocol-events/v1/normalized-event.schema.json",
   "title": "LoRaMapr normalized receiver event v1",
   "type": "object",
+  "$defs": {
+    "clockSample": {
+      "type": "object",
+      "required": ["token", "receivedAt"],
+      "properties": {
+        "token": { "type": "string", "minLength": 1, "maxLength": 2048 },
+        "receivedAt": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "Z$"
+        }
+      }
+    }
+  },
   "required": [
     "contractVersion",
     "deliveryId",
@@ -41,6 +55,44 @@
           "type": "string",
           "format": "date-time",
           "pattern": "Z$"
+        },
+        "clock": {
+          "type": "object",
+          "required": ["source", "state"],
+          "properties": {
+            "source": { "const": "cloud_attestation" },
+            "state": { "enum": ["synchronized", "unsynchronized"] },
+            "samples": {
+              "type": "array",
+              "maxItems": 2,
+              "items": { "$ref": "#/$defs/clockSample" }
+            }
+          },
+          "allOf": [
+            {
+              "if": {
+                "properties": { "state": { "const": "synchronized" } },
+                "required": ["state"]
+              },
+              "then": {
+                "required": ["samples"],
+                "properties": {
+                  "samples": { "type": "array", "minItems": 2, "maxItems": 2 }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": { "state": { "const": "unsynchronized" } },
+                "required": ["state"]
+              },
+              "then": {
+                "properties": {
+                  "samples": { "type": "array", "maxItems": 1 }
+                }
+              }
+            }
+          ]
         }
       }
     },

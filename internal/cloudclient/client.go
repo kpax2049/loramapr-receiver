@@ -13,6 +13,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/loramapr/loramapr-receiver/internal/clockattestation"
 )
 
 type PairingClient interface {
@@ -102,6 +104,7 @@ type ReceiverHeartbeatAck struct {
 	LastHeartbeatAt       time.Time
 	NodeCount             int
 	HomeAutoSessionConfig *HomeAutoSessionManagedConfig
+	ClockAttestation      *clockattestation.Candidate
 }
 
 type HomeAutoSessionStartRequest struct {
@@ -149,11 +152,14 @@ type APIError struct {
 }
 
 type NormalizedDeliveryResult struct {
-	StatusCode int
-	Duplicate  bool
-	DeliveryID string
-	RequestID  string
+	StatusCode       int
+	Duplicate        bool
+	DeliveryID       string
+	RequestID        string
+	ClockAttestation *clockattestation.Candidate
 }
+
+type ClockAttestationCandidate = clockattestation.Candidate
 
 func (e *APIError) Error() string {
 	if e.Message == "" {
@@ -190,6 +196,7 @@ func IsRetryable(err error) bool {
 type HTTPClient struct {
 	baseURL string
 	client  *http.Client
+	now     func() time.Time
 }
 
 func NewHTTPClient(baseURL string, timeout time.Duration) *HTTPClient {
@@ -201,6 +208,7 @@ func NewHTTPClient(baseURL string, timeout time.Duration) *HTTPClient {
 		client: &http.Client{
 			Timeout: timeout,
 		},
+		now: time.Now,
 	}
 }
 
@@ -376,6 +384,7 @@ func (c *HTTPClient) PostNormalizedEvent(
 		return NormalizedDeliveryResult{}, err
 	}
 	defer response.Body.Close()
+	receivedAt := c.currentTime()
 	responseRequest := responseRequestID(response.Header)
 	if response.StatusCode != http.StatusOK && response.StatusCode != http.StatusAccepted {
 		decoded := decodeErrorPayload(response.Body)
@@ -390,9 +399,10 @@ func (c *HTTPClient) PostNormalizedEvent(
 		}
 	}
 	var payload struct {
-		Accepted   bool   `json:"accepted"`
-		Duplicate  bool   `json:"duplicate"`
-		DeliveryID string `json:"deliveryId"`
+		Accepted         bool            `json:"accepted"`
+		Duplicate        bool            `json:"duplicate"`
+		DeliveryID       string          `json:"deliveryId"`
+		ClockAttestation json.RawMessage `json:"clockAttestation"`
 	}
 	if err := json.NewDecoder(io.LimitReader(response.Body, 4096)).Decode(&payload); err != nil {
 		return NormalizedDeliveryResult{}, fmt.Errorf("decode normalized delivery response: %w", err)
@@ -402,12 +412,14 @@ func (c *HTTPClient) PostNormalizedEvent(
 		(response.StatusCode == http.StatusAccepted && payload.Duplicate) {
 		return NormalizedDeliveryResult{}, errors.New("cloud returned an inconsistent normalized delivery acknowledgement")
 	}
-	return NormalizedDeliveryResult{
+	result := NormalizedDeliveryResult{
 		StatusCode: response.StatusCode,
 		Duplicate:  payload.Duplicate,
 		DeliveryID: payload.DeliveryID,
 		RequestID:  responseRequest,
-	}, nil
+	}
+	result.ClockAttestation = c.parseClockAttestation(decodeClockWire(payload.ClockAttestation), receivedAt, request, response)
+	return result, nil
 }
 
 func (c *HTTPClient) SendReceiverHeartbeat(
@@ -447,8 +459,9 @@ func (c *HTTPClient) SendReceiverHeartbeat(
 		LastHeartbeatAt       string                        `json:"lastHeartbeatAt"`
 		NodeCount             int                           `json:"nodeCount"`
 		HomeAutoSessionConfig *HomeAutoSessionManagedConfig `json:"homeAutoSessionConfig"`
+		ClockAttestation      json.RawMessage               `json:"clockAttestation"`
 	}
-	err := c.postJSON(ctx, heartbeatEndpoint, request, map[string]string{
+	meta, err := c.postJSONWithMeta(ctx, heartbeatEndpoint, request, map[string]string{
 		"x-api-key": trimmedKey,
 	}, &response)
 	if err != nil {
@@ -470,6 +483,7 @@ func (c *HTTPClient) SendReceiverHeartbeat(
 		LastHeartbeatAt:       lastHeartbeatAt,
 		NodeCount:             response.NodeCount,
 		HomeAutoSessionConfig: response.HomeAutoSessionConfig,
+		ClockAttestation:      c.parseClockAttestation(decodeClockWire(response.ClockAttestation), meta.ReceivedAt, meta.Request, meta.Response),
 	}, nil
 }
 
@@ -577,6 +591,9 @@ func (c *HTTPClient) postJSON(
 type postResponseMeta struct {
 	StatusCode int
 	RequestID  string
+	ReceivedAt time.Time
+	Request    *http.Request
+	Response   *http.Response
 }
 
 func (c *HTTPClient) postJSONWithMeta(
@@ -619,6 +636,9 @@ func (c *HTTPClient) postJSONWithMeta(
 	meta := postResponseMeta{
 		StatusCode: httpResp.StatusCode,
 		RequestID:  respRequestID,
+		ReceivedAt: c.currentTime(),
+		Request:    httpReq,
+		Response:   httpResp,
 	}
 
 	if httpResp.StatusCode < 200 || httpResp.StatusCode >= 300 {
@@ -644,6 +664,67 @@ func (c *HTTPClient) postJSONWithMeta(
 		return meta, err
 	}
 	return meta, nil
+}
+
+func (c *HTTPClient) parseClockAttestation(wire *clockattestation.Wire, receivedAt time.Time, request *http.Request, response *http.Response) *clockattestation.Candidate {
+	if wire == nil {
+		return nil
+	}
+	trusted := c.trustedClockTransport(request, response)
+	candidate, err := clockattestation.Parse(*wire, receivedAt, trusted)
+	if err != nil {
+		return nil
+	}
+	return candidate
+}
+
+func decodeClockWire(raw json.RawMessage) *clockattestation.Wire {
+	if len(raw) == 0 || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		return nil
+	}
+	var wire clockattestation.Wire
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&wire); err != nil {
+		return nil
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return nil
+	}
+	return &wire
+}
+
+func (c *HTTPClient) currentTime() time.Time {
+	if c.now != nil {
+		return c.now().UTC()
+	}
+	return time.Now().UTC()
+}
+
+func (c *HTTPClient) trustedClockTransport(request *http.Request, response *http.Response) bool {
+	if request == nil || request.URL == nil || response == nil || response.TLS == nil || !response.TLS.HandshakeComplete ||
+		response.Request == nil || response.Request.URL == nil || response.Request != request || response.Request.Response != nil {
+		return false
+	}
+	base, err := url.Parse(c.baseURL)
+	if err != nil || !sameHTTPSOrigin(base, request.URL) || !sameHTTPSOrigin(base, response.Request.URL) {
+		return false
+	}
+	return true
+}
+
+func sameHTTPSOrigin(left, right *url.URL) bool {
+	if left == nil || right == nil || !strings.EqualFold(left.Scheme, "https") || !strings.EqualFold(right.Scheme, "https") {
+		return false
+	}
+	return strings.EqualFold(left.Hostname(), right.Hostname()) && effectiveHTTPSPort(left) == effectiveHTTPSPort(right)
+}
+
+func effectiveHTTPSPort(value *url.URL) string {
+	if port := value.Port(); port != "" {
+		return port
+	}
+	return "443"
 }
 
 func (c *HTTPClient) resolveURL(pathOrURL string) (string, error) {

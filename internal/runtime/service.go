@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/loramapr/loramapr-receiver/internal/buildinfo"
+	"github.com/loramapr/loramapr-receiver/internal/clockattestation"
 	"github.com/loramapr/loramapr-receiver/internal/cloudclient"
 	"github.com/loramapr/loramapr-receiver/internal/config"
 	"github.com/loramapr/loramapr-receiver/internal/diagnostics"
@@ -720,6 +721,7 @@ func (s *Service) onMeshCoreEvent(event protocoladapter.Event, meshEvent meshcor
 		ReceiverAgentID: binding.ReceiverAgentID,
 		InstallationID:  binding.InstallationID,
 		AdapterVersion:  s.build.Version,
+		Clock:           clockattestation.Envelope(snapshot.Cloud.ClockSamples, event.ObservedAt.UTC(), binding.ReceiverAgentID, binding.InstallationID),
 	}, meshEvent.Session)
 	if err != nil {
 		c.Logger.Warn("MeshCore event normalization rejected", "err", err, "device", meshEvent.Device)
@@ -786,6 +788,25 @@ func normalizedBinding(snapshot state.Data) (outbox.Binding, bool) {
 	}
 	ready := credentialsReady(snapshot) && binding.OwnerID != "" && binding.ReceiverAgentID != "" && binding.InstallationID != ""
 	return binding, ready
+}
+
+func (s *Service) recordClockAttestation(candidate *clockattestation.Candidate) {
+	if candidate == nil || s == nil || s.container == nil || s.container.State == nil {
+		return
+	}
+	snapshot := s.container.State.Snapshot()
+	sample, err := candidate.BoundSample(snapshot.Cloud.ReceiverID, snapshot.Installation.ID)
+	if err != nil {
+		return
+	}
+	if err := s.container.State.Update(func(data *state.Data) {
+		if data.Cloud.ReceiverID != sample.ReceiverAgentID || data.Installation.ID != sample.InstallationID {
+			return
+		}
+		data.Cloud.ClockSamples = clockattestation.Add(data.Cloud.ClockSamples, sample)
+	}); err != nil {
+		s.container.Logger.Warn("persist cloud clock attestation failed", "err", err)
+	}
 }
 
 func (s *Service) enqueueIngestEvent(payload map[string]any, idempotencyKey string, capturedAt time.Time, now time.Time) {
@@ -915,6 +936,7 @@ func (s *Service) processNormalizedDispatch(ctx context.Context, trigger string)
 			return
 		}
 		if result.Acknowledged {
+			s.recordClockAttestation(result.ClockAttestation)
 			c.Logger.Debug("normalized delivery acknowledged", "delivery_id", result.DeliveryID, "duplicate", result.Duplicate)
 			s.refreshNormalizedOutboxStatus()
 			continue
@@ -1335,6 +1357,7 @@ func (s *Service) sendHeartbeat(ctx context.Context, snapshot state.Data, meshSn
 			}
 		}
 	}
+	s.recordClockAttestation(ack.ClockAttestation)
 	latest := snapshot
 	if s.container.State != nil {
 		latest = s.container.State.Snapshot()
