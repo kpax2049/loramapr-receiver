@@ -1,0 +1,25 @@
+{
+  "contractVersion": "1.7",
+  "deliveryId": "018f47a2-7b3c-7def-9123-456789abcdee",
+  "eventType": "future_protocol_diagnostic",
+  "protocol": "meshcore",
+  "receiver": {
+    "installationId": "fedcba9876543210fedcba9876543210",
+    "adapter": "meshcore-companion",
+    "adapterVersion": "2.0.0",
+    "observedAt": "2026-08-19T13:00:00.000Z",
+    "futureReceiverField": true
+  },
+  "capabilities": {
+    "future_capability": "unknown"
+  },
+  "source": {
+    "nativeMessageType": 250,
+    "rawEncoding": "base64",
+    "raw": "",
+    "rawSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "futureTopLevelField": {
+    "retained": true
+  }
+}

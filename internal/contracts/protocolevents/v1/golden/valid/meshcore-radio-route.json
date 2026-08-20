@@ -1,0 +1,41 @@
+{
+  "contractVersion": "1.0",
+  "deliveryId": "018f47a2-7b3c-7def-a123-456789abcdef",
+  "eventType": "packet_observed",
+  "protocol": "meshcore",
+  "receiver": {
+    "installationId": "0123456789abcdef0123456789abcdef",
+    "adapter": "meshcore-companion",
+    "adapterVersion": "1.0.0",
+    "observedAt": "2026-08-19T12:34:56.789Z"
+  },
+  "radio": {
+    "metrics": [
+      {
+        "kind": "snr",
+        "value": 4.5,
+        "unit": "dB",
+        "origin": "receiver_local",
+        "source": {
+          "value": 18,
+          "unit": "quarter_dB",
+          "encoding": "meshcore_snr_x4"
+        }
+      }
+    ],
+    "routeKind": "flood",
+    "path": ["7a", "3f"]
+  },
+  "capabilities": {
+    "receiver_snr": "available",
+    "route_path": "available"
+  },
+  "source": {
+    "protocolVersion": "13",
+    "nativeMessageType": 131,
+    "rawEncoding": "base64",
+    "raw": "AQIDBA==",
+    "rawSha256": "9f64a747e1b97f131fabb6b447296c9b6f0201e79fb3c5356e6c77e89b6a806a"
+  },
+  "contentKey": "meshcore:13:packet:fixture"
+}

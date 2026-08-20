@@ -1,0 +1,17 @@
+{
+  "contract": "normalized-receiver-event",
+  "contractVersionMajor": 1,
+  "schema": "../normalized-event.schema.json",
+  "valid": [
+    "valid/meshtastic-position.json",
+    "valid/meshcore-radio-route.json",
+    "valid/unknown-minor-event.json"
+  ],
+  "invalid": [
+    "invalid/invalid-envelope.json",
+    "invalid/invalid-meshcore-radio-source.json"
+  ],
+  "jcs": [
+    "jcs/order-and-numbers.json"
+  ]
+}
