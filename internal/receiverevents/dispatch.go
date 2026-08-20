@@ -19,7 +19,7 @@ const (
 	ActionQuarantine     Action = "quarantine"
 	ActionPause          Action = "pause"
 	ActionRequirePairing Action = "require_pairing"
-	ActionClearBinding   Action = "clear_binding"
+	ActionStop           Action = "stop"
 )
 
 type Disposition struct {
@@ -27,9 +27,8 @@ type Disposition struct {
 	Reason          string
 	RetryAfter      time.Duration
 	Quarantine      bool
-	AllForReceiver  bool
 	PairingRequired bool
-	ClearBinding    bool
+	PauseKind       outbox.DispatchPauseKind
 }
 
 type DeliveryClient interface {
@@ -61,6 +60,21 @@ type DispatchResult struct {
 func (d Dispatcher) DispatchOnce(ctx context.Context, apiKey string, binding outbox.Binding, now time.Time) (DispatchResult, error) {
 	if d.Outbox == nil || d.Client == nil {
 		return DispatchResult{}, errors.New("normalized dispatcher requires an outbox and cloud client")
+	}
+	if _, err := d.Outbox.ClearResolvedPause(binding); err != nil {
+		return DispatchResult{}, err
+	}
+	if pause, err := d.Outbox.DispatchPause(); err != nil {
+		return DispatchResult{}, err
+	} else if pause != nil {
+		action := ActionPause
+		if pause.Kind == outbox.DispatchPauseCollision {
+			action = ActionStop
+		}
+		return DispatchResult{DeliveryID: pause.DeliveryID, Disposition: Disposition{
+			Action: action, Reason: pause.Reason, PauseKind: pause.Kind,
+			PairingRequired: pause.Kind != outbox.DispatchPauseCollision,
+		}}, nil
 	}
 	reconciled, err := d.Outbox.ReconcileBinding(binding)
 	if err != nil {
@@ -94,12 +108,16 @@ func (d Dispatcher) DispatchOnce(ctx context.Context, apiKey string, binding out
 	disposition := Classify(sendErr)
 	result.Disposition = disposition
 	failure := failureFromError(sendErr)
-	if disposition.Quarantine {
-		if disposition.AllForReceiver {
-			count, err := d.Outbox.QuarantineByReceiver(delivery.ReceiverAgentIDSnapshot, disposition.Reason, failure)
-			result.Quarantined = count
-			return result, err
+	if disposition.Action == ActionPause || disposition.Action == ActionRequirePairing || disposition.Action == ActionStop {
+		pause := outbox.DispatchPause{
+			Kind: disposition.PauseKind, Reason: disposition.Reason, DeliveryID: delivery.DeliveryID,
+			PausedAt: now.UTC(), CredentialGeneration: binding.CredentialGeneration,
+			BindingGeneration: binding.BindingGeneration, StatusCode: failure.StatusCode,
+			ErrorCode: failure.ErrorCode, RequestID: failure.RequestID,
 		}
+		return result, d.Outbox.PauseDelivery(delivery.DeliveryID, pause, failure)
+	}
+	if disposition.Quarantine {
 		if err := d.Outbox.Quarantine(delivery.DeliveryID, disposition.Reason, failure); err != nil {
 			return result, err
 		}
@@ -134,20 +152,21 @@ func Classify(err error) Disposition {
 	case apiErr.StatusCode == http.StatusUnauthorized:
 		base.Action = ActionRequirePairing
 		base.PairingRequired = true
+		base.PauseKind = outbox.DispatchPauseCredential
 		return base
-	case apiErr.StatusCode == http.StatusForbidden && code == "RECEIVER_BINDING_MISMATCH":
+	case apiErr.StatusCode == http.StatusConflict && code == "DELIVERY_ID_COLLISION":
+		base.Action = ActionStop
+		base.PauseKind = outbox.DispatchPauseCollision
+		return base
+	case apiErr.StatusCode == http.StatusForbidden && isBindingCode(code):
 		base.Action = ActionPause
-		base.Quarantine = true
-		return base
-	case apiErr.StatusCode == http.StatusForbidden && code == "MISSING_SCOPE":
-		base.Action = ActionPause
-		return base
-	case apiErr.StatusCode == http.StatusForbidden && isTerminalReceiverCode(code):
-		base.Action = ActionClearBinding
-		base.Quarantine = true
-		base.AllForReceiver = true
 		base.PairingRequired = true
-		base.ClearBinding = true
+		base.PauseKind = outbox.DispatchPauseBinding
+		return base
+	case apiErr.StatusCode == http.StatusForbidden:
+		base.Action = ActionPause
+		base.PairingRequired = true
+		base.PauseKind = outbox.DispatchPauseCredential
 		return base
 	case apiErr.StatusCode >= 400 && apiErr.StatusCode < 500:
 		base.Action = ActionQuarantine
@@ -159,8 +178,9 @@ func Classify(err error) Disposition {
 	}
 }
 
-func isTerminalReceiverCode(code string) bool {
-	return code == "RECEIVER_REVOKED" || code == "RECEIVER_REPLACED" || code == "RECEIVER_DISABLED"
+func isBindingCode(code string) bool {
+	return code == "RECEIVER_BINDING_MISMATCH" || code == "RECEIVER_BINDING_REQUIRED" || code == "RECEIVER_INSTALLATION_UNAVAILABLE" ||
+		code == "RECEIVER_REVOKED" || code == "RECEIVER_REPLACED" || code == "RECEIVER_DISABLED"
 }
 
 func normalizedReason(code string, status int) string {
@@ -176,6 +196,7 @@ func failureFromError(err error) outbox.AttemptFailure {
 	if errors.As(err, &apiErr) {
 		failure.StatusCode = apiErr.StatusCode
 		failure.ErrorCode = apiErr.Code
+		failure.RequestID = apiErr.RequestID
 	}
 	return failure
 }

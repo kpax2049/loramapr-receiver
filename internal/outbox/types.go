@@ -24,12 +24,33 @@ const (
 )
 
 var (
-	ErrDeliveryExists    = errors.New("outbox delivery already exists")
-	ErrDeliveryNotFound  = errors.New("outbox delivery not found")
-	ErrOutboxFull        = errors.New("outbox storage bound reached")
-	ErrUnknownSchema     = errors.New("outbox schema version is unsupported")
-	ErrOutboxPruneFailed = errors.New("outbox_prune_failed")
+	ErrDeliveryExists        = errors.New("outbox delivery already exists")
+	ErrDeliveryNotFound      = errors.New("outbox delivery not found")
+	ErrDispatchPauseMismatch = errors.New("outbox dispatch pause does not match delivery")
+	ErrOutboxFull            = errors.New("outbox storage bound reached")
+	ErrUnknownSchema         = errors.New("outbox schema version is unsupported")
+	ErrOutboxPruneFailed     = errors.New("outbox_prune_failed")
 )
+
+type DispatchPauseKind string
+
+const (
+	DispatchPauseCollision  DispatchPauseKind = "delivery_id_collision"
+	DispatchPauseCredential DispatchPauseKind = "credential_rejected"
+	DispatchPauseBinding    DispatchPauseKind = "receiver_binding_rejected"
+)
+
+type DispatchPause struct {
+	Kind                 DispatchPauseKind `json:"kind"`
+	Reason               string            `json:"reason"`
+	DeliveryID           string            `json:"deliveryId"`
+	PausedAt             time.Time         `json:"pausedAt"`
+	CredentialGeneration uint64            `json:"credentialGeneration,omitempty"`
+	BindingGeneration    uint64            `json:"bindingGeneration,omitempty"`
+	StatusCode           int               `json:"statusCode,omitempty"`
+	ErrorCode            string            `json:"errorCode,omitempty"`
+	RequestID            string            `json:"requestId,omitempty"`
+}
 
 type Config struct {
 	Path                string
@@ -59,6 +80,7 @@ type Delivery struct {
 	LastStatusCode          int       `json:"lastStatusCode,omitempty"`
 	LastErrorCode           string    `json:"lastErrorCode,omitempty"`
 	LastError               string    `json:"lastError,omitempty"`
+	LastRequestID           string    `json:"lastRequestId,omitempty"`
 	QuarantinedAt           time.Time `json:"quarantinedAt,omitempty"`
 	QuarantineReason        string    `json:"quarantineReason,omitempty"`
 }
@@ -67,6 +89,7 @@ type AttemptFailure struct {
 	StatusCode int
 	ErrorCode  string
 	Message    string
+	RequestID  string
 }
 
 type Binding struct {
@@ -93,4 +116,5 @@ type Stats struct {
 	RecoveryCode         string
 	MaintenanceErrorCode string
 	MaintenanceError     string
+	DispatchPause        *DispatchPause
 }

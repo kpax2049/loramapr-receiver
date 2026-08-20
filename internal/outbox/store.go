@@ -26,6 +26,7 @@ var (
 	schemaVersionKey = []byte("schema_version")
 	totalCountKey    = []byte("total_count")
 	usedBytesKey     = []byte("used_bytes")
+	dispatchPauseKey = []byte("dispatch_pause")
 )
 
 type Store struct {
@@ -176,8 +177,162 @@ func (s *Store) Retry(deliveryID string, nextAttemptAt time.Time, failure Attemp
 		record.LastStatusCode = failure.StatusCode
 		record.LastErrorCode = strings.TrimSpace(failure.ErrorCode)
 		record.LastError = strings.TrimSpace(failure.Message)
+		record.LastRequestID = strings.TrimSpace(failure.RequestID)
 		return nil
 	}, true)
+}
+
+func (s *Store) PauseDelivery(deliveryID string, pause DispatchPause, failure AttemptFailure) error {
+	if pause.Kind == "" {
+		return errors.New("dispatch pause kind is required")
+	}
+	return s.update(func(tx *bolt.Tx) error {
+		bucket := tx.Bucket(deliveriesBucket)
+		key := []byte(deliveryID)
+		raw := bucket.Get(key)
+		if raw == nil {
+			return ErrDeliveryNotFound
+		}
+		record, err := decodeDelivery(raw)
+		if err != nil {
+			return err
+		}
+		oldDueKey := dueKey(record.NextAttemptAt, record.Sequence, record.DeliveryID)
+		record.State = StatePending
+		record.Attempts++
+		record.LastStatusCode = failure.StatusCode
+		record.LastErrorCode = strings.TrimSpace(failure.ErrorCode)
+		record.LastError = strings.TrimSpace(failure.Message)
+		record.LastRequestID = strings.TrimSpace(failure.RequestID)
+		encoded, err := json.Marshal(record)
+		if err != nil {
+			return err
+		}
+		pause.DeliveryID = deliveryID
+		if pause.PausedAt.IsZero() {
+			pause.PausedAt = s.cfg.Now().UTC()
+		} else {
+			pause.PausedAt = pause.PausedAt.UTC()
+		}
+		pauseBytes, err := json.Marshal(pause)
+		if err != nil {
+			return err
+		}
+		count, used := readCounters(tx)
+		if used-int64(len(raw))+int64(len(encoded)) > s.cfg.MaxBytes {
+			return ErrOutboxFull
+		}
+		if err := tx.Bucket(dueIndexBucket).Delete(oldDueKey); err != nil {
+			return err
+		}
+		if err := tx.Bucket(dueIndexBucket).Put(dueKey(record.NextAttemptAt, record.Sequence, record.DeliveryID), key); err != nil {
+			return err
+		}
+		if err := bucket.Put(key, encoded); err != nil {
+			return err
+		}
+		if err := tx.Bucket(metaBucket).Put(dispatchPauseKey, pauseBytes); err != nil {
+			return err
+		}
+		return writeCounters(tx, count, used-int64(len(raw))+int64(len(encoded)))
+	})
+}
+
+func (s *Store) DispatchPause() (*DispatchPause, error) {
+	var result *DispatchPause
+	err := s.view(func(tx *bolt.Tx) error {
+		raw := tx.Bucket(metaBucket).Get(dispatchPauseKey)
+		if len(raw) == 0 {
+			return nil
+		}
+		var pause DispatchPause
+		if err := json.Unmarshal(raw, &pause); err != nil {
+			return fmt.Errorf("decode outbox dispatch pause: %w", err)
+		}
+		result = &pause
+		return nil
+	})
+	return result, err
+}
+
+func (s *Store) ClearResolvedPause(binding Binding) (bool, error) {
+	cleared := false
+	err := s.update(func(tx *bolt.Tx) error {
+		meta := tx.Bucket(metaBucket)
+		raw := meta.Get(dispatchPauseKey)
+		if len(raw) == 0 {
+			return nil
+		}
+		var pause DispatchPause
+		if err := json.Unmarshal(raw, &pause); err != nil {
+			return fmt.Errorf("decode outbox dispatch pause: %w", err)
+		}
+		switch pause.Kind {
+		case DispatchPauseCredential:
+			cleared = binding.CredentialGeneration > pause.CredentialGeneration || binding.BindingGeneration > pause.BindingGeneration
+		case DispatchPauseBinding:
+			cleared = binding.BindingGeneration > pause.BindingGeneration
+		case DispatchPauseCollision:
+			return nil
+		default:
+			return fmt.Errorf("unknown outbox dispatch pause kind %q", pause.Kind)
+		}
+		if cleared {
+			return meta.Delete(dispatchPauseKey)
+		}
+		return nil
+	})
+	return cleared, err
+}
+
+func (s *Store) ResolveDeliveryCollision(deliveryID string) error {
+	now := s.cfg.Now().UTC()
+	return s.update(func(tx *bolt.Tx) error {
+		meta := tx.Bucket(metaBucket)
+		rawPause := meta.Get(dispatchPauseKey)
+		if len(rawPause) == 0 {
+			return ErrDispatchPauseMismatch
+		}
+		var pause DispatchPause
+		if err := json.Unmarshal(rawPause, &pause); err != nil {
+			return fmt.Errorf("decode outbox dispatch pause: %w", err)
+		}
+		if pause.Kind != DispatchPauseCollision || pause.DeliveryID != deliveryID {
+			return ErrDispatchPauseMismatch
+		}
+		deliveries := tx.Bucket(deliveriesBucket)
+		key := []byte(deliveryID)
+		raw := deliveries.Get(key)
+		if raw == nil {
+			return ErrDeliveryNotFound
+		}
+		record, err := decodeDelivery(raw)
+		if err != nil {
+			return err
+		}
+		_ = tx.Bucket(dueIndexBucket).Delete(dueKey(record.NextAttemptAt, record.Sequence, record.DeliveryID))
+		record.State = StateQuarantined
+		record.QuarantinedAt = now
+		record.QuarantineReason = "delivery_id_collision_operator_resolved"
+		encoded, err := json.Marshal(record)
+		if err != nil {
+			return err
+		}
+		count, used := readCounters(tx)
+		if used-int64(len(raw))+int64(len(encoded)) > s.cfg.MaxBytes {
+			return ErrOutboxFull
+		}
+		if err := tx.Bucket(quarantineBucket).Put(key, encoded); err != nil {
+			return err
+		}
+		if err := deliveries.Delete(key); err != nil {
+			return err
+		}
+		if err := meta.Delete(dispatchPauseKey); err != nil {
+			return err
+		}
+		return writeCounters(tx, count, used-int64(len(raw))+int64(len(encoded)))
+	})
 }
 
 func (s *Store) Quarantine(deliveryID string, reason string, failure AttemptFailure) error {
@@ -201,6 +356,7 @@ func (s *Store) Quarantine(deliveryID string, reason string, failure AttemptFail
 		record.LastStatusCode = failure.StatusCode
 		record.LastErrorCode = strings.TrimSpace(failure.ErrorCode)
 		record.LastError = strings.TrimSpace(failure.Message)
+		record.LastRequestID = strings.TrimSpace(failure.RequestID)
 		encoded, err := json.Marshal(record)
 		if err != nil {
 			return err
@@ -458,6 +614,13 @@ func (s *Store) Stats() (Stats, error) {
 	result := Stats{Recovered: s.recovered, RecoveryCode: s.recoveryCode, MaintenanceErrorCode: s.maintenanceErrorCode, MaintenanceError: s.maintenanceError}
 	s.mu.RUnlock()
 	err := s.view(func(tx *bolt.Tx) error {
+		if raw := tx.Bucket(metaBucket).Get(dispatchPauseKey); len(raw) > 0 {
+			var pause DispatchPause
+			if err := json.Unmarshal(raw, &pause); err != nil {
+				return fmt.Errorf("decode outbox dispatch pause: %w", err)
+			}
+			result.DispatchPause = &pause
+		}
 		result.TotalCount, result.UsedBytes = readCounters(tx)
 		result.PendingCount = tx.Bucket(deliveriesBucket).Stats().KeyN
 		result.QuarantinedCount = tx.Bucket(quarantineBucket).Stats().KeyN

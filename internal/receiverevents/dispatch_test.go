@@ -16,6 +16,7 @@ type fakeDeliveryClient struct {
 	result cloudclient.NormalizedDeliveryResult
 	err    error
 	seen   []byte
+	calls  int
 }
 
 func (f *fakeDeliveryClient) PostNormalizedEvent(
@@ -26,6 +27,7 @@ func (f *fakeDeliveryClient) PostNormalizedEvent(
 	_ string,
 	_ string,
 ) (cloudclient.NormalizedDeliveryResult, error) {
+	f.calls++
 	f.seen = append([]byte(nil), envelope...)
 	return f.result, f.err
 }
@@ -108,7 +110,7 @@ func TestDispatcherQuarantinesConflictsAndTerminalAgentDeliveries(t *testing.T) 
 		}
 	})
 
-	t.Run("all terminal agent deliveries", func(t *testing.T) {
+	t.Run("receiver lifecycle rejection pauses all dispatch", func(t *testing.T) {
 		engine, store := testEngine(t, now)
 		defer closeTestEngine(t, engine, store)
 		for _, delivery := range []outbox.Delivery{
@@ -126,10 +128,119 @@ func TestDispatcherQuarantinesConflictsAndTerminalAgentDeliveries(t *testing.T) 
 		if err != nil {
 			t.Fatal(err)
 		}
-		if result.Quarantined != 2 || !result.Disposition.ClearBinding || !result.Disposition.PairingRequired {
+		if result.Quarantined != 0 || result.Disposition.Action != ActionPause || !result.Disposition.PairingRequired || result.Disposition.PauseKind != outbox.DispatchPauseBinding {
 			t.Fatalf("terminal result = %#v", result)
 		}
+		second, err := (Dispatcher{Outbox: engine, Client: client}).DispatchOnce(context.Background(), "secret", binding, now)
+		if err != nil || second.Attempted || second.Disposition.Action != ActionPause || client.calls != 1 {
+			t.Fatalf("persistent pause result=%#v calls=%d err=%v", second, client.calls, err)
+		}
 	})
+}
+
+func TestDispatcherCollisionStopsUntilExactOperatorResolution(t *testing.T) {
+	now := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
+	path := filepath.Join(t.TempDir(), "outbox.db")
+	store, err := outbox.Open(outbox.Config{Path: path, Now: func() time.Time { return now }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	engine, err := outbox.NewEngine(store, outbox.EngineConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := testDelivery("0198c7a2-e395-7000-8000-000000000030", "agent-1", []byte(`{"first":true}`))
+	second := testDelivery("0198c7a2-e395-7000-8000-000000000031", "agent-1", []byte(`{"second":true}`))
+	for _, delivery := range []outbox.Delivery{first, second} {
+		if err := store.Enqueue(delivery); err != nil {
+			t.Fatal(err)
+		}
+	}
+	client := &fakeDeliveryClient{err: &cloudclient.APIError{
+		StatusCode: 409, Code: "DELIVERY_ID_COLLISION", RequestID: "req-collision",
+	}}
+	dispatcher := Dispatcher{Outbox: engine, Client: client}
+	result, err := dispatcher.DispatchOnce(context.Background(), "secret", testBinding(), now)
+	if err != nil || result.Disposition.Action != ActionStop || result.Disposition.PauseKind != outbox.DispatchPauseCollision {
+		t.Fatalf("collision result=%#v err=%v", result, err)
+	}
+	if err := engine.ResolveDeliveryCollision(second.DeliveryID); !errors.Is(err, outbox.ErrDispatchPauseMismatch) {
+		t.Fatalf("wrong delivery resolution error=%v", err)
+	}
+	closeTestEngine(t, engine, store)
+
+	store, err = outbox.Open(outbox.Config{Path: path, Now: func() time.Time { return now }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	engine, err = outbox.NewEngine(store, outbox.EngineConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeTestEngine(t, engine, store)
+	dispatcher.Outbox = engine
+	blocked, err := dispatcher.DispatchOnce(context.Background(), "secret", testBinding(), now)
+	if err != nil || blocked.Attempted || blocked.Disposition.Action != ActionStop || client.calls != 1 {
+		t.Fatalf("restart did not retain stop: result=%#v calls=%d err=%v", blocked, client.calls, err)
+	}
+	if err := engine.ResolveDeliveryCollision(first.DeliveryID); err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := engine.Get(first.DeliveryID)
+	if err != nil || resolved.State != outbox.StateQuarantined || resolved.QuarantineReason != "delivery_id_collision_operator_resolved" || resolved.LastRequestID != "req-collision" {
+		t.Fatalf("resolved collision=%#v err=%v", resolved, err)
+	}
+	client.err = nil
+	client.result = cloudclient.NormalizedDeliveryResult{StatusCode: 202, DeliveryID: second.DeliveryID}
+	after, err := dispatcher.DispatchOnce(context.Background(), "secret", testBinding(), now)
+	if err != nil || !after.Acknowledged || after.DeliveryID != second.DeliveryID || client.calls != 2 {
+		t.Fatalf("dispatch after resolution=%#v calls=%d err=%v", after, client.calls, err)
+	}
+}
+
+func TestDispatcherPauseResumesOnlyForApprovedGenerationChange(t *testing.T) {
+	now := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
+	tests := []struct {
+		name     string
+		apiError *cloudclient.APIError
+		mutate   func(*outbox.Binding)
+		wantKind outbox.DispatchPauseKind
+	}{
+		{name: "401 credential rotation", apiError: &cloudclient.APIError{StatusCode: 401}, wantKind: outbox.DispatchPauseCredential, mutate: func(binding *outbox.Binding) { binding.CredentialGeneration++ }},
+		{name: "plain 403 credential rotation", apiError: &cloudclient.APIError{StatusCode: 403}, wantKind: outbox.DispatchPauseCredential, mutate: func(binding *outbox.Binding) { binding.CredentialGeneration++ }},
+		{name: "binding required re-pair", apiError: &cloudclient.APIError{StatusCode: 403, Code: "RECEIVER_BINDING_REQUIRED"}, wantKind: outbox.DispatchPauseBinding, mutate: func(binding *outbox.Binding) { binding.BindingGeneration++ }},
+		{name: "installation unavailable re-pair", apiError: &cloudclient.APIError{StatusCode: 403, Code: "RECEIVER_INSTALLATION_UNAVAILABLE"}, wantKind: outbox.DispatchPauseBinding, mutate: func(binding *outbox.Binding) { binding.BindingGeneration++ }},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			engine, store := testEngine(t, now)
+			defer closeTestEngine(t, engine, store)
+			delivery := testDelivery("0198c7a2-e395-7000-8000-000000000040", "agent-1", []byte(`{}`))
+			if err := store.Enqueue(delivery); err != nil {
+				t.Fatal(err)
+			}
+			binding := testBinding()
+			binding.CredentialGeneration = 2
+			binding.BindingGeneration = 3
+			client := &fakeDeliveryClient{err: test.apiError}
+			dispatcher := Dispatcher{Outbox: engine, Client: client}
+			paused, err := dispatcher.DispatchOnce(context.Background(), "old", binding, now)
+			if err != nil || paused.Disposition.PauseKind != test.wantKind {
+				t.Fatalf("pause result=%#v err=%v", paused, err)
+			}
+			blocked, err := dispatcher.DispatchOnce(context.Background(), "old", binding, now)
+			if err != nil || blocked.Attempted || client.calls != 1 {
+				t.Fatalf("unchanged generation dispatched: %#v calls=%d err=%v", blocked, client.calls, err)
+			}
+			test.mutate(&binding)
+			client.err = nil
+			client.result = cloudclient.NormalizedDeliveryResult{StatusCode: 202, DeliveryID: delivery.DeliveryID}
+			resumed, err := dispatcher.DispatchOnce(context.Background(), "new", binding, now)
+			if err != nil || !resumed.Acknowledged || client.calls != 2 {
+				t.Fatalf("generation change did not resume: %#v calls=%d err=%v", resumed, client.calls, err)
+			}
+		})
+	}
 }
 
 func TestDispatcherQuarantinesStaleBindingBeforeNetworkDelivery(t *testing.T) {
@@ -177,15 +288,18 @@ func TestClassifyPauseAndCredentialActions(t *testing.T) {
 		want Disposition
 	}{
 		{name: "network", err: errors.New("connection reset"), want: Disposition{Action: ActionRetry}},
-		{name: "binding", err: &cloudclient.APIError{StatusCode: 403, Code: "RECEIVER_BINDING_MISMATCH"}, want: Disposition{Action: ActionPause, Quarantine: true}},
-		{name: "scope", err: &cloudclient.APIError{StatusCode: 403, Code: "MISSING_SCOPE"}, want: Disposition{Action: ActionPause}},
-		{name: "key", err: &cloudclient.APIError{StatusCode: 401}, want: Disposition{Action: ActionRequirePairing, PairingRequired: true}},
+		{name: "binding", err: &cloudclient.APIError{StatusCode: 403, Code: "RECEIVER_BINDING_MISMATCH"}, want: Disposition{Action: ActionPause, PairingRequired: true, PauseKind: outbox.DispatchPauseBinding}},
+		{name: "binding required", err: &cloudclient.APIError{StatusCode: 403, Code: "RECEIVER_BINDING_REQUIRED"}, want: Disposition{Action: ActionPause, PairingRequired: true, PauseKind: outbox.DispatchPauseBinding}},
+		{name: "installation unavailable", err: &cloudclient.APIError{StatusCode: 403, Code: "RECEIVER_INSTALLATION_UNAVAILABLE"}, want: Disposition{Action: ActionPause, PairingRequired: true, PauseKind: outbox.DispatchPauseBinding}},
+		{name: "plain forbidden", err: &cloudclient.APIError{StatusCode: 403}, want: Disposition{Action: ActionPause, PairingRequired: true, PauseKind: outbox.DispatchPauseCredential}},
+		{name: "key", err: &cloudclient.APIError{StatusCode: 401}, want: Disposition{Action: ActionRequirePairing, PairingRequired: true, PauseKind: outbox.DispatchPauseCredential}},
+		{name: "global collision", err: &cloudclient.APIError{StatusCode: 409, Code: "DELIVERY_ID_COLLISION"}, want: Disposition{Action: ActionStop, PauseKind: outbox.DispatchPauseCollision}},
 		{name: "invalid", err: &cloudclient.APIError{StatusCode: 422, Code: "INVALID_EVENT"}, want: Disposition{Action: ActionQuarantine, Quarantine: true}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			got := Classify(test.err)
-			if got.Action != test.want.Action || got.Quarantine != test.want.Quarantine || got.PairingRequired != test.want.PairingRequired {
+			if got.Action != test.want.Action || got.Quarantine != test.want.Quarantine || got.PairingRequired != test.want.PairingRequired || got.PauseKind != test.want.PauseKind {
 				t.Fatalf("Classify() = %#v, want %#v", got, test.want)
 			}
 		})

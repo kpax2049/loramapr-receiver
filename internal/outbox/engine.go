@@ -106,12 +106,32 @@ func (e *Engine) NextDue(now time.Time) (*Delivery, error) { return e.store.Next
 func (e *Engine) Get(deliveryID string) (*Delivery, error) { return e.store.Get(deliveryID) }
 func (e *Engine) Stats() (Stats, error)                    { return e.store.Stats() }
 
+func (e *Engine) DispatchPause() (*DispatchPause, error) { return e.store.DispatchPause() }
+
 func (e *Engine) MarkInflight(deliveryID string) error {
 	return e.write(func(store *Store) error { return store.MarkInflight(deliveryID) })
 }
 
 func (e *Engine) Retry(deliveryID string, next time.Time, failure AttemptFailure) error {
 	return e.write(func(store *Store) error { return store.Retry(deliveryID, next, failure) })
+}
+
+func (e *Engine) PauseDelivery(deliveryID string, pause DispatchPause, failure AttemptFailure) error {
+	return e.write(func(store *Store) error { return store.PauseDelivery(deliveryID, pause, failure) })
+}
+
+func (e *Engine) ClearResolvedPause(binding Binding) (bool, error) {
+	cleared := false
+	err := e.write(func(store *Store) error {
+		var err error
+		cleared, err = store.ClearResolvedPause(binding)
+		return err
+	})
+	return cleared, err
+}
+
+func (e *Engine) ResolveDeliveryCollision(deliveryID string) error {
+	return e.write(func(store *Store) error { return store.ResolveDeliveryCollision(deliveryID) })
 }
 
 func (e *Engine) Quarantine(deliveryID string, reason string, failure AttemptFailure) error {

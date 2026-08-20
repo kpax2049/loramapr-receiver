@@ -44,11 +44,16 @@ type HomeAutoSessionManager interface {
 	ResetHomeAutoSession(ctx context.Context) error
 }
 
+type NormalizedOutboxOperator interface {
+	ResolveNormalizedDeliveryCollision(ctx context.Context, deliveryID string) error
+}
+
 type Server struct {
 	addr      string
 	status    StatusProvider
 	pairing   PairingCodeSubmitter
 	homeAuto  HomeAutoSessionManager
+	outboxOps NormalizedOutboxOperator
 	logger    *slog.Logger
 	templates map[string]*template.Template
 	httpSrv   *http.Server
@@ -102,12 +107,17 @@ func New(addr string, statusProvider StatusProvider, pairing PairingCodeSubmitte
 	if manager, ok := pairing.(HomeAutoSessionManager); ok {
 		homeAuto = manager
 	}
+	var outboxOps NormalizedOutboxOperator
+	if operator, ok := pairing.(NormalizedOutboxOperator); ok {
+		outboxOps = operator
+	}
 
 	s := &Server{
 		addr:      addr,
 		status:    statusProvider,
 		pairing:   pairing,
 		homeAuto:  homeAuto,
+		outboxOps: outboxOps,
 		logger:    logger.With("component", "webportal"),
 		templates: templates,
 	}
@@ -120,6 +130,7 @@ func New(addr string, statusProvider StatusProvider, pairing PairingCodeSubmitte
 	mux.HandleFunc("/api/ops", s.handleOps)
 	mux.HandleFunc("/api/pairing/code", s.handlePairingCode)
 	mux.HandleFunc("/api/lifecycle/reset", s.handleLifecycleReset)
+	mux.HandleFunc("/api/normalized-outbox/collision/resolve", s.handleNormalizedCollisionResolve)
 	mux.Handle("/static/", http.StripPrefix("/static/", portalStaticHandler()))
 	mux.HandleFunc("/pairing", s.routePairing)
 	mux.HandleFunc("/reset", s.routeReset)
@@ -137,6 +148,37 @@ func New(addr string, statusProvider StatusProvider, pairing PairingCodeSubmitte
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 	return s
+}
+
+func (s *Server) handleNormalizedCollisionResolve(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", http.MethodPost)
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.outboxOps == nil {
+		http.Error(w, "normalized outbox operator is not available", http.StatusServiceUnavailable)
+		return
+	}
+	var request struct {
+		DeliveryID string `json:"deliveryId"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		http.Error(w, "invalid JSON body", http.StatusBadRequest)
+		return
+	}
+	request.DeliveryID = strings.TrimSpace(request.DeliveryID)
+	if request.DeliveryID == "" {
+		http.Error(w, "deliveryId is required", http.StatusBadRequest)
+		return
+	}
+	if err := s.outboxOps.ResolveNormalizedDeliveryCollision(r.Context(), request.DeliveryID); err != nil {
+		http.Error(w, "collision resolution failed: "+err.Error(), http.StatusConflict)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusAccepted)
+	_, _ = w.Write([]byte(`{"accepted":true}`))
 }
 
 func (s *Server) Handler() http.Handler {

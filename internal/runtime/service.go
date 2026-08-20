@@ -84,17 +84,14 @@ type CloudClient interface {
 }
 
 type Service struct {
-	container             *Container
-	mode                  config.RunMode
-	steady                steadyState
-	build                 buildinfo.Info
-	updater               *update.Checker
-	ingestWake            chan struct{}
-	normalizedWake        chan struct{}
-	ingestTrace           bool
-	normalizedPaused      bool
-	normalizedPauseReason string
-	normalizedBindingKey  string
+	container      *Container
+	mode           config.RunMode
+	steady         steadyState
+	build          buildinfo.Info
+	updater        *update.Checker
+	ingestWake     chan struct{}
+	normalizedWake chan struct{}
+	ingestTrace    bool
 }
 
 type Container struct {
@@ -451,6 +448,18 @@ func (s *Service) ResetPairing(_ context.Context, deauthorize bool) error {
 	return s.container.Pairing.ResetPairing(deauthorize)
 }
 
+func (s *Service) ResolveNormalizedDeliveryCollision(_ context.Context, deliveryID string) error {
+	if s.container == nil || s.container.OutboxEngine == nil {
+		return errors.New("normalized outbox is not available")
+	}
+	if err := s.container.OutboxEngine.ResolveDeliveryCollision(strings.TrimSpace(deliveryID)); err != nil {
+		return err
+	}
+	s.refreshNormalizedOutboxStatus()
+	s.signalNormalizedDrain()
+	return nil
+}
+
 func (s *Service) CurrentHomeAutoSessionConfig() config.HomeAutoSessionConfig {
 	return s.container.Config.HomeAutoSession
 }
@@ -769,10 +778,6 @@ func normalizedBinding(snapshot state.Data) (outbox.Binding, bool) {
 	return binding, ready
 }
 
-func bindingKey(binding outbox.Binding) string {
-	return fmt.Sprintf("%s\x00%s\x00%s\x00%d\x00%d", binding.OwnerID, binding.ReceiverAgentID, binding.InstallationID, binding.CredentialGeneration, binding.BindingGeneration)
-}
-
 func (s *Service) enqueueIngestEvent(payload map[string]any, idempotencyKey string, capturedAt time.Time, now time.Time) {
 	if idempotencyKey == "" {
 		idempotencyKey = fmt.Sprintf("rx-%d", now.UnixNano())
@@ -878,17 +883,6 @@ func (s *Service) processNormalizedDispatch(ctx context.Context, trigger string)
 	if !ready {
 		return
 	}
-	currentBindingKey := bindingKey(binding)
-	if currentBindingKey != s.normalizedBindingKey {
-		s.normalizedBindingKey = currentBindingKey
-		s.normalizedPaused = false
-		s.normalizedPauseReason = ""
-	}
-	if s.normalizedPaused {
-		c.Logger.Debug("normalized dispatch paused", "trigger", trigger, "reason", s.normalizedPauseReason)
-		return
-	}
-
 	for attempt := 0; attempt < maxIngestBatchTick; attempt++ {
 		result, err := c.Normalized.DispatchOnce(ctx, snapshot.Cloud.IngestAPIKey, binding, time.Now().UTC())
 		if err != nil {
@@ -904,6 +898,9 @@ func (s *Service) processNormalizedDispatch(ctx context.Context, trigger string)
 			)
 		}
 		if !result.Attempted {
+			if result.Disposition.Action != "" {
+				s.handleNormalizedDisposition(result)
+			}
 			s.refreshNormalizedOutboxStatus()
 			return
 		}
@@ -914,23 +911,8 @@ func (s *Service) processNormalizedDispatch(ctx context.Context, trigger string)
 		}
 
 		switch result.Disposition.Action {
-		case receiverevents.ActionPause, receiverevents.ActionRequirePairing:
-			s.normalizedPaused = true
-			s.normalizedPauseReason = result.Disposition.Reason
-			c.Status.SetComponent("normalized_outbox", "paused", "normalized delivery paused: "+result.Disposition.Reason)
-			if result.Disposition.PairingRequired {
-				c.Status.SetComponent("pairing", "required", "cloud rejected normalized delivery credentials; local evidence retained")
-			}
-			return
-		case receiverevents.ActionClearBinding:
-			s.normalizedPaused = true
-			s.normalizedPauseReason = result.Disposition.Reason
-			change := normalizedLifecycleChange(result.Disposition.Reason)
-			if err := s.handleLifecycleCloudError(change, errors.New(result.Disposition.Reason)); err != nil {
-				c.Logger.Error("apply normalized receiver lifecycle transition", "err", err)
-				c.Status.SetLastError("normalized receiver lifecycle transition failed")
-			}
-			c.Status.SetComponent("normalized_outbox", "lifecycle_blocked", "old receiver deliveries quarantined; re-pair required")
+		case receiverevents.ActionPause, receiverevents.ActionRequirePairing, receiverevents.ActionStop:
+			s.handleNormalizedDisposition(result)
 			return
 		case receiverevents.ActionRetry:
 			s.refreshNormalizedOutboxStatus()
@@ -943,6 +925,22 @@ func (s *Service) processNormalizedDispatch(ctx context.Context, trigger string)
 			s.refreshNormalizedOutboxStatus()
 			return
 		}
+	}
+}
+
+func (s *Service) handleNormalizedDisposition(result receiverevents.DispatchResult) {
+	c := s.container
+	if c == nil || c.Status == nil {
+		return
+	}
+	if result.Disposition.Action == receiverevents.ActionStop {
+		c.Status.SetComponent("normalized_outbox", "stopped", "delivery identity collision requires explicit local resolution; evidence retained")
+		c.Status.SetLastError("normalized delivery collision")
+		return
+	}
+	c.Status.SetComponent("normalized_outbox", "paused", "normalized delivery paused: "+result.Disposition.Reason)
+	if result.Disposition.PairingRequired {
+		c.Status.SetComponent("pairing", "required", "cloud rejected normalized delivery credentials or binding; local evidence retained")
 	}
 }
 
@@ -979,9 +977,12 @@ func (s *Service) refreshNormalizedOutboxStatus() {
 		return
 	}
 	messageSuffix := ""
-	if s.normalizedPaused {
+	if stats.DispatchPause != nil && stats.DispatchPause.Kind == outbox.DispatchPauseCollision {
+		stateName = "stopped"
+		messageSuffix = " stopped=" + stats.DispatchPause.Reason
+	} else if stats.DispatchPause != nil {
 		stateName = "paused"
-		messageSuffix = " paused=" + s.normalizedPauseReason
+		messageSuffix = " paused=" + stats.DispatchPause.Reason
 	}
 	c.Status.SetComponent(
 		"normalized_outbox",

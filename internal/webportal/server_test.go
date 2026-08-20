@@ -22,10 +22,11 @@ func (s staticStatusProvider) CurrentStatus() status.Snapshot {
 }
 
 type recordingPairingSubmitter struct {
-	codes           []string
-	resetCalls      int
-	lastDeauthorize bool
-	err             error
+	codes                []string
+	resetCalls           int
+	lastDeauthorize      bool
+	err                  error
+	collisionResolutions []string
 
 	homeCfg               config.HomeAutoSessionConfig
 	homeSaveCalls         int
@@ -50,6 +51,29 @@ func (r *recordingPairingSubmitter) ResetPairing(_ context.Context, deauthorize 
 	r.resetCalls++
 	r.lastDeauthorize = deauthorize
 	return nil
+}
+
+func (r *recordingPairingSubmitter) ResolveNormalizedDeliveryCollision(_ context.Context, deliveryID string) error {
+	if r.err != nil {
+		return r.err
+	}
+	r.collisionResolutions = append(r.collisionResolutions, deliveryID)
+	return nil
+}
+
+func TestNormalizedCollisionResolutionAPI(t *testing.T) {
+	t.Parallel()
+	submitter := &recordingPairingSubmitter{}
+	srv := New("127.0.0.1:0", staticStatusProvider{snapshot: sampleSnapshot()}, submitter, nil)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/normalized-outbox/collision/resolve", strings.NewReader(`{"deliveryId":"0198c7a2-e395-7000-8000-000000000030"}`))
+	req.Header.Set("Content-Type", "application/json")
+	srv.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusAccepted || len(submitter.collisionResolutions) != 1 || submitter.collisionResolutions[0] != "0198c7a2-e395-7000-8000-000000000030" {
+		t.Fatalf("status=%d resolutions=%v body=%s", rec.Code, submitter.collisionResolutions, rec.Body.String())
+	}
 }
 
 func (r *recordingPairingSubmitter) CurrentHomeAutoSessionConfig() config.HomeAutoSessionConfig {
