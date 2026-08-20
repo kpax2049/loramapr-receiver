@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/loramapr/loramapr-receiver/internal/config"
+	"github.com/loramapr/loramapr-receiver/internal/protocoladapter"
 )
 
 type ConnectionState string
@@ -129,6 +130,7 @@ type Service struct {
 	bridgeStartupTime time.Duration
 	bridgeIdleTimeout time.Duration
 	bridgeIdleProbe   time.Duration
+	serialLeases      *protocoladapter.SerialLeaseRegistry
 }
 
 const nativeNoFrameReconnectDelay = 15 * time.Second
@@ -141,6 +143,14 @@ var errBridgeStartupTimeout = errors.New("meshtastic bridge startup timeout")
 var errBridgeIdleTimeout = errors.New("meshtastic bridge output idle timeout")
 
 func NewAdapter(cfg config.MeshtasticConfig, logger *slog.Logger) Adapter {
+	return NewAdapterWithLeases(cfg, logger, nil)
+}
+
+func NewAdapterWithLeases(
+	cfg config.MeshtasticConfig,
+	logger *slog.Logger,
+	leases *protocoladapter.SerialLeaseRegistry,
+) Adapter {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -172,6 +182,7 @@ func NewAdapter(cfg config.MeshtasticConfig, logger *slog.Logger) Adapter {
 		bridgeStartupTime: bridgeSessionStartupTimeout,
 		bridgeIdleTimeout: bridgeSessionIdleTimeout,
 		bridgeIdleProbe:   bridgeSessionIdleCheckInterval,
+		serialLeases:      leases,
 	}
 }
 
@@ -273,12 +284,24 @@ func (s *Service) run(ctx context.Context, out chan Event) {
 		s.setSnapshot(func(snap *Snapshot) {
 			snap.State = StateConnecting
 		})
+		releaseLease, err := s.acquireSerialLease(detection.Device)
+		if err != nil {
+			s.setSnapshot(func(snap *Snapshot) {
+				snap.State = StateDegraded
+				snap.LastError = err.Error()
+			})
+			if !waitOrDone(ctx, s.reconnectDelay) {
+				return
+			}
+			continue
+		}
 		nextReconnectDelay := s.reconnectDelay
 		if strings.EqualFold(s.cfg.Transport, "bridge") {
 			nextReconnectDelay, err = s.consumeBridge(ctx, detection, out)
 		} else {
 			nextReconnectDelay, err = s.consumeDirect(ctx, detection, bootstrapLast, out)
 		}
+		releaseLease()
 		if ctx.Err() != nil {
 			return
 		}
@@ -301,6 +324,21 @@ func (s *Service) run(ctx context.Context, out chan Event) {
 			return
 		}
 	}
+}
+
+func (s *Service) acquireSerialLease(device string) (func(), error) {
+	if s.serialLeases == nil {
+		return func() {}, nil
+	}
+	transport := strings.ToLower(strings.TrimSpace(s.cfg.Transport))
+	if transport != "serial" && transport != "bridge" {
+		return func() {}, nil
+	}
+	release, err := s.serialLeases.Acquire(device, "meshtastic")
+	if err != nil {
+		return nil, fmt.Errorf("meshtastic serial device conflict: %w", err)
+	}
+	return release, nil
 }
 
 func (s *Service) consumeDirect(ctx context.Context, detection DetectionResult, bootstrapLast map[string]time.Time, out chan<- Event) (time.Duration, error) {

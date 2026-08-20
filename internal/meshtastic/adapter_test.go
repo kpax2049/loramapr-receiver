@@ -3,6 +3,7 @@ package meshtastic
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"os"
@@ -13,7 +14,52 @@ import (
 	"time"
 
 	"github.com/loramapr/loramapr-receiver/internal/config"
+	"github.com/loramapr/loramapr-receiver/internal/protocoladapter"
 )
+
+func TestServiceHonorsSerialLeaseContention(t *testing.T) {
+	registry := protocoladapter.NewSerialLeaseRegistry()
+	release, err := registry.Acquire("/tmp/ttyUSB0", "meshcore-companion")
+	if err != nil {
+		t.Fatalf("seed lease: %v", err)
+	}
+	defer release()
+
+	adapter := NewAdapterWithLeases(
+		config.MeshtasticConfig{Transport: "serial", Device: "/tmp/ttyUSB0"},
+		nil,
+		registry,
+	).(*Service)
+	adapter.detectFn = func(_ config.MeshtasticConfig) (DetectionResult, error) {
+		return DetectionResult{Device: "/tmp/ttyUSB0", Candidates: []string{"/tmp/ttyUSB0"}}, nil
+	}
+	var opens atomic.Int32
+	adapter.openFn = func(string) (io.ReadWriteCloser, error) {
+		opens.Add(1)
+		return nil, errors.New("should not open a leased device")
+	}
+	adapter.reconnectDelay = 5 * time.Millisecond
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if _, err := adapter.Start(ctx); err != nil {
+		t.Fatalf("start adapter: %v", err)
+	}
+	deadline := time.Now().Add(time.Second)
+	for {
+		snapshot := adapter.Snapshot()
+		if snapshot.State == StateDegraded && strings.Contains(snapshot.LastError, "serial device conflict") {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("expected serial lease conflict, got %#v", snapshot)
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if opens.Load() != 0 {
+		t.Fatalf("leased device was opened %d times", opens.Load())
+	}
+}
 
 func TestServiceLifecycleAndEvents(t *testing.T) {
 	t.Parallel()

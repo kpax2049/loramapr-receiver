@@ -24,6 +24,7 @@ import (
 	"github.com/loramapr/loramapr-receiver/internal/homeautosession"
 	"github.com/loramapr/loramapr-receiver/internal/meshtastic"
 	"github.com/loramapr/loramapr-receiver/internal/pairing"
+	"github.com/loramapr/loramapr-receiver/internal/protocoladapter"
 	"github.com/loramapr/loramapr-receiver/internal/state"
 	"github.com/loramapr/loramapr-receiver/internal/status"
 	"github.com/loramapr/loramapr-receiver/internal/update"
@@ -89,8 +90,10 @@ type Container struct {
 	Cloud           CloudClient
 	Pairing         *pairing.Manager
 	Meshtastic      meshtastic.Adapter
+	Adapters        *protocoladapter.Manager
+	SerialLeases    *protocoladapter.SerialLeaseRegistry
 	HomeAutoSession *homeautosession.Module
-	MeshEvents      <-chan meshtastic.Event
+	AdapterEvents   <-chan protocoladapter.Event
 	Portal          *webportal.Server
 }
 
@@ -211,19 +214,26 @@ func New(cfg config.Config, logger *slog.Logger) (*Service, error) {
 	svc.ingestTrace = envFlagEnabled("LORAMAPR_INGEST_TRACE")
 
 	cloud := cloudclient.NewHTTPClient(cfg.Cloud.BaseURL, 10*time.Second)
-	mesh := meshtastic.NewAdapter(cfg.Meshtastic, logger.With("component", "meshtastic"))
+	serialLeases := protocoladapter.NewSerialLeaseRegistry()
+	mesh := meshtastic.NewAdapterWithLeases(cfg.Meshtastic, logger.With("component", "meshtastic"), serialLeases)
+	adapters, err := protocoladapter.NewManager(newMeshtasticRadioAdapter(mesh))
+	if err != nil {
+		return nil, fmt.Errorf("configure protocol adapters: %w", err)
+	}
 	meshSnap := mesh.Snapshot()
 	statusModel.SetComponent("meshtastic", string(meshSnap.State), meshtasticStatusMessage(meshSnap))
 	statusModel.SetMeshtasticConfig(mapMeshtasticConfigStatus(meshSnap))
 	statusModel.SetComponent("ingest", "idle", "no queued packets")
 
 	svc.container = &Container{
-		Config:     cfg,
-		Logger:     logger.With("component", "runtime"),
-		State:      store,
-		Status:     statusModel,
-		Cloud:      cloud,
-		Meshtastic: mesh,
+		Config:       cfg,
+		Logger:       logger.With("component", "runtime"),
+		State:        store,
+		Status:       statusModel,
+		Cloud:        cloud,
+		Meshtastic:   mesh,
+		Adapters:     adapters,
+		SerialLeases: serialLeases,
 		Pairing: pairing.NewManager(
 			store,
 			statusModel,
@@ -276,11 +286,16 @@ func (s *Service) Run(ctx context.Context) error {
 	c.Status.SetComponent("runtime", "running", "runtime loop active")
 	c.Status.SetComponent("portal", "starting", "local setup portal starting")
 
-	meshEvents, err := c.Meshtastic.Start(ctx)
+	adapterEvents, err := c.Adapters.Start(ctx)
 	if err != nil {
 		return err
 	}
-	c.MeshEvents = meshEvents
+	c.AdapterEvents = adapterEvents
+	defer func() {
+		if err := c.Adapters.Close(); err != nil {
+			c.Logger.Warn("protocol adapter shutdown failed", "err", err)
+		}
+	}()
 	if c.HomeAutoSession != nil {
 		c.HomeAutoSession.Start(ctx)
 	}
@@ -319,13 +334,13 @@ func (s *Service) Run(ctx context.Context) error {
 				return nil
 			}
 			return errors.New("portal exited unexpectedly")
-		case event, ok := <-c.MeshEvents:
+		case event, ok := <-c.AdapterEvents:
 			if !ok {
-				c.Logger.Warn("meshtastic event stream closed")
-				c.Status.SetComponent("meshtastic", "degraded", "meshtastic stream closed")
+				c.Logger.Warn("protocol adapter event stream closed")
+				c.AdapterEvents = nil
 				continue
 			}
-			s.onMeshtasticEvent(event)
+			s.onAdapterEvent(event)
 		case <-s.ingestWake:
 			s.processIngestDispatch(ctx, "event")
 		case <-ingestTicker.C:
@@ -531,6 +546,24 @@ func (s *Service) onMeshtasticEvent(event meshtastic.Event) {
 	}
 	if c.HomeAutoSession != nil {
 		c.HomeAutoSession.ObserveEvent(event)
+	}
+}
+
+func (s *Service) onAdapterEvent(event protocoladapter.Event) {
+	switch event.Adapter {
+	case meshtasticAdapterName:
+		meshEvent, ok := event.Value.(meshtastic.Event)
+		if !ok {
+			s.container.Logger.Warn(
+				"protocol adapter emitted unexpected event type",
+				"adapter", event.Adapter,
+			)
+			s.container.Status.SetComponent(event.Adapter, "degraded", "adapter emitted invalid event")
+			return
+		}
+		s.onMeshtasticEvent(meshEvent)
+	default:
+		s.container.Logger.Warn("protocol adapter event has no runtime handler", "adapter", event.Adapter)
 	}
 }
 
