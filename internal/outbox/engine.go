@@ -114,6 +114,16 @@ func (e *Engine) Quarantine(deliveryID string, reason string, failure AttemptFai
 	return e.write(func(store *Store) error { return store.Quarantine(deliveryID, reason, failure) })
 }
 
+func (e *Engine) QuarantineByReceiver(receiverAgentID string, reason string, failure AttemptFailure) (int, error) {
+	quarantined := 0
+	err := e.write(func(store *Store) error {
+		var err error
+		quarantined, err = store.QuarantineByReceiver(receiverAgentID, reason, failure)
+		return err
+	})
+	return quarantined, err
+}
+
 func (e *Engine) Delete(deliveryID string) error {
 	return e.write(func(store *Store) error { return store.Delete(deliveryID) })
 }

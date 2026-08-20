@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -138,11 +139,20 @@ type HomeAutoSessionStopResult struct {
 
 type APIError struct {
 	StatusCode int
+	Code       string
 	Message    string
 	Retryable  bool
+	RetryAfter time.Duration
 	Route      string
 	RequestID  string
 	SessionID  string
+}
+
+type NormalizedDeliveryResult struct {
+	StatusCode int
+	Duplicate  bool
+	DeliveryID string
+	RequestID  string
 }
 
 func (e *APIError) Error() string {
@@ -328,6 +338,76 @@ func (c *HTTPClient) PostIngestEvent(
 		Status string `json:"status"`
 	}
 	return c.postJSON(ctx, ingestEndpoint, payload, headers, &response)
+}
+
+func (c *HTTPClient) PostNormalizedEvent(
+	ctx context.Context,
+	ingestEndpoint string,
+	apiKey string,
+	envelope []byte,
+	deliveryID string,
+	envelopeSHA256 string,
+) (NormalizedDeliveryResult, error) {
+	if strings.TrimSpace(apiKey) == "" {
+		return NormalizedDeliveryResult{}, errors.New("ingest API key is required")
+	}
+	if len(envelope) == 0 || strings.TrimSpace(deliveryID) == "" || strings.TrimSpace(envelopeSHA256) == "" {
+		return NormalizedDeliveryResult{}, errors.New("normalized delivery bytes, id, and hash are required")
+	}
+	ctx, requestID := EnsureRequestID(ctx)
+	requestURL, err := c.resolveURL(ingestEndpoint)
+	if err != nil {
+		return NormalizedDeliveryResult{}, err
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, requestURL, bytes.NewReader(envelope))
+	if err != nil {
+		return NormalizedDeliveryResult{}, err
+	}
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("x-api-key", strings.TrimSpace(apiKey))
+	request.Header.Set("x-idempotency-key", strings.TrimSpace(deliveryID))
+	request.Header.Set("x-loramapr-envelope-sha256", strings.TrimSpace(envelopeSHA256))
+	if requestID != "" {
+		request.Header.Set("X-Request-Id", requestID)
+	}
+
+	response, err := c.client.Do(request)
+	if err != nil {
+		return NormalizedDeliveryResult{}, err
+	}
+	defer response.Body.Close()
+	responseRequest := responseRequestID(response.Header)
+	if response.StatusCode != http.StatusOK && response.StatusCode != http.StatusAccepted {
+		decoded := decodeErrorPayload(response.Body)
+		return NormalizedDeliveryResult{}, &APIError{
+			StatusCode: response.StatusCode,
+			Code:       decoded.Code,
+			Message:    decoded.Message,
+			Retryable:  retryableStatus(response.StatusCode),
+			RetryAfter: parseRetryAfter(response.Header.Get("Retry-After"), time.Now().UTC()),
+			Route:      requestURL,
+			RequestID:  responseRequest,
+		}
+	}
+	var payload struct {
+		Accepted   bool   `json:"accepted"`
+		Duplicate  bool   `json:"duplicate"`
+		DeliveryID string `json:"deliveryId"`
+	}
+	if err := json.NewDecoder(io.LimitReader(response.Body, 4096)).Decode(&payload); err != nil {
+		return NormalizedDeliveryResult{}, fmt.Errorf("decode normalized delivery response: %w", err)
+	}
+	if !payload.Accepted || payload.DeliveryID != deliveryID ||
+		(response.StatusCode == http.StatusOK && !payload.Duplicate) ||
+		(response.StatusCode == http.StatusAccepted && payload.Duplicate) {
+		return NormalizedDeliveryResult{}, errors.New("cloud returned an inconsistent normalized delivery acknowledgement")
+	}
+	return NormalizedDeliveryResult{
+		StatusCode: response.StatusCode,
+		Duplicate:  payload.Duplicate,
+		DeliveryID: payload.DeliveryID,
+		RequestID:  responseRequest,
+	}, nil
 }
 
 func (c *HTTPClient) SendReceiverHeartbeat(
@@ -545,8 +625,10 @@ func (c *HTTPClient) postJSONWithMeta(
 		decoded := decodeErrorPayload(httpResp.Body)
 		return meta, &APIError{
 			StatusCode: httpResp.StatusCode,
+			Code:       decoded.Code,
 			Message:    decoded.Message,
 			Retryable:  retryableStatus(httpResp.StatusCode),
+			RetryAfter: parseRetryAfter(httpResp.Header.Get("Retry-After"), time.Now().UTC()),
 			Route:      requestURL,
 			RequestID:  respRequestID,
 			SessionID:  decoded.SessionID,
@@ -595,6 +677,7 @@ func retryableStatus(code int) bool {
 }
 
 type decodedError struct {
+	Code      string
 	Message   string
 	SessionID string
 }
@@ -602,6 +685,7 @@ type decodedError struct {
 func decodeErrorPayload(body io.Reader) decodedError {
 	result := decodedError{}
 	var payload struct {
+		Code      string         `json:"code"`
 		Message   any            `json:"message"`
 		Error     any            `json:"error"`
 		SessionID string         `json:"sessionId"`
@@ -613,6 +697,7 @@ func decodeErrorPayload(body io.Reader) decodedError {
 	}
 	result.Message = strings.TrimSpace(string(data))
 	if err := json.Unmarshal(data, &payload); err == nil {
+		result.Code = strings.TrimSpace(payload.Code)
 		if msg := normalizeErrorMessage(payload.Message); msg != "" {
 			result.Message = msg
 		} else if msg := normalizeErrorMessage(payload.Error); msg != "" {
@@ -628,6 +713,24 @@ func decodeErrorPayload(body io.Reader) decodedError {
 		}
 	}
 	return result
+}
+
+func parseRetryAfter(value string, now time.Time) time.Duration {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return 0
+	}
+	if seconds, err := strconv.Atoi(value); err == nil {
+		if seconds <= 0 {
+			return 0
+		}
+		return time.Duration(seconds) * time.Second
+	}
+	when, err := http.ParseTime(value)
+	if err != nil || !when.After(now) {
+		return 0
+	}
+	return when.Sub(now)
 }
 
 func normalizeErrorMessage(value any) string {

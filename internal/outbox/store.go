@@ -208,6 +208,68 @@ func (s *Store) Quarantine(deliveryID string, reason string, failure AttemptFail
 	})
 }
 
+func (s *Store) QuarantineByReceiver(receiverAgentID string, reason string, failure AttemptFailure) (int, error) {
+	receiverAgentID = strings.TrimSpace(receiverAgentID)
+	if receiverAgentID == "" {
+		return 0, errors.New("receiver agent id is required")
+	}
+	now := s.cfg.Now().UTC()
+	quarantined := 0
+	err := s.update(func(tx *bolt.Tx) error {
+		deliveries := tx.Bucket(deliveriesBucket)
+		quarantine := tx.Bucket(quarantineBucket)
+		type matched struct {
+			key    []byte
+			raw    []byte
+			record *Delivery
+		}
+		matches := make([]matched, 0)
+		if err := deliveries.ForEach(func(key, raw []byte) error {
+			record, err := decodeDelivery(raw)
+			if err != nil {
+				return err
+			}
+			if record.ReceiverAgentIDSnapshot == receiverAgentID {
+				matches = append(matches, matched{
+					key: append([]byte(nil), key...), raw: append([]byte(nil), raw...), record: record,
+				})
+			}
+			return nil
+		}); err != nil {
+			return err
+		}
+
+		count, used := readCounters(tx)
+		for _, item := range matches {
+			record := item.record
+			_ = tx.Bucket(dueIndexBucket).Delete(dueKey(record.NextAttemptAt, record.Sequence, record.DeliveryID))
+			record.State = StateQuarantined
+			record.QuarantinedAt = now
+			record.QuarantineReason = strings.TrimSpace(reason)
+			record.LastStatusCode = failure.StatusCode
+			record.LastErrorCode = strings.TrimSpace(failure.ErrorCode)
+			record.LastError = strings.TrimSpace(failure.Message)
+			encoded, err := json.Marshal(record)
+			if err != nil {
+				return err
+			}
+			used = used - int64(len(item.raw)) + int64(len(encoded))
+			if used > s.cfg.MaxBytes {
+				return ErrOutboxFull
+			}
+			if err := quarantine.Put(item.key, encoded); err != nil {
+				return err
+			}
+			if err := deliveries.Delete(item.key); err != nil {
+				return err
+			}
+			quarantined++
+		}
+		return writeCounters(tx, count, used)
+	})
+	return quarantined, err
+}
+
 func (s *Store) Delete(deliveryID string) error {
 	return s.update(func(tx *bolt.Tx) error {
 		key := []byte(deliveryID)
