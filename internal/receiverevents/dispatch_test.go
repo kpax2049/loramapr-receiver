@@ -288,6 +288,7 @@ func TestClassifyPauseAndCredentialActions(t *testing.T) {
 		want Disposition
 	}{
 		{name: "network", err: errors.New("connection reset"), want: Disposition{Action: ActionRetry}},
+		{name: "quota", err: &cloudclient.APIError{StatusCode: 429, Code: "STORAGE_QUOTA_EXCEEDED", Retryable: true, RetryAfter: time.Hour}, want: Disposition{Action: ActionRetry}},
 		{name: "binding", err: &cloudclient.APIError{StatusCode: 403, Code: "RECEIVER_BINDING_MISMATCH"}, want: Disposition{Action: ActionPause, PairingRequired: true, PauseKind: outbox.DispatchPauseBinding}},
 		{name: "binding required", err: &cloudclient.APIError{StatusCode: 403, Code: "RECEIVER_BINDING_REQUIRED"}, want: Disposition{Action: ActionPause, PairingRequired: true, PauseKind: outbox.DispatchPauseBinding}},
 		{name: "installation unavailable", err: &cloudclient.APIError{StatusCode: 403, Code: "RECEIVER_INSTALLATION_UNAVAILABLE"}, want: Disposition{Action: ActionPause, PairingRequired: true, PauseKind: outbox.DispatchPauseBinding}},

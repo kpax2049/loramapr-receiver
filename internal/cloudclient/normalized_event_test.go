@@ -158,6 +158,37 @@ func TestPostNormalizedEventDisabledRetryAfter(t *testing.T) {
 	}
 }
 
+func TestPostNormalizedEventQuotaExhaustionRetriesAfterCloudDelay(t *testing.T) {
+	t.Parallel()
+
+	client := normalizedEventTestClient(t, func(_ *http.Request) (*http.Response, error) {
+		response := jsonResponse(http.StatusTooManyRequests, `{
+			"accepted":false,
+			"code":"STORAGE_QUOTA_EXCEEDED",
+			"message":"Storage quota exceeded",
+			"retryable":true,
+			"retryAfterSeconds":3600
+		}`)
+		response.Header.Set("Retry-After", "3600")
+		return response, nil
+	})
+
+	_, err := postNormalizedEventForTest(client)
+	if err == nil {
+		t.Fatal("expected quota error")
+	}
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("expected APIError, got %T", err)
+	}
+	if apiErr.StatusCode != http.StatusTooManyRequests || apiErr.Code != "STORAGE_QUOTA_EXCEEDED" {
+		t.Fatalf("unexpected quota status/code: %#v", apiErr)
+	}
+	if !apiErr.Retryable || !IsRetryable(err) || apiErr.RetryAfter != time.Hour {
+		t.Fatalf("quota error must preserve retry semantics: %#v", apiErr)
+	}
+}
+
 func TestPostNormalizedEventRejectsInconsistentSuccessAcknowledgement(t *testing.T) {
 	t.Parallel()
 
