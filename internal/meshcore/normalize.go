@@ -43,15 +43,20 @@ func NormalizeAdapterEvent(event protocoladapter.Event, binding ReceiverBinding,
 	}
 
 	base := normalizedBase(event, binding, frame)
-	if !semanticProfileMatched(session) {
-		return normalizeCapturedRaw(base, frame.Payload), nil
-	}
 	if err := validatePush(frame.Payload); err != nil {
 		return normalizeCapturedRaw(base, frame.Payload), nil
 	}
-	switch frame.Opcode {
-	case PushLogRXData:
+	// A LOG_RX frame contains complete on-air bytes. Its ADVERT signature is
+	// independently verifiable and is therefore not delegated Companion trust.
+	// Profile matching remains mandatory for semantic interpretation of the
+	// delegated Companion-only surface below, especially NEW_ADVERT (0x8A).
+	if frame.Opcode == PushLogRXData {
 		return normalizeLogRX(base, frame.Payload, event.ObservedAt), nil
+	}
+	if !semanticProfileMatched(session) {
+		return normalizeCapturedRaw(base, frame.Payload), nil
+	}
+	switch frame.Opcode {
 	case PushRawData:
 		return normalizeRawData(base, frame.Payload), nil
 	case PushControlData:

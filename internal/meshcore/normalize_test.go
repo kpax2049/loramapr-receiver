@@ -230,7 +230,7 @@ func TestNormalizeUnknownOpcodeIsRawOnly(t *testing.T) {
 	assertContractValid(t, event)
 }
 
-func TestNormalizeProfileMismatchRetainsKnownPushesWithoutSemanticEvidence(t *testing.T) {
+func TestNormalizeProfileMismatchRetainsDelegatedPushesWithoutSemanticEvidence(t *testing.T) {
 	observedAt := time.Date(2026, 8, 20, 12, 5, 0, 0, time.UTC)
 	mismatched := pinnedReadySnapshot()
 	mismatched.Trust.Trusted = false
@@ -241,7 +241,6 @@ func TestNormalizeProfileMismatchRetainsKnownPushesWithoutSemanticEvidence(t *te
 		payload []byte
 	}{
 		{name: "raw data", payload: []byte{PushRawData, 4, 0x91, 0xff, 1}},
-		{name: "log rx signed advert", payload: readNormalizeHexFixture(t, "signed-log-rx-advert-v1.hex")},
 		{name: "delegated advert", payload: readNormalizeHexFixture(t, "new-advert-v1.17.1.hex")},
 		{name: "control data", payload: []byte{PushControlData, 8, 0x90, 0, 2}},
 	}
@@ -264,6 +263,29 @@ func TestNormalizeProfileMismatchRetainsKnownPushesWithoutSemanticEvidence(t *te
 			assertContractValid(t, event)
 		})
 	}
+}
+
+func TestNormalizeProfileMismatchPreservesIndependentlyVerifiedSignedLogRXAdvert(t *testing.T) {
+	observedAt := time.Date(2026, 8, 20, 12, 5, 0, 0, time.UTC)
+	mismatched := pinnedReadySnapshot()
+	mismatched.Trust.Trusted = false
+	mismatched.Trust.ProfileMatched = false
+	mismatched.Trust.FirmwareBuild = "13 Aug 2026"
+
+	event := normalizeFixture(t, readNormalizeHexFixture(t, "signed-log-rx-advert-v1.hex"), observedAt, mismatched)
+	if event["eventType"] != "device_advertisement" {
+		t.Fatalf("raw signed advert eventType = %#v, want device_advertisement", event["eventType"])
+	}
+	if mapField(t, event, "authenticity")["method"] != "raw_ed25519" {
+		t.Fatalf("profile mismatch weakened raw signature evidence: %#v", event["authenticity"])
+	}
+	if mapField(t, event, "subject")["verification"] != "verified" {
+		t.Fatalf("raw signed advert lost verified subject: %#v", event["subject"])
+	}
+	if _, ok := event["radio"]; !ok {
+		t.Fatal("raw signed LOG_RX advert lost receiver-local radio evidence")
+	}
+	assertContractValid(t, event)
 }
 
 func TestNormalizeRawAndControlDataPreserveLocalRFWithoutAttribution(t *testing.T) {
