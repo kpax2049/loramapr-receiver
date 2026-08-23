@@ -66,6 +66,31 @@ type ReceiverHeartbeat struct {
 	LocalNodeID     string
 	ObservedNodeIDs []string
 	Status          map[string]any
+	Adapters        []ReceiverAdapterStatus
+}
+
+// ReceiverAdapterStatus is the deliberately small cloud-safe projection of a
+// local adapter. It never carries device paths, raw evidence, credentials, or
+// arbitrary diagnostic strings.
+type ReceiverAdapterStatus struct {
+	Protocol        string                         `json:"protocol"`
+	Enabled         bool                           `json:"enabled"`
+	Configured      bool                           `json:"configured"`
+	Lifecycle       string                         `json:"lifecycle"`
+	Connected       bool                           `json:"connected"`
+	Ready           bool                           `json:"ready"`
+	Transport       string                         `json:"transport,omitempty"`
+	ProtocolVersion string                         `json:"protocolVersion,omitempty"`
+	ProfileState    string                         `json:"profileState,omitempty"`
+	ErrorCode       string                         `json:"errorCode,omitempty"`
+	Delivery        *ReceiverAdapterDeliveryStatus `json:"delivery,omitempty"`
+}
+
+type ReceiverAdapterDeliveryStatus struct {
+	State            string `json:"state"`
+	PendingCount     int    `json:"pendingCount,omitempty"`
+	QuarantinedCount int    `json:"quarantinedCount,omitempty"`
+	FailureCode      string `json:"failureCode,omitempty"`
 }
 
 type HomeAutoSessionManagedGeofence struct {
@@ -434,12 +459,13 @@ func (c *HTTPClient) SendReceiverHeartbeat(
 	}
 
 	request := struct {
-		RuntimeVersion  string         `json:"runtimeVersion,omitempty"`
-		Platform        string         `json:"platform,omitempty"`
-		Arch            string         `json:"arch,omitempty"`
-		LocalNodeID     string         `json:"localNodeId,omitempty"`
-		ObservedNodeIDs []string       `json:"observedNodeIds,omitempty"`
-		Status          map[string]any `json:"status,omitempty"`
+		RuntimeVersion  string                  `json:"runtimeVersion,omitempty"`
+		Platform        string                  `json:"platform,omitempty"`
+		Arch            string                  `json:"arch,omitempty"`
+		LocalNodeID     string                  `json:"localNodeId,omitempty"`
+		ObservedNodeIDs []string                `json:"observedNodeIds,omitempty"`
+		Status          map[string]any          `json:"status,omitempty"`
+		Adapters        []ReceiverAdapterStatus `json:"adapters,omitempty"`
 	}{
 		RuntimeVersion:  strings.TrimSpace(heartbeat.RuntimeVersion),
 		Platform:        strings.TrimSpace(heartbeat.Platform),
@@ -447,6 +473,7 @@ func (c *HTTPClient) SendReceiverHeartbeat(
 		LocalNodeID:     strings.TrimSpace(heartbeat.LocalNodeID),
 		ObservedNodeIDs: append([]string(nil), heartbeat.ObservedNodeIDs...),
 		Status:          heartbeat.Status,
+		Adapters:        append([]ReceiverAdapterStatus(nil), heartbeat.Adapters...),
 	}
 
 	var response struct {

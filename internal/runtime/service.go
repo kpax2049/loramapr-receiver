@@ -1224,6 +1224,7 @@ func (s *Service) sendHeartbeat(ctx context.Context, snapshot state.Data, meshSn
 		Arch:            goruntime.GOARCH,
 		LocalNodeID:     meshSnap.LocalNodeID,
 		ObservedNodeIDs: append([]string(nil), meshSnap.ObservedNodeIDs...),
+		Adapters:        cloudAdapterStatuses(updateSnap.Adapters),
 		Status: map[string]any{
 			"installationId":         snapshot.Installation.ID,
 			"localName":              snapshot.Installation.LocalName,
