@@ -684,9 +684,17 @@ func (m *Module) consumePositionLocked(position PositionObservation) {
 	if now.IsZero() {
 		return
 	}
-	m.lastEventAt = cloneTime(now)
-
 	fact := m.nodeFacts[nodeKey]
+	// Cloud-attested MeshCore positions may be acknowledged out of delivery
+	// order. Unlike the legacy Meshtastic path, do not let an older assertion
+	// reverse a newer geofence fact or candidate.
+	if strings.EqualFold(strings.TrimSpace(position.Subject.Protocol), "meshcore") &&
+		strings.EqualFold(strings.TrimSpace(position.Subject.Namespace), "ed25519") &&
+		!fact.LastSeenAt.IsZero() &&
+		!now.After(fact.LastSeenAt) {
+		return
+	}
+	m.lastEventAt = cloneTime(now)
 	fact.LastSeenAt = now
 
 	if !position.HasPosition {

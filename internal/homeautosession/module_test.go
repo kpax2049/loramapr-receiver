@@ -222,6 +222,34 @@ func TestAttestedMeshCorePositionStartsSessionAndIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestAttestedMeshCorePositionRejectsOutOfOrderCaptureTime(t *testing.T) {
+	store, err := state.Open(filepath.Join(t.TempDir(), "receiver-state.json"))
+	if err != nil {
+		t.Fatalf("open state: %v", err)
+	}
+	canonicalID := strings.Repeat("c", 64)
+	cfg := homeAutoTestConfig(config.HomeAutoSessionModeControl)
+	cfg.TrackedNodeIDs = []string{"meshcore:ed25519:" + canonicalID}
+	module := New(cfg, store, status.New(), nil, &mockSessionClient{})
+	now := time.Now().UTC()
+
+	module.mu.Lock()
+	module.consumePositionLocked(testAttestedMeshCorePosition(canonicalID, 37.3349, -122.0090, now.Add(-2*time.Second), "delivery-newer:measurement-inside"))
+	module.consumePositionLocked(testAttestedMeshCorePosition(canonicalID, latOffsetMeters(37.3349, 260), -122.0090, now.Add(-time.Second), "delivery-newer:measurement-outside"))
+	module.consumePositionLocked(testAttestedMeshCorePosition(canonicalID, 37.3349, -122.0090, now.Add(-3*time.Second), "delivery-delayed:measurement-inside"))
+	fact := module.nodeFacts["meshcore:ed25519:"+canonicalID]
+	startCandidate := module.startCandidate
+	stopCandidate := module.stopCandidate
+	module.mu.Unlock()
+
+	if !fact.HasPosition || fact.InsideGeofence || !fact.LastSeenAt.Equal(now.Add(-time.Second)) {
+		t.Fatalf("older assertion replaced newer MeshCore fact: %#v", fact)
+	}
+	if startCandidate == nil || stopCandidate != nil {
+		t.Fatalf("older assertion changed MeshCore transition candidates: start=%#v stop=%#v", startCandidate, stopCandidate)
+	}
+}
+
 func TestAttestedMeshCorePositionRejectsMalformedSubjectAndDoesNotCollideWithMeshtastic(t *testing.T) {
 	store, err := state.Open(filepath.Join(t.TempDir(), "receiver-state.json"))
 	if err != nil {
