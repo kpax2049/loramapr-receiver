@@ -48,14 +48,15 @@ type Dispatcher struct {
 }
 
 type DispatchResult struct {
-	DeliveryID       string
-	Attempted        bool
-	Acknowledged     bool
-	Duplicate        bool
-	Disposition      Disposition
-	Quarantined      int
-	Reconciled       outbox.BindingReconcileResult
-	ClockAttestation *cloudclient.ClockAttestationCandidate
+	DeliveryID              string
+	Attempted               bool
+	Acknowledged            bool
+	Duplicate               bool
+	Disposition             Disposition
+	Quarantined             int
+	Reconciled              outbox.BindingReconcileResult
+	ClockAttestation        *cloudclient.ClockAttestationCandidate
+	SessionEligiblePosition *cloudclient.SessionEligiblePositionAssertion
 }
 
 func (d Dispatcher) DispatchOnce(ctx context.Context, apiKey string, binding outbox.Binding, now time.Time) (DispatchResult, error) {
@@ -104,6 +105,7 @@ func (d Dispatcher) DispatchOnce(ctx context.Context, apiKey string, binding out
 		result.Acknowledged = true
 		result.Duplicate = ack.Duplicate
 		result.ClockAttestation = ack.ClockAttestation
+		result.SessionEligiblePosition = ack.SessionEligiblePosition
 		return result, nil
 	}
 

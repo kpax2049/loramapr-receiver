@@ -197,6 +197,7 @@ type Module struct {
 	nodeFacts      map[string]nodeFact
 
 	events     chan meshtastic.Event
+	positions  chan PositionObservation
 	reevaluate chan struct{}
 	started    bool
 
@@ -209,9 +210,45 @@ type Module struct {
 	lastLoggedSummary      string
 }
 
+// SubjectRef is the internal canonical identity boundary for HAS. It is never
+// derived from a display alias, prefix, fingerprint, route, or gateway.
+type SubjectRef struct {
+	Protocol    string
+	Namespace   string
+	CanonicalID string
+}
+
+func (s SubjectRef) Key() string {
+	protocol := strings.ToLower(strings.TrimSpace(s.Protocol))
+	namespace := strings.ToLower(strings.TrimSpace(s.Namespace))
+	id := strings.TrimSpace(s.CanonicalID)
+	if protocol == "meshtastic" && namespace == "meshtastic_node_id" {
+		return strings.ToLower(id)
+	}
+	if protocol == "meshcore" && namespace == "ed25519" && isLowerHexEd25519(id) {
+		return "meshcore:ed25519:" + id
+	}
+	return ""
+}
+
+// PositionObservation reaches HAS only through a protocol adapter wrapper or
+// the cloud-attested M4E1 acknowledgement path.
+type PositionObservation struct {
+	Subject SubjectRef
+	// DeviceUID is the cloud's owner-scoped lookup result, supplied only with
+	// an M4E1 assertion. Subject remains the canonical protocol identity.
+	DeviceUID   string
+	Lat         float64
+	Lon         float64
+	CapturedAt  time.Time
+	EvidenceRef string
+	HasPosition bool
+}
+
 type pendingAction struct {
 	Action    pendingActionKind
 	NodeID    string
+	DeviceUID string
 	Reason    string
 	DedupeKey string
 	Since     time.Time
@@ -219,6 +256,7 @@ type pendingAction struct {
 
 type transitionCandidate struct {
 	NodeID    string
+	DeviceUID string
 	At        time.Time
 	Reason    string
 	DedupeKey string
@@ -245,6 +283,7 @@ func New(cfg config.HomeAutoSessionConfig, store *state.Store, statusModel *stat
 		status:                 statusModel,
 		client:                 client,
 		events:                 make(chan meshtastic.Event, observationQueueDepth),
+		positions:              make(chan PositionObservation, observationQueueDepth),
 		reevaluate:             make(chan struct{}, 1),
 		nodeFacts:              make(map[string]nodeFact),
 		trackedByLower:         make(map[string]string),
@@ -288,6 +327,24 @@ func (m *Module) Start(ctx context.Context) {
 func (m *Module) ObserveEvent(event meshtastic.Event) {
 	select {
 	case m.events <- event:
+	default:
+		m.mu.Lock()
+		m.observedDropped++
+		m.lastError = "home auto session observation queue is full"
+		m.markDegradedLocked(time.Now().UTC(), "event observation queue overflow", "manual action required after event queue overflow")
+		m.mu.Unlock()
+	}
+}
+
+func (m *Module) ObserveAttestedPosition(position PositionObservation) {
+	if strings.TrimSpace(position.EvidenceRef) == "" || position.Subject.Key() == "" {
+		return
+	}
+	if strings.EqualFold(strings.TrimSpace(position.Subject.Protocol), "meshcore") && strings.TrimSpace(position.DeviceUID) == "" {
+		return
+	}
+	select {
+	case m.positions <- position:
 	default:
 		m.mu.Lock()
 		m.observedDropped++
@@ -389,6 +446,11 @@ func (m *Module) run(ctx context.Context) {
 			m.consumeEventLocked(event)
 			m.evaluateLocked(ctx, eventTime(event), "event")
 			m.mu.Unlock()
+		case position := <-m.positions:
+			m.mu.Lock()
+			m.consumePositionLocked(position)
+			m.evaluateLocked(ctx, position.CapturedAt.UTC(), "attested_position")
+			m.mu.Unlock()
 		case <-ticker.C:
 			m.mu.Lock()
 			m.evaluateLocked(ctx, time.Now().UTC(), "tick")
@@ -482,6 +544,7 @@ func (m *Module) bootstrapFromStateLocked() {
 		m.pendingAction = &pendingAction{
 			Action:    pendingActionCode,
 			NodeID:    strings.TrimSpace(snap.PendingTriggerNode),
+			DeviceUID: strings.TrimSpace(snap.PendingDeviceUID),
 			Reason:    strings.TrimSpace(snap.PendingReason),
 			DedupeKey: strings.TrimSpace(snap.PendingDedupeKey),
 			Since:     since,
@@ -523,6 +586,7 @@ func (m *Module) reconcileStartupLocked(now time.Time) {
 			} else {
 				m.startCandidate = &transitionCandidate{
 					NodeID:    pending.NodeID,
+					DeviceUID: pending.DeviceUID,
 					At:        pending.Since,
 					Reason:    pending.Reason,
 					DedupeKey: pending.DedupeKey,
@@ -540,6 +604,7 @@ func (m *Module) reconcileStartupLocked(now time.Time) {
 			} else {
 				m.stopCandidate = &transitionCandidate{
 					NodeID:    pending.NodeID,
+					DeviceUID: pending.DeviceUID,
 					At:        pending.Since,
 					Reason:    pending.Reason,
 					DedupeKey: pending.DedupeKey,
@@ -586,14 +651,27 @@ func (m *Module) markStartupInconsistentLocked(now time.Time, reason string) {
 }
 
 func (m *Module) consumeEventLocked(event meshtastic.Event) {
+	if event.Packet == nil {
+		return
+	}
+	position := PositionObservation{
+		Subject:     SubjectRef{Protocol: "meshtastic", Namespace: "meshtastic_node_id", CanonicalID: event.Packet.SourceNodeID},
+		CapturedAt:  eventTime(event),
+		EvidenceRef: "legacy_meshtastic",
+		HasPosition: event.Packet.Position != nil,
+	}
+	if event.Packet.Position != nil {
+		position.Lat, position.Lon = event.Packet.Position.Lat, event.Packet.Position.Lon
+	}
+	m.consumePositionLocked(position)
+}
+
+func (m *Module) consumePositionLocked(position PositionObservation) {
 	cfg := m.cfg
 	if !cfg.Enabled || strings.EqualFold(string(cfg.Mode), string(config.HomeAutoSessionModeOff)) {
 		return
 	}
-	if event.Packet == nil {
-		return
-	}
-	nodeID := strings.TrimSpace(event.Packet.SourceNodeID)
+	nodeID := strings.TrimSpace(position.Subject.Key())
 	if nodeID == "" {
 		return
 	}
@@ -602,21 +680,24 @@ func (m *Module) consumeEventLocked(event meshtastic.Event) {
 		return
 	}
 
-	now := eventTime(event)
+	now := position.CapturedAt.UTC()
+	if now.IsZero() {
+		return
+	}
 	m.lastEventAt = cloneTime(now)
 
 	fact := m.nodeFacts[nodeKey]
 	fact.LastSeenAt = now
 
-	if event.Packet.Position == nil {
+	if !position.HasPosition {
 		m.trackedNodeState = fmt.Sprintf("node %s seen without position fix", nodeID)
 		m.setGPSStatusLocked(gpsStatusMissing, "waiting for tracked-node position updates", nodeID, nil, now)
 		m.nodeFacts[nodeKey] = fact
 		return
 	}
 
-	lat := event.Packet.Position.Lat
-	lon := event.Packet.Position.Lon
+	lat := position.Lat
+	lon := position.Lon
 	if !coordinatesValid(lat, lon) {
 		m.trackedNodeState = fmt.Sprintf("node %s reported invalid coordinates", nodeID)
 		m.setGPSStatusLocked(gpsStatusInvalid, "ignored invalid GPS coordinates from tracked node", nodeID, nil, now)
@@ -652,17 +733,23 @@ func (m *Module) consumeEventLocked(event meshtastic.Event) {
 	if fact.HasPosition {
 		if fact.InsideGeofence && !inside {
 			m.startCandidate = &transitionCandidate{
-				NodeID: nodeID,
-				At:     now,
-				Reason: "tracked node moved outside home geofence",
+				NodeID:    nodeID,
+				DeviceUID: strings.TrimSpace(position.DeviceUID),
+				At:        now,
+				Reason:    "tracked node moved outside home geofence",
+				DedupeKey: positionDedupeKey(actionStart, position, nodeID, now,
+					"tracked node moved outside home geofence"),
 			}
 			m.stopCandidate = nil
 		}
 		if !fact.InsideGeofence && inside {
 			m.stopCandidate = &transitionCandidate{
-				NodeID: nodeID,
-				At:     now,
-				Reason: "tracked node returned inside home geofence",
+				NodeID:    nodeID,
+				DeviceUID: strings.TrimSpace(position.DeviceUID),
+				At:        now,
+				Reason:    "tracked node returned inside home geofence",
+				DedupeKey: positionDedupeKey(actionStop, position, nodeID, now,
+					"tracked node returned inside home geofence"),
 			}
 			m.startCandidate = nil
 		}
@@ -881,6 +968,7 @@ func (m *Module) promotePendingActionLocked() {
 	pending := *m.pendingAction
 	candidate := &transitionCandidate{
 		NodeID:    pending.NodeID,
+		DeviceUID: pending.DeviceUID,
 		At:        pending.Since,
 		Reason:    pending.Reason,
 		DedupeKey: pending.DedupeKey,
@@ -952,6 +1040,7 @@ func (m *Module) attemptStartLocked(ctx context.Context, now time.Time, cfg conf
 
 	name, notes := renderSessionText(cfg, candidate.NodeID)
 	request := cloudclient.HomeAutoSessionStartRequest{
+		DeviceUID:     candidate.DeviceUID,
 		TriggerNodeID: candidate.NodeID,
 		DedupeKey:     candidate.DedupeKey,
 		Reason:        candidate.Reason,
@@ -1210,6 +1299,7 @@ func (m *Module) setPendingActionLocked(action pendingActionKind, candidate tran
 	m.pendingAction = &pendingAction{
 		Action:    action,
 		NodeID:    strings.TrimSpace(candidate.NodeID),
+		DeviceUID: strings.TrimSpace(candidate.DeviceUID),
 		Reason:    strings.TrimSpace(candidate.Reason),
 		DedupeKey: strings.TrimSpace(candidate.DedupeKey),
 		Since:     since,
@@ -1458,10 +1548,12 @@ func (m *Module) handleCloudErrorLocked(now time.Time, action pendingActionKind,
 	if action == actionStart && startMissingSessionIDConflict(err) {
 		currentDedupe := ""
 		startNode := ""
+		startDeviceUID := ""
 		startReason := "tracked node moved outside home geofence"
 		if m.pendingAction != nil && m.pendingAction.Action == actionStart {
 			currentDedupe = strings.TrimSpace(m.pendingAction.DedupeKey)
 			startNode = strings.TrimSpace(m.pendingAction.NodeID)
+			startDeviceUID = strings.TrimSpace(m.pendingAction.DeviceUID)
 			if value := strings.TrimSpace(m.pendingAction.Reason); value != "" {
 				startReason = value
 			}
@@ -1472,6 +1564,9 @@ func (m *Module) handleCloudErrorLocked(now time.Time, action pendingActionKind,
 			}
 			if startNode == "" {
 				startNode = strings.TrimSpace(m.startCandidate.NodeID)
+			}
+			if startDeviceUID == "" {
+				startDeviceUID = strings.TrimSpace(m.startCandidate.DeviceUID)
 			}
 			if value := strings.TrimSpace(m.startCandidate.Reason); value != "" {
 				startReason = value
@@ -1491,6 +1586,7 @@ func (m *Module) handleCloudErrorLocked(now time.Time, action pendingActionKind,
 		m.pendingAction = nil
 		m.startCandidate = &transitionCandidate{
 			NodeID:    startNode,
+			DeviceUID: startDeviceUID,
 			At:        now,
 			Reason:    startReason,
 			DedupeKey: "",
@@ -1705,12 +1801,14 @@ func (m *Module) persistLocked() {
 
 	pendingActionCode := ""
 	pendingNode := ""
+	pendingDeviceUID := ""
 	pendingReason := ""
 	pendingDedupe := ""
 	var pendingSince *time.Time
 	if m.pendingAction != nil {
 		pendingActionCode = string(m.pendingAction.Action)
 		pendingNode = strings.TrimSpace(m.pendingAction.NodeID)
+		pendingDeviceUID = strings.TrimSpace(m.pendingAction.DeviceUID)
 		pendingReason = strings.TrimSpace(m.pendingAction.Reason)
 		pendingDedupe = strings.TrimSpace(m.pendingAction.DedupeKey)
 		pendingSince = cloneTime(m.pendingAction.Since)
@@ -1734,6 +1832,7 @@ func (m *Module) persistLocked() {
 		ActiveTriggerNode:      activeNode,
 		PendingAction:          pendingActionCode,
 		PendingTriggerNode:     pendingNode,
+		PendingDeviceUID:       pendingDeviceUID,
 		PendingReason:          pendingReason,
 		PendingDedupeKey:       pendingDedupe,
 		PendingSince:           pendingSince,
@@ -1983,6 +2082,11 @@ func validateConfig(cfg config.HomeAutoSessionConfig) error {
 	}
 	if len(cfg.TrackedNodeIDs) == 0 {
 		return fmt.Errorf("tracked node IDs are required")
+	}
+	for _, value := range cfg.TrackedNodeIDs {
+		if strings.HasPrefix(strings.ToLower(strings.TrimSpace(value)), "meshcore:") && !isMeshCoreSelector(value) {
+			return fmt.Errorf("MeshCore tracked node must be meshcore:ed25519:<64 lowercase hex characters>")
+		}
 	}
 	if cfg.StartDebounce.Std() <= 0 {
 		return fmt.Errorf("start debounce must be greater than zero")
@@ -2517,6 +2621,30 @@ func dedupeKey(prefix, nodeID string, at time.Time, reason string) string {
 		strings.ToLower(strings.TrimSpace(reason)),
 	}, "|")))
 	return prefix + "-" + hex.EncodeToString(sum[:10])
+}
+
+func positionDedupeKey(action pendingActionKind, position PositionObservation, nodeID string, at time.Time, reason string) string {
+	if strings.EqualFold(strings.TrimSpace(position.Subject.Protocol), "meshcore") {
+		return dedupeKey(string(action), nodeID, at, reason+"|"+strings.TrimSpace(position.EvidenceRef))
+	}
+	return ""
+}
+
+func isMeshCoreSelector(value string) bool {
+	parts := strings.Split(strings.TrimSpace(value), ":")
+	return len(parts) == 3 && strings.EqualFold(parts[0], "meshcore") && strings.EqualFold(parts[1], "ed25519") && isLowerHexEd25519(parts[2])
+}
+
+func isLowerHexEd25519(value string) bool {
+	if len(value) != 64 {
+		return false
+	}
+	for _, c := range value {
+		if !(c >= '0' && c <= '9') && !(c >= 'a' && c <= 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 func eventTime(event meshtastic.Event) time.Time {

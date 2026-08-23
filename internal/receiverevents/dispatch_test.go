@@ -60,6 +60,35 @@ func TestDispatcherAcknowledgesNewAndDuplicateDeliveries(t *testing.T) {
 	}
 }
 
+func TestDispatcherCarriesOptionalSessionEligiblePositionOnlyAfterAcknowledgement(t *testing.T) {
+	now := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
+	engine, store := testEngine(t, now)
+	defer closeTestEngine(t, engine, store)
+	delivery := testDelivery("0198c7a2-e395-7000-8000-000000000019", "agent-1", []byte(`{"exact":true}`))
+	if err := store.Enqueue(delivery); err != nil {
+		t.Fatal(err)
+	}
+	canonicalID := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	assertion := &cloudclient.SessionEligiblePositionAssertion{
+		DeliveryID: delivery.DeliveryID, EligibilityRef: "measurement-1", DeviceUID: "meshcore:" + canonicalID,
+		Subject: cloudclient.SubjectRef{Protocol: "meshcore", Namespace: "ed25519", CanonicalID: canonicalID},
+		Lat:     37.3349, Lon: -122.0090, CapturedAt: now,
+	}
+	client := &fakeDeliveryClient{result: cloudclient.NormalizedDeliveryResult{
+		StatusCode: 202, DeliveryID: delivery.DeliveryID, SessionEligiblePosition: assertion,
+	}}
+	result, err := (Dispatcher{Outbox: engine, Client: client}).DispatchOnce(context.Background(), "secret", testBinding(), now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Acknowledged || result.SessionEligiblePosition != assertion {
+		t.Fatalf("optional assertion not carried with acknowledged delivery: %#v", result)
+	}
+	if _, err := engine.Get(delivery.DeliveryID); !errors.Is(err, outbox.ErrDeliveryNotFound) {
+		t.Fatalf("acknowledged delivery remains after optional assertion handoff: %v", err)
+	}
+}
+
 func TestDispatcherRetriesWithoutMutatingEnvelope(t *testing.T) {
 	now := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
 	engine, store := testEngine(t, now)

@@ -939,6 +939,7 @@ func (s *Service) processNormalizedDispatch(ctx context.Context, trigger string)
 		}
 		if result.Acknowledged {
 			s.recordClockAttestation(result.ClockAttestation)
+			s.observeAttestedHomeAutoPosition(result.DeliveryID, result.SessionEligiblePosition)
 			c.Logger.Debug("normalized delivery acknowledged", "delivery_id", result.DeliveryID, "duplicate", result.Duplicate)
 			s.refreshNormalizedOutboxStatus()
 			continue
@@ -960,6 +961,34 @@ func (s *Service) processNormalizedDispatch(ctx context.Context, trigger string)
 			return
 		}
 	}
+}
+
+func (s *Service) observeAttestedHomeAutoPosition(deliveryID string, assertion *cloudclient.SessionEligiblePositionAssertion) {
+	if s == nil || s.container == nil || s.container.HomeAutoSession == nil || assertion == nil {
+		return
+	}
+	if assertion.DeliveryID != deliveryID || assertion.Subject.Protocol != "meshcore" || assertion.Subject.Namespace != "ed25519" {
+		return
+	}
+	canonicalID := strings.TrimSpace(assertion.Subject.CanonicalID)
+	if len(canonicalID) != 64 || canonicalID != strings.ToLower(canonicalID) || assertion.CapturedAt.IsZero() {
+		return
+	}
+	if _, err := hex.DecodeString(canonicalID); err != nil || strings.TrimSpace(assertion.EligibilityRef) == "" {
+		return
+	}
+	if strings.TrimSpace(assertion.DeviceUID) != "meshcore:"+canonicalID {
+		return
+	}
+	s.container.HomeAutoSession.ObserveAttestedPosition(homeautosession.PositionObservation{
+		Subject:     homeautosession.SubjectRef{Protocol: assertion.Subject.Protocol, Namespace: assertion.Subject.Namespace, CanonicalID: canonicalID},
+		DeviceUID:   assertion.DeviceUID,
+		Lat:         assertion.Lat,
+		Lon:         assertion.Lon,
+		CapturedAt:  assertion.CapturedAt,
+		EvidenceRef: assertion.DeliveryID + ":" + assertion.EligibilityRef,
+		HasPosition: true,
+	})
 }
 
 func (s *Service) handleNormalizedDisposition(result receiverevents.DispatchResult) {

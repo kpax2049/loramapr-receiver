@@ -184,6 +184,8 @@ func TestNewPersistsIdentityHints(t *testing.T) {
 
 func TestNewSelectsConcurrentAdaptersAndStagesMeshCoreDurably(t *testing.T) {
 	t.Parallel()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
 	tempDir := t.TempDir()
 	cfg := config.Default()
@@ -192,6 +194,14 @@ func TestNewSelectsConcurrentAdaptersAndStagesMeshCoreDurably(t *testing.T) {
 	cfg.Meshtastic.Transport = "disabled"
 	cfg.MeshCore.Transport = "physical_serial"
 	cfg.MeshCore.Device = filepath.Join(tempDir, "ttyACM0")
+	meshcoreSubject := strings.Repeat("c", 64)
+	cfg.HomeAutoSession.Enabled = true
+	cfg.HomeAutoSession.Mode = config.HomeAutoSessionModeObserve
+	cfg.HomeAutoSession.Home = config.HomeGeofenceConfig{Lat: 37.3349, Lon: -122.0090, RadiusM: 150}
+	cfg.HomeAutoSession.TrackedNodeIDs = []string{"meshcore:ed25519:" + meshcoreSubject}
+	cfg.HomeAutoSession.StartDebounce = config.Duration(time.Second)
+	cfg.HomeAutoSession.StopDebounce = config.Duration(time.Second)
+	cfg.HomeAutoSession.IdleStopTimeout = config.Duration(time.Minute)
 	svc, err := New(cfg, slog.Default())
 	if err != nil {
 		t.Fatalf("runtime.New failed: %v", err)
@@ -257,6 +267,11 @@ func TestNewSelectsConcurrentAdaptersAndStagesMeshCoreDurably(t *testing.T) {
 		if record.IdempotencyKey != record.DeliveryID || record.Endpoint != "/api/receiver/events/v1" || !strings.Contains(string(record.Envelope), `"protocol":"meshcore"`) {
 			t.Fatalf("unexpected persisted normalized delivery: %#v envelope=%s", record, record.Envelope)
 		}
+		svc.container.HomeAutoSession.Start(ctx)
+		time.Sleep(50 * time.Millisecond)
+		if got := svc.CurrentStatus().HomeAutoSession.GPSUpdatedAt; got != nil {
+			t.Fatalf("raw MeshCore adapter event bypassed cloud attestation boundary: %s", got.UTC())
+		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for runtime durable stage")
 	}
@@ -276,6 +291,62 @@ type mockCloudClient struct {
 
 	startHomeAutoCalls int
 	stopHomeAutoCalls  int
+}
+
+func TestObserveAttestedHomeAutoPositionRequiresBoundAssertion(t *testing.T) {
+	store, err := state.Open(filepath.Join(t.TempDir(), "receiver-state.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonicalID := strings.Repeat("d", 64)
+	cfg := config.Default()
+	cfg.HomeAutoSession.Enabled = true
+	cfg.HomeAutoSession.Mode = config.HomeAutoSessionModeObserve
+	cfg.HomeAutoSession.Home = config.HomeGeofenceConfig{Lat: 37.3349, Lon: -122.0090, RadiusM: 150}
+	cfg.HomeAutoSession.TrackedNodeIDs = []string{"meshcore:ed25519:" + canonicalID}
+	cfg.HomeAutoSession.StartDebounce = config.Duration(time.Second)
+	cfg.HomeAutoSession.StopDebounce = config.Duration(time.Second)
+	cfg.HomeAutoSession.IdleStopTimeout = config.Duration(time.Minute)
+	statusModel := status.New()
+	module := homeautosession.New(cfg.HomeAutoSession, store, statusModel, slog.Default(), &mockCloudClient{})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	module.Start(ctx)
+	svc := &Service{container: &Container{HomeAutoSession: module}}
+	now := time.Now().UTC()
+	valid := &cloudclient.SessionEligiblePositionAssertion{
+		DeliveryID: "delivery-1", EligibilityRef: "measurement-1", DeviceUID: "meshcore:" + canonicalID,
+		Subject: cloudclient.SubjectRef{Protocol: "meshcore", Namespace: "ed25519", CanonicalID: canonicalID},
+		Lat:     37.3349, Lon: -122.0090, CapturedAt: now,
+	}
+	svc.observeAttestedHomeAutoPosition("delivery-1", valid)
+	waitForRuntimeCondition(t, 3*time.Second, func() bool {
+		return statusModel.Snapshot().HomeAutoSession.GPSUpdatedAt != nil
+	})
+	before := *statusModel.Snapshot().HomeAutoSession.GPSUpdatedAt
+	valid.DeliveryID = "other-delivery"
+	svc.observeAttestedHomeAutoPosition("delivery-1", valid)
+	malformed := *valid
+	malformed.DeliveryID = "delivery-1"
+	malformed.Subject.CanonicalID = strings.Repeat("D", 64)
+	svc.observeAttestedHomeAutoPosition("delivery-1", &malformed)
+	time.Sleep(100 * time.Millisecond)
+	after := statusModel.Snapshot().HomeAutoSession.GPSUpdatedAt
+	if after == nil || !after.Equal(before) {
+		t.Fatalf("missing or malformed assertion changed HAS state: before=%s after=%v", before, after)
+	}
+}
+
+func waitForRuntimeCondition(t *testing.T, timeout time.Duration, fn func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if fn() {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatal("timed out waiting for runtime condition")
 }
 
 func (m *mockCloudClient) ExchangePairingCode(_ context.Context, _ string) (cloudclient.BootstrapExchange, error) {

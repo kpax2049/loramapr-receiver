@@ -122,6 +122,7 @@ type HomeAutoSessionState struct {
 	ActiveTriggerNode      string     `json:"active_trigger_node_id,omitempty"`
 	PendingAction          string     `json:"pending_action,omitempty"`
 	PendingTriggerNode     string     `json:"pending_trigger_node_id,omitempty"`
+	PendingDeviceUID       string     `json:"pending_device_uid,omitempty"`
 	PendingReason          string     `json:"pending_reason,omitempty"`
 	PendingDedupeKey       string     `json:"pending_dedupe_key,omitempty"`
 	PendingSince           *time.Time `json:"pending_since,omitempty"`

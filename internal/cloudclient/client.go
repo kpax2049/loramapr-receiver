@@ -134,6 +134,10 @@ type ReceiverHeartbeatAck struct {
 }
 
 type HomeAutoSessionStartRequest struct {
+	// DeviceUID is an owner-scoped cloud lookup result carried by an attested
+	// position. It is not a protocol identity and is optional for legacy
+	// Meshtastic requests.
+	DeviceUID     string         `json:"deviceUid,omitempty"`
 	TriggerNodeID string         `json:"triggerNodeId,omitempty"`
 	DedupeKey     string         `json:"dedupeKey,omitempty"`
 	Reason        string         `json:"reason,omitempty"`
