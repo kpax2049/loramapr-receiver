@@ -96,6 +96,42 @@ func TestPostNormalizedEventDuplicateAcknowledgement(t *testing.T) {
 	}
 }
 
+func TestPostNormalizedEventParsesSessionEligiblePositionAssertion(t *testing.T) {
+	t.Parallel()
+	canonicalID := strings.Repeat("a", 64)
+	client := normalizedEventTestClient(t, func(_ *http.Request) (*http.Response, error) {
+		return jsonResponse(http.StatusAccepted, `{
+            "accepted":true,
+            "deliveryId":"`+normalizedDeliveryID+`",
+            "sessionEligiblePosition":{
+              "deliveryId":"`+normalizedDeliveryID+`",
+              "eligibilityRef":"measurement-opaque-ref",
+              "deviceUid":"meshcore:`+canonicalID+`",
+              "subject":{"protocol":"meshcore","namespace":"ed25519","canonicalId":"`+canonicalID+`"},
+              "position":{"lat":52.5,"lon":13.4,"capturedAt":"2026-08-23T12:00:00Z"}
+            }
+        }`), nil
+	})
+	result, err := postNormalizedEventForTest(client)
+	if err != nil {
+		t.Fatalf("PostNormalizedEvent returned error: %v", err)
+	}
+	assertion := result.SessionEligiblePosition
+	if assertion == nil || assertion.DeliveryID != normalizedDeliveryID || assertion.EligibilityRef != "measurement-opaque-ref" || assertion.Subject.CanonicalID != canonicalID || assertion.Subject.Protocol != "meshcore" || assertion.Lat != 52.5 || assertion.Lon != 13.4 {
+		t.Fatalf("unexpected session eligible assertion: %#v", assertion)
+	}
+}
+
+func TestPostNormalizedEventRejectsMalformedSessionEligiblePositionAssertion(t *testing.T) {
+	t.Parallel()
+	client := normalizedEventTestClient(t, func(_ *http.Request) (*http.Response, error) {
+		return jsonResponse(http.StatusAccepted, `{"accepted":true,"deliveryId":"`+normalizedDeliveryID+`","sessionEligiblePosition":{"deliveryId":"wrong","eligibilityRef":"ref"}}`), nil
+	})
+	if _, err := postNormalizedEventForTest(client); err == nil {
+		t.Fatal("expected malformed assertion rejection")
+	}
+}
+
 func TestPostNormalizedEventStructuredConflict(t *testing.T) {
 	t.Parallel()
 

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net"
 	"net/http"
 	"net/url"
@@ -177,11 +178,33 @@ type APIError struct {
 }
 
 type NormalizedDeliveryResult struct {
-	StatusCode       int
-	Duplicate        bool
-	DeliveryID       string
-	RequestID        string
-	ClockAttestation *clockattestation.Candidate
+	StatusCode              int
+	Duplicate               bool
+	DeliveryID              string
+	RequestID               string
+	ClockAttestation        *clockattestation.Candidate
+	SessionEligiblePosition *SessionEligiblePositionAssertion
+}
+
+// SubjectRef is a protocol-neutral canonical subject identity. It is internal
+// receiver/cloud contract data, never a display alias or short fingerprint.
+type SubjectRef struct {
+	Protocol    string
+	Namespace   string
+	CanonicalID string
+}
+
+// SessionEligiblePositionAssertion is an authenticated cloud assertion tied
+// to the exact normalized delivery. It is deliberately not consumed by HAS in
+// M4E1; M4E2 will consume it without inspecting MeshCore radio evidence.
+type SessionEligiblePositionAssertion struct {
+	DeliveryID     string
+	EligibilityRef string
+	DeviceUID      string
+	Subject        SubjectRef
+	Lat            float64
+	Lon            float64
+	CapturedAt     time.Time
 }
 
 type ClockAttestationCandidate = clockattestation.Candidate
@@ -424,10 +447,25 @@ func (c *HTTPClient) PostNormalizedEvent(
 		}
 	}
 	var payload struct {
-		Accepted         bool            `json:"accepted"`
-		Duplicate        bool            `json:"duplicate"`
-		DeliveryID       string          `json:"deliveryId"`
-		ClockAttestation json.RawMessage `json:"clockAttestation"`
+		Accepted                bool            `json:"accepted"`
+		Duplicate               bool            `json:"duplicate"`
+		DeliveryID              string          `json:"deliveryId"`
+		ClockAttestation        json.RawMessage `json:"clockAttestation"`
+		SessionEligiblePosition *struct {
+			DeliveryID     string `json:"deliveryId"`
+			EligibilityRef string `json:"eligibilityRef"`
+			DeviceUID      string `json:"deviceUid"`
+			Subject        struct {
+				Protocol    string `json:"protocol"`
+				Namespace   string `json:"namespace"`
+				CanonicalID string `json:"canonicalId"`
+			} `json:"subject"`
+			Position struct {
+				Lat        float64 `json:"lat"`
+				Lon        float64 `json:"lon"`
+				CapturedAt string  `json:"capturedAt"`
+			} `json:"position"`
+		} `json:"sessionEligiblePosition"`
 	}
 	if err := json.NewDecoder(io.LimitReader(response.Body, 4096)).Decode(&payload); err != nil {
 		return NormalizedDeliveryResult{}, fmt.Errorf("decode normalized delivery response: %w", err)
@@ -444,7 +482,43 @@ func (c *HTTPClient) PostNormalizedEvent(
 		RequestID:  responseRequest,
 	}
 	result.ClockAttestation = c.parseClockAttestation(decodeClockWire(payload.ClockAttestation), receivedAt, request, response)
+	if assertion := payload.SessionEligiblePosition; assertion != nil {
+		parsed, err := parseSessionEligiblePositionAssertion(deliveryID, assertion)
+		if err != nil {
+			return NormalizedDeliveryResult{}, err
+		}
+		result.SessionEligiblePosition = &parsed
+	}
 	return result, nil
+}
+
+func parseSessionEligiblePositionAssertion(deliveryID string, value *struct {
+	DeliveryID     string `json:"deliveryId"`
+	EligibilityRef string `json:"eligibilityRef"`
+	DeviceUID      string `json:"deviceUid"`
+	Subject        struct {
+		Protocol    string `json:"protocol"`
+		Namespace   string `json:"namespace"`
+		CanonicalID string `json:"canonicalId"`
+	} `json:"subject"`
+	Position struct {
+		Lat        float64 `json:"lat"`
+		Lon        float64 `json:"lon"`
+		CapturedAt string  `json:"capturedAt"`
+	} `json:"position"`
+}) (SessionEligiblePositionAssertion, error) {
+	if value == nil || value.DeliveryID != deliveryID || strings.TrimSpace(value.EligibilityRef) == "" || strings.TrimSpace(value.DeviceUID) == "" || strings.TrimSpace(value.Subject.Protocol) == "" || strings.TrimSpace(value.Subject.Namespace) == "" || strings.TrimSpace(value.Subject.CanonicalID) == "" || !finiteCoordinate(value.Position.Lat, value.Position.Lon) {
+		return SessionEligiblePositionAssertion{}, errors.New("cloud returned an invalid session eligible position assertion")
+	}
+	capturedAt, err := time.Parse(time.RFC3339Nano, value.Position.CapturedAt)
+	if err != nil || capturedAt.IsZero() {
+		return SessionEligiblePositionAssertion{}, errors.New("cloud returned an invalid session eligible position assertion time")
+	}
+	return SessionEligiblePositionAssertion{DeliveryID: value.DeliveryID, EligibilityRef: value.EligibilityRef, DeviceUID: value.DeviceUID, Subject: SubjectRef{Protocol: value.Subject.Protocol, Namespace: value.Subject.Namespace, CanonicalID: value.Subject.CanonicalID}, Lat: value.Position.Lat, Lon: value.Position.Lon, CapturedAt: capturedAt.UTC()}, nil
+}
+
+func finiteCoordinate(lat, lon float64) bool {
+	return !math.IsNaN(lat) && !math.IsInf(lat, 0) && !math.IsNaN(lon) && !math.IsInf(lon, 0) && lat >= -90 && lat <= 90 && lon >= -180 && lon <= 180
 }
 
 func (c *HTTPClient) SendReceiverHeartbeat(
