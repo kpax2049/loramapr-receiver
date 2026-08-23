@@ -209,6 +209,17 @@ func TestNewSelectsConcurrentAdaptersAndStagesMeshCoreDurably(t *testing.T) {
 	if svc.container.OutboxStore == nil || svc.container.OutboxEngine == nil || svc.container.Normalized == nil {
 		t.Fatal("MeshCore selection did not establish durable normalized delivery")
 	}
+	adapterStatuses := svc.CurrentStatus().Adapters
+	var meshcoreStatus *status.AdapterStatus
+	for i := range adapterStatuses {
+		if adapterStatuses[i].Name == meshcore.AdapterName {
+			meshcoreStatus = &adapterStatuses[i]
+			break
+		}
+	}
+	if meshcoreStatus == nil || meshcoreStatus.Protocol != "meshcore" || !meshcoreStatus.Enabled || !meshcoreStatus.Configured || meshcoreStatus.Transport != "physical_serial" || meshcoreStatus.ConfiguredDevice != cfg.MeshCore.Device || meshcoreStatus.Delivery == nil {
+		t.Fatalf("expected configured MeshCore status with delivery health, got %#v", adapterStatuses)
+	}
 	if err := svc.container.State.Update(func(data *state.Data) {
 		data.Pairing.Phase = state.PairingSteadyState
 		data.Cloud.OwnerID = "018f8f5b-8c6d-7abc-8def-0123456789aa"

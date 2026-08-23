@@ -282,3 +282,26 @@ func TestSupportSnapshotIncludesSetupIssuesFromLocalStatus(t *testing.T) {
 		t.Fatalf("expected portal/cloud/usb setup issues, got %#v", snapshot.Setup.Issues)
 	}
 }
+
+func TestSupportSnapshotIncludesProtocolNeutralAdapterStatus(t *testing.T) {
+	t.Parallel()
+
+	cfg := config.Default()
+	data := state.Data{}
+	localSnap := status.Snapshot{Adapters: []status.AdapterStatus{{
+		Name: "meshcore-companion", Protocol: "meshcore", Lifecycle: "ready", ConnectionState: "connected",
+		Enabled: true, Configured: true, Ready: true, Transport: "physical_serial", ConfiguredDevice: "/dev/ttyACM0",
+		Delivery: &status.AdapterDeliveryStatus{State: "pending", PendingCount: 2},
+	}}}
+	report := CollectSupportSnapshot(cfg, data, Finding{}, CollectOptions{
+		ProbeCloud:   func(string, time.Duration) CloudProbe { return CloudProbe{} },
+		ProbeNetwork: func() NetworkProbe { return NetworkProbe{} },
+		ProbeLocal:   func(string, time.Duration) LocalStatusProbe { return LocalStatusProbe{Snapshot: &localSnap} },
+		DetectDevice: func(config.MeshtasticConfig) (meshtastic.DetectionResult, error) {
+			return meshtastic.DetectionResult{}, nil
+		},
+	})
+	if len(report.Adapters) != 1 || report.Adapters[0].Protocol != "meshcore" || report.Adapters[0].Delivery == nil || report.Adapters[0].Delivery.PendingCount != 2 {
+		t.Fatalf("unexpected adapter report: %#v", report.Adapters)
+	}
+}

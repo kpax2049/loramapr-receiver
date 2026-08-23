@@ -21,13 +21,22 @@ type Event struct {
 }
 
 type AdapterSnapshot struct {
-	Name      string    `json:"name"`
-	State     string    `json:"state"`
-	Transport string    `json:"transport,omitempty"`
-	Device    string    `json:"device,omitempty"`
-	Summary   string    `json:"summary,omitempty"`
-	LastError string    `json:"lastError,omitempty"`
-	UpdatedAt time.Time `json:"updatedAt"`
+	Name             string    `json:"name"`
+	Protocol         string    `json:"protocol,omitempty"`
+	State            string    `json:"state"`
+	ConnectionState  string    `json:"connectionState,omitempty"`
+	Enabled          bool      `json:"enabled"`
+	Configured       bool      `json:"configured"`
+	Ready            bool      `json:"ready"`
+	Transport        string    `json:"transport,omitempty"`
+	ConfiguredDevice string    `json:"configuredDevice,omitempty"`
+	Device           string    `json:"device,omitempty"`
+	ProtocolVersion  string    `json:"protocolVersion,omitempty"`
+	Profile          string    `json:"profile,omitempty"`
+	ProfileState     string    `json:"profileState,omitempty"`
+	Summary          string    `json:"summary,omitempty"`
+	LastError        string    `json:"lastError,omitempty"`
+	UpdatedAt        time.Time `json:"updatedAt"`
 }
 
 type AdapterSink interface {

@@ -55,14 +55,26 @@ func (a *meshtasticRadioAdapter) Snapshot() protocoladapter.AdapterSnapshot {
 		updatedAt = time.Now().UTC()
 	}
 	return protocoladapter.AdapterSnapshot{
-		Name:      meshtasticAdapterName,
-		State:     string(snapshot.State),
-		Transport: strings.TrimSpace(snapshot.Transport),
-		Device:    strings.TrimSpace(snapshot.DetectedDevice),
-		Summary:   meshtasticStatusMessage(snapshot),
-		LastError: strings.TrimSpace(snapshot.LastError),
-		UpdatedAt: updatedAt,
+		Name: meshtasticAdapterName, Protocol: "meshtastic", State: string(snapshot.State),
+		ConnectionState: meshtasticConnectionState(snapshot.State),
+		Enabled:         snapshot.Transport != "disabled", Configured: snapshot.Transport != "disabled",
+		Ready: string(snapshot.State) == "connected", Transport: strings.TrimSpace(snapshot.Transport),
+		ConfiguredDevice: strings.TrimSpace(snapshot.Device), Device: strings.TrimSpace(snapshot.DetectedDevice),
+		Summary: meshtasticStatusMessage(snapshot), LastError: strings.TrimSpace(snapshot.LastError), UpdatedAt: updatedAt,
 	}
+}
+
+func meshtasticConnectionState(state meshtastic.ConnectionState) string {
+	if state == meshtastic.StateConnected {
+		return "connected"
+	}
+	if state == meshtastic.StateConnecting {
+		return "connecting"
+	}
+	if state == meshtastic.StateNotPresent {
+		return "disconnected"
+	}
+	return string(state)
 }
 
 func (a *meshtasticRadioAdapter) Close() error { return nil }

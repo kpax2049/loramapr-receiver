@@ -35,6 +35,30 @@
   </div>
 </section>
 <section class="lmr-card">
+  <h2 class="lmr-card__title">Radio Adapter Status</h2>
+  <p class="lmr-card__desc">Local runtime facts only. This view omits radio payloads, identity keys, pairing material, and queued delivery bodies.</p>
+  {{if .Snapshot.Adapters}}
+  <div class="lmr-kv lmr-kv--wide">
+    {{range .Snapshot.Adapters}}
+    <div class="lmr-kv__row"><div class="lmr-kv__label">{{.Protocol}} ({{.Name}})</div><div>
+      <span class="lmr-pill {{lmrTone .Lifecycle}}"><span class="lmr-pill__dot"></span>{{.Lifecycle}}</span>
+      &nbsp; connection={{.ConnectionState}}, enabled={{lmrBoolLabel .Enabled}}, configured={{lmrBoolLabel .Configured}}, ready={{lmrBoolLabel .Ready}}
+      {{if .Transport}}, transport=<span class="lmr-mono">{{.Transport}}</span>{{end}}
+      {{if .ConfiguredDevice}}, configured_device=<span class="lmr-mono">{{.ConfiguredDevice}}</span>{{end}}
+      {{if .Device}}, device=<span class="lmr-mono">{{.Device}}</span>{{end}}
+      {{if .ProtocolVersion}}, protocol_version=<span class="lmr-mono">{{.ProtocolVersion}}</span>{{end}}
+      {{if .Profile}}, profile=<span class="lmr-mono">{{.Profile}}</span>{{end}}
+      {{if .ProfileState}}, profile_state=<span class="lmr-mono">{{.ProfileState}}</span>{{end}}
+      {{if .Delivery}}, delivery={{.Delivery.State}} pending={{.Delivery.PendingCount}} quarantined={{.Delivery.QuarantinedCount}}{{end}}
+      {{if .LastError}}, error=<span class="lmr-mono">{{.LastError}}</span>{{end}}
+    </div></div>
+    {{end}}
+  </div>
+  {{else}}
+  <p class="lmr-card__desc">No radio adapter status has been reported yet.</p>
+  {{end}}
+</section>
+<section class="lmr-card">
   <h2 class="lmr-card__title">Security Notes</h2>
   <p class="lmr-card__desc">This page intentionally omits stored API secrets and activation tokens. Meshtastic share values are shown only on local portal surfaces; redacted values are used for support exports and cloud status.</p>
 </section>

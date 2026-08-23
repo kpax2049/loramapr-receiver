@@ -331,6 +331,7 @@ func New(cfg config.Config, logger *slog.Logger) (*Service, error) {
 			rotator,
 		),
 	}
+	svc.refreshAdapterStatuses()
 	if meshCoreEnabled {
 		svc.container.OutboxResults = outboxEngine.Results()
 		svc.refreshNormalizedOutboxStatus()
@@ -576,6 +577,7 @@ func (s *Service) tick(ctx context.Context) {
 		}
 		c.Status.SetComponent(adapterSnapshot.Name, adapterSnapshot.State, message)
 	}
+	s.refreshAdapterStatuses()
 	s.refreshNormalizedOutboxStatus()
 
 	s.processSteadyState(ctx, snap, meshSnap)

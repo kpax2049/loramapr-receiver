@@ -20,12 +20,16 @@ const AdapterName = "meshcore-companion"
 type ConnectionState string
 
 const (
-	StateDisabled   ConnectionState = "disabled"
-	StateNotPresent ConnectionState = "not_present"
-	StateDetected   ConnectionState = "detected"
-	StateConnecting ConnectionState = "connecting"
-	StateConnected  ConnectionState = "connected"
-	StateDegraded   ConnectionState = "degraded"
+	StateDisabled           ConnectionState = "disabled"
+	StateNotPresent         ConnectionState = "not_present"
+	StateDetected           ConnectionState = "detected"
+	StateOpening            ConnectionState = "opening"
+	StateHandshaking        ConnectionState = "handshaking"
+	StateConnecting         ConnectionState = "connecting"
+	StateConnected          ConnectionState = "connected"
+	StateIncompatible       ConnectionState = "incompatible"
+	StateConfigurationError ConnectionState = "configuration_error"
+	StateDegraded           ConnectionState = "degraded"
 )
 
 type AdapterEvent struct {
@@ -121,12 +125,16 @@ func (a *Adapter) Start(ctx context.Context, sink protocoladapter.AdapterSink) e
 	if a.cfg.Transport == "disabled" {
 		a.setStatus(func(status *AdapterStatus) {
 			status.State = StateDisabled
-			status.LastError = "meshcore transport disabled"
+			status.LastError = ""
 		})
 		<-runCtx.Done()
 		return nil
 	}
 	if a.cfg.Transport != "physical_serial" {
+		a.setStatus(func(status *AdapterStatus) {
+			status.State = StateConfigurationError
+			status.LastError = fmt.Sprintf("unsupported meshcore transport %q", a.cfg.Transport)
+		})
 		return fmt.Errorf("unsupported meshcore transport %q", a.cfg.Transport)
 	}
 	return a.run(runCtx, sink)
@@ -174,6 +182,7 @@ func (a *Adapter) run(ctx context.Context, sink protocoladapter.AdapterSink) err
 			status.Candidates = append([]string(nil), candidates...)
 			status.LastError = ""
 		})
+		a.setStatus(func(status *AdapterStatus) { status.State = StateOpening })
 		stream, err := a.openFn(device)
 		if err != nil {
 			a.degrade(fmt.Errorf("open MeshCore serial device %s: %w", device, err))
@@ -201,6 +210,10 @@ func (a *Adapter) run(ctx context.Context, sink protocoladapter.AdapterSink) err
 
 func (a *Adapter) consume(ctx context.Context, stream io.ReadWriteCloser, device string, sink protocoladapter.AdapterSink) error {
 	session := NewCompanionSession("loramapr-receiver")
+	a.setStatus(func(status *AdapterStatus) {
+		status.State = StateHandshaking
+		status.Session = session.Snapshot()
+	})
 	if err := WriteFrame(stream, session.Begin()); err != nil {
 		return err
 	}
@@ -288,10 +301,49 @@ func (a *Adapter) consume(ctx context.Context, stream io.ReadWriteCloser, device
 
 func (a *Adapter) Snapshot() protocoladapter.AdapterSnapshot {
 	status := a.DetailedSnapshot()
+	session := status.Session
+	profileState := "not_established"
+	if session.State == SessionAwaitDeviceInfo || session.State == SessionAwaitSelfInfo {
+		profileState = "negotiating"
+	}
+	if session.State == SessionReady {
+		if session.Trust.Trusted {
+			profileState = "matched"
+		} else {
+			profileState = "raw_capture_only"
+		}
+	}
+	if session.State == SessionFailed {
+		profileState = "failed"
+	}
+	profile := ""
+	protocolVersion := ""
+	if session.DeviceInfo != nil {
+		protocolVersion = fmt.Sprintf("%d", session.DeviceInfo.ProtocolVersion)
+		profile = strings.TrimSpace(session.DeviceInfo.FirmwareVersion)
+	}
 	return protocoladapter.AdapterSnapshot{
-		Name: AdapterName, State: string(status.State), Transport: status.Transport, Device: status.Device,
+		Name: AdapterName, Protocol: "meshcore", State: string(status.State),
+		ConnectionState: meshcoreConnectionState(status.State), Enabled: status.Transport != "disabled",
+		Configured: status.Transport == "physical_serial" && strings.TrimSpace(status.Configured) != "",
+		Ready:      status.State == StateConnected && session.State == SessionReady,
+		Transport:  status.Transport, ConfiguredDevice: status.Configured, Device: status.Device,
+		ProtocolVersion: protocolVersion, Profile: profile, ProfileState: profileState,
 		Summary:   fmt.Sprintf("frames=%d frame_errors=%d event_drops=%d reconnects=%d", status.FramesSeen, status.FrameErrors, status.EventDrops, status.Reconnects),
 		LastError: status.LastError, UpdatedAt: status.UpdatedAt,
+	}
+}
+
+func meshcoreConnectionState(state ConnectionState) string {
+	switch state {
+	case StateDisabled:
+		return "disabled"
+	case StateOpening, StateHandshaking, StateConnecting:
+		return "connecting"
+	case StateConnected:
+		return "connected"
+	default:
+		return "disconnected"
 	}
 }
 
@@ -379,6 +431,12 @@ func (a *Adapter) degrade(err error) {
 	}
 	a.setStatus(func(status *AdapterStatus) {
 		status.State = StateDegraded
+		if errors.Is(err, ErrUnsupportedProtocol) {
+			status.State = StateIncompatible
+		}
+		if strings.Contains(err.Error(), "requires an explicit device path") {
+			status.State = StateConfigurationError
+		}
 		status.LastError = err.Error()
 	})
 }

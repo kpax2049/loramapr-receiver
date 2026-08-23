@@ -130,6 +130,33 @@ func TestAdapterProfileMismatchStaysConnectedForRawCapture(t *testing.T) {
 	}
 }
 
+func TestAdapterSnapshotReportsProfileAndConnectionFacts(t *testing.T) {
+	t.Parallel()
+
+	adapter := NewAdapter(Config{Transport: "physical_serial", Device: "/dev/ttyACM0"}, nil, nil)
+	adapter.setStatus(func(status *AdapterStatus) {
+		status.State = StateHandshaking
+		status.Session = NewCompanionSession("test").Snapshot()
+	})
+	negotiating := adapter.Snapshot()
+	if negotiating.ConnectionState != "connecting" || negotiating.ProfileState != "not_established" || negotiating.Ready {
+		t.Fatalf("unexpected handshaking snapshot: %#v", negotiating)
+	}
+
+	adapter.setStatus(func(status *AdapterStatus) {
+		status.State = StateConnected
+		status.Session = Snapshot{
+			State:      SessionReady,
+			DeviceInfo: &DeviceInfo{ProtocolVersion: ProtocolVersion, FirmwareVersion: PinnedFirmwareVersion},
+			Trust:      TrustProfile{Trusted: true},
+		}
+	})
+	ready := adapter.Snapshot()
+	if !ready.Enabled || !ready.Configured || !ready.Ready || ready.ConnectionState != "connected" || ready.ProtocolVersion != "13" || ready.Profile != PinnedFirmwareVersion || ready.ProfileState != "matched" {
+		t.Fatalf("unexpected ready snapshot: %#v", ready)
+	}
+}
+
 func TestAdapterPreservesLeaseAcrossReconnectAttempts(t *testing.T) {
 	device := existingDeviceFixture(t)
 	leases := protocoladapter.NewSerialLeaseRegistry()

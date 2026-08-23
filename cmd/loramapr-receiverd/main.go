@@ -581,6 +581,7 @@ func statusCommand(args []string) {
 		"meshtastic_mode":       cfg.Meshtastic.Transport,
 		"meshtastic_state":      localProbeMeshtasticState(localProbe, meshState),
 		"meshtastic_config":     meshConfig,
+		"adapters":              localProbeAdapters(localProbe),
 		"local_runtime_probe":   summarizeLocalProbeForOutput(localProbe),
 		"cloud_config_version":  snapshot.Cloud.ConfigVersion,
 		"update_status":         snapshot.Update.Status,
@@ -637,6 +638,13 @@ func statusCommand(args []string) {
 		slog.Error("status failed: encode", "err", err)
 		os.Exit(1)
 	}
+}
+
+func localProbeAdapters(probe diagnostics.LocalStatusProbe) []status.AdapterStatus {
+	if probe.Snapshot == nil {
+		return nil
+	}
+	return append([]status.AdapterStatus(nil), probe.Snapshot.Adapters...)
 }
 
 func supportSnapshotCommand(args []string) {

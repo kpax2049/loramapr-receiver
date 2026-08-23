@@ -22,6 +22,39 @@ type ComponentStatus struct {
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
+// AdapterStatus is the protocol-neutral status contract for an attached radio
+// adapter. It deliberately contains operational facts only: it never carries
+// raw radio frames, pairing secrets, or protocol identity keys.
+type AdapterStatus struct {
+	Name             string                 `json:"name"`
+	Protocol         string                 `json:"protocol"`
+	Lifecycle        string                 `json:"lifecycle"`
+	ConnectionState  string                 `json:"connection_state"`
+	Enabled          bool                   `json:"enabled"`
+	Configured       bool                   `json:"configured"`
+	Ready            bool                   `json:"ready"`
+	Transport        string                 `json:"transport,omitempty"`
+	ConfiguredDevice string                 `json:"configured_device,omitempty"`
+	Device           string                 `json:"device,omitempty"`
+	ProtocolVersion  string                 `json:"protocol_version,omitempty"`
+	Profile          string                 `json:"profile,omitempty"`
+	ProfileState     string                 `json:"profile_state,omitempty"`
+	LastError        string                 `json:"last_error,omitempty"`
+	UpdatedAt        time.Time              `json:"updated_at"`
+	Delivery         *AdapterDeliveryStatus `json:"delivery,omitempty"`
+}
+
+// AdapterDeliveryStatus reports durable delivery health without exposing any
+// queued envelope, identifier, or credential.
+type AdapterDeliveryStatus struct {
+	State            string `json:"state"`
+	PendingCount     int    `json:"pending_count"`
+	QuarantinedCount int    `json:"quarantined_count"`
+	UsedBytes        int64  `json:"used_bytes"`
+	RecoveryCode     string `json:"recovery_code,omitempty"`
+	FailureCode      string `json:"failure_code,omitempty"`
+}
+
 type FailureEvent struct {
 	Code      string    `json:"code"`
 	Summary   string    `json:"summary"`
@@ -146,6 +179,7 @@ type Snapshot struct {
 	UpdateRecommendedVersion string                     `json:"update_recommended_version,omitempty"`
 	UpdateCheckedAt          *time.Time                 `json:"update_checked_at,omitempty"`
 	MeshtasticConfig         MeshtasticConfigSnapshot   `json:"meshtastic_config"`
+	Adapters                 []AdapterStatus            `json:"adapters,omitempty"`
 	HomeAutoSession          HomeAutoSessionSnapshot    `json:"home_auto_session"`
 	StartedAt                time.Time                  `json:"started_at"`
 	UpdatedAt                time.Time                  `json:"updated_at"`
@@ -194,6 +228,7 @@ func (m *Model) Snapshot() Snapshot {
 	out.HomeAutoSession.GPSUpdatedAt = cloneTimePtr(m.snap.HomeAutoSession.GPSUpdatedAt)
 	out.HomeAutoSession.GPSDistanceM = cloneFloat64Ptr(m.snap.HomeAutoSession.GPSDistanceM)
 	out.MeshtasticConfig.UpdatedAt = cloneTimePtr(m.snap.MeshtasticConfig.UpdatedAt)
+	out.Adapters = cloneAdapterStatuses(m.snap.Adapters)
 	return out
 }
 
@@ -250,6 +285,24 @@ func (m *Model) SetBuildInfo(version, channel, commit, buildDate, buildID, platf
 		s.Arch = normalize(arch)
 		s.InstallType = normalize(installType)
 	})
+}
+
+func (m *Model) SetAdapters(adapters []AdapterStatus) {
+	copyAdapters := cloneAdapterStatuses(adapters)
+	m.Update(func(s *Snapshot) {
+		s.Adapters = copyAdapters
+	})
+}
+
+func cloneAdapterStatuses(in []AdapterStatus) []AdapterStatus {
+	out := append([]AdapterStatus(nil), in...)
+	for i := range out {
+		if in[i].Delivery != nil {
+			delivery := *in[i].Delivery
+			out[i].Delivery = &delivery
+		}
+	}
+	return out
 }
 
 func (m *Model) SetPairingPhase(phase string) {

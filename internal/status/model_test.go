@@ -20,6 +20,24 @@ func TestSnapshotReturnsCopy(t *testing.T) {
 	}
 }
 
+func TestAdapterStatusesAreCopiedWithoutDeliveryMutation(t *testing.T) {
+	t.Parallel()
+
+	model := New()
+	model.SetAdapters([]AdapterStatus{{
+		Name: "adapter-a", Protocol: "test", Lifecycle: "ready",
+		Delivery: &AdapterDeliveryStatus{State: "pending", PendingCount: 1},
+	}})
+	first := model.Snapshot()
+	first.Adapters[0].Name = "tampered"
+	first.Adapters[0].Delivery.State = "tampered"
+
+	second := model.Snapshot()
+	if second.Adapters[0].Name != "adapter-a" || second.Adapters[0].Delivery.State != "pending" {
+		t.Fatalf("adapter status was not defensively copied: %#v", second.Adapters)
+	}
+}
+
 func TestReadinessUpdates(t *testing.T) {
 	t.Parallel()
 
