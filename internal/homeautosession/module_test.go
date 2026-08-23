@@ -36,6 +36,23 @@ type mockSessionClient struct {
 	stopRequests  []cloudclient.HomeAutoSessionStopRequest
 }
 
+type lockedBuffer struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.b.Write(p)
+}
+
+func (b *lockedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.b.String()
+}
+
 func (m *mockSessionClient) StartHomeAutoSession(_ context.Context, _ string, _ string, request cloudclient.HomeAutoSessionStartRequest) (cloudclient.HomeAutoSessionStartResult, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -1385,7 +1402,7 @@ func TestCloudFailureLogIncludesRequestIDAndSessionFlag(t *testing.T) {
 		t.Fatalf("seed state: %v", err)
 	}
 
-	var out bytes.Buffer
+	var out lockedBuffer
 	logger := slog.New(slog.NewJSONHandler(&out, &slog.HandlerOptions{Level: slog.LevelDebug}))
 
 	statusModel := status.New()
@@ -1441,7 +1458,7 @@ func TestStartMissingSessionIDConflictLogIncludesClassAndRetryMetadata(t *testin
 		t.Fatalf("seed state: %v", err)
 	}
 
-	var out bytes.Buffer
+	var out lockedBuffer
 	logger := slog.New(slog.NewJSONHandler(&out, &slog.HandlerOptions{Level: slog.LevelDebug}))
 
 	statusModel := status.New()
