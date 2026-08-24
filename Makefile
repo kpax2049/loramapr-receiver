@@ -4,7 +4,7 @@ VERSION ?= dev
 CHANNEL ?= stable
 GO ?= $(shell command -v go 2>/dev/null || echo /usr/local/go/bin/go)
 
-.PHONY: build run test fmt tidy release clean
+.PHONY: build run test test-m5-corpus fmt tidy release clean
 
 build:
 	mkdir -p $(BIN_DIR)
@@ -15,6 +15,9 @@ run:
 
 test:
 	$(GO) test ./...
+
+test-m5-corpus:
+	$(GO) test -count=1 ./internal/contracts/protocolevents/v1 ./internal/meshcore ./internal/outbox ./internal/receiverevents ./internal/cloudclient ./internal/homeautosession ./internal/runtime ./internal/meshtastic
 
 fmt:
 	$(GO) fmt ./...
