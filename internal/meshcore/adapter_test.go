@@ -255,10 +255,86 @@ func TestAdapterDisabledDoesNotOpenSerial(t *testing.T) {
 	}
 }
 
+func TestAdapterConsumeUsesCompleteCompanionLinkFrames(t *testing.T) {
+	t.Parallel()
+
+	link := &scriptedCompanionLink{frames: [][]byte{
+		readHexFixture(t, "device-info-v1.17.1.hex"),
+		readHexFixture(t, "self-info-v1.17.1.hex"),
+		{PushLogRXData, 25, 0xA0, 0x11, 0x22},
+	}}
+	adapter := NewAdapter(Config{Transport: "physical_serial", Device: "/dev/ttyACM0"}, nil, nil)
+	sink := &recordingSink{events: make(chan protocoladapter.Event, 1)}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- adapter.consume(ctx, link, "/dev/ttyACM0", sink) }()
+
+	select {
+	case event := <-sink.events:
+		value, ok := event.Value.(AdapterEvent)
+		if !ok || value.Frame.Opcode != PushLogRXData || !bytes.Equal(value.Frame.Payload, []byte{PushLogRXData, 25, 0xA0, 0x11, 0x22}) {
+			t.Fatalf("unexpected complete-link event: %#v", event)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for complete Companion link frame")
+	}
+	cancel()
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("consume returned %v, want context cancellation", err)
+	}
+
+	if got, want := link.Metadata().Kind, "test"; got != want {
+		t.Fatalf("link metadata kind=%q, want %q", got, want)
+	}
+	if len(link.writes) != 2 || !bytes.Equal(link.writes[0], []byte{CommandDeviceQuery, ProtocolVersion}) || len(link.writes[1]) < 8 || link.writes[1][0] != CommandAppStart || link.writes[1][1] != ProtocolVersion {
+		t.Fatalf("unexpected complete Companion writes: %x", link.writes)
+	}
+}
+
 type discardSink struct{}
 
 func (*discardSink) Publish(protocoladapter.Event) error    { return nil }
 func (*discardSink) TryPublish(protocoladapter.Event) error { return nil }
+
+type recordingSink struct {
+	events chan protocoladapter.Event
+}
+
+func (s *recordingSink) Publish(event protocoladapter.Event) error {
+	s.events <- event
+	return nil
+}
+
+func (s *recordingSink) TryPublish(event protocoladapter.Event) error {
+	return s.Publish(event)
+}
+
+type scriptedCompanionLink struct {
+	frames [][]byte
+	reads  int
+	writes [][]byte
+}
+
+func (l *scriptedCompanionLink) ReadFrame(ctx context.Context) ([]byte, error) {
+	if l.reads < len(l.frames) {
+		frame := append([]byte(nil), l.frames[l.reads]...)
+		l.reads++
+		return frame, nil
+	}
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func (l *scriptedCompanionLink) WriteFrame(_ context.Context, payload []byte) error {
+	l.writes = append(l.writes, append([]byte(nil), payload...))
+	return nil
+}
+
+func (*scriptedCompanionLink) Metadata() TransportMetadata {
+	return TransportMetadata{Kind: "test"}
+}
+
+func (*scriptedCompanionLink) Close() error { return nil }
 
 func existingDeviceFixture(t *testing.T) string {
 	t.Helper()

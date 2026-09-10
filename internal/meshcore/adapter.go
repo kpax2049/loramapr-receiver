@@ -71,7 +71,7 @@ type Adapter struct {
 
 	mu      sync.RWMutex
 	status  AdapterStatus
-	stream  io.ReadWriteCloser
+	link    CompanionLink
 	cancel  context.CancelFunc
 	closed  bool
 	started bool
@@ -183,7 +183,8 @@ func (a *Adapter) run(ctx context.Context, sink protocoladapter.AdapterSink) err
 			status.LastError = ""
 		})
 		a.setStatus(func(status *AdapterStatus) { status.State = StateOpening })
-		stream, err := a.openFn(device)
+		transport := NewPhysicalSerialTransport(device, a.openFn)
+		link, err := transport.Open(ctx)
 		if err != nil {
 			a.degrade(fmt.Errorf("open MeshCore serial device %s: %w", device, err))
 			if !wait(ctx, a.reconnectDelay) {
@@ -191,11 +192,11 @@ func (a *Adapter) run(ctx context.Context, sink protocoladapter.AdapterSink) err
 			}
 			continue
 		}
-		a.setStream(stream)
+		a.setLink(link)
 		a.setStatus(func(status *AdapterStatus) { status.State = StateConnecting })
-		err = a.consume(ctx, stream, device, sink)
-		_ = stream.Close()
-		a.clearStream(stream)
+		err = a.consume(ctx, link, device, sink)
+		_ = link.Close()
+		a.clearLink(link)
 		if ctx.Err() != nil {
 			break
 		}
@@ -208,13 +209,13 @@ func (a *Adapter) run(ctx context.Context, sink protocoladapter.AdapterSink) err
 	return nil
 }
 
-func (a *Adapter) consume(ctx context.Context, stream io.ReadWriteCloser, device string, sink protocoladapter.AdapterSink) error {
+func (a *Adapter) consume(ctx context.Context, link CompanionLink, device string, sink protocoladapter.AdapterSink) error {
 	session := NewCompanionSession("loramapr-receiver")
 	a.setStatus(func(status *AdapterStatus) {
 		status.State = StateHandshaking
 		status.Session = session.Snapshot()
 	})
-	if err := WriteFrame(stream, session.Begin()); err != nil {
+	if err := link.WriteFrame(ctx, session.Begin()); err != nil {
 		return err
 	}
 	var handshakeReady atomic.Bool
@@ -224,14 +225,14 @@ func (a *Adapter) consume(ctx context.Context, stream io.ReadWriteCloser, device
 			return
 		}
 		close(timedOut)
-		_ = stream.Close()
+		_ = link.Close()
 	})
 	defer timer.Stop()
 	defer session.Disconnect()
 
 	connected := false
 	for {
-		payload, err := ReadFrame(stream)
+		payload, err := link.ReadFrame(ctx)
 		if err != nil {
 			a.setStatus(func(status *AdapterStatus) { status.FrameErrors++ })
 			select {
@@ -253,7 +254,7 @@ func (a *Adapter) consume(ctx context.Context, stream io.ReadWriteCloser, device
 			return err
 		}
 		if len(result.Outbound) > 0 {
-			if err := WriteFrame(stream, result.Outbound); err != nil {
+			if err := link.WriteFrame(ctx, result.Outbound); err != nil {
 				return err
 			}
 		}
@@ -363,15 +364,15 @@ func (a *Adapter) Close() error {
 	}
 	a.closed = true
 	cancel := a.cancel
-	stream := a.stream
+	link := a.link
 	started := a.started
 	done := a.done
 	a.mu.Unlock()
 	if cancel != nil {
 		cancel()
 	}
-	if stream != nil {
-		_ = stream.Close()
+	if link != nil {
+		_ = link.Close()
 	}
 	if started {
 		<-done
@@ -404,16 +405,16 @@ func (a *Adapter) acquireLease(device string) (func(), error) {
 	return a.leases.Acquire(device, AdapterName)
 }
 
-func (a *Adapter) setStream(stream io.ReadWriteCloser) {
+func (a *Adapter) setLink(link CompanionLink) {
 	a.mu.Lock()
-	a.stream = stream
+	a.link = link
 	a.mu.Unlock()
 }
 
-func (a *Adapter) clearStream(stream io.ReadWriteCloser) {
+func (a *Adapter) clearLink(link CompanionLink) {
 	a.mu.Lock()
-	if a.stream == stream {
-		a.stream = nil
+	if a.link == link {
+		a.link = nil
 	}
 	a.mu.Unlock()
 }
