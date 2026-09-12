@@ -11,16 +11,20 @@ import (
 const (
 	ProtocolVersion = byte(13)
 
-	CommandAppStart    = byte(0x01)
-	CommandDeviceQuery = byte(0x16)
+	CommandAppStart             = byte(0x01)
+	CommandDeviceQuery          = byte(0x16)
+	CommandSendTelemetryRequest = byte(0x27)
 
+	ResponseError      = byte(0x01)
 	ResponseSelfInfo   = byte(0x05)
+	ResponseSent       = byte(0x06)
 	ResponseDeviceInfo = byte(0x0D)
 
-	PushRawData     = byte(0x84)
-	PushLogRXData   = byte(0x88)
-	PushNewAdvert   = byte(0x8A)
-	PushControlData = byte(0x8E)
+	PushRawData           = byte(0x84)
+	PushLogRXData         = byte(0x88)
+	PushNewAdvert         = byte(0x8A)
+	PushTelemetryResponse = byte(0x8B)
+	PushControlData       = byte(0x8E)
 
 	deviceInfoLength  = 82
 	selfInfoMinLength = 58
@@ -112,9 +116,18 @@ type PushFrame struct {
 	Payload []byte
 }
 
+// ResponseFrame is an immediate Companion command response. Unlike PushFrame,
+// it has no sender identity and must be correlated by the operation that sent
+// the command.
+type ResponseFrame struct {
+	Code    byte
+	Payload []byte
+}
+
 type HandleResult struct {
 	Outbound []byte
 	Push     *PushFrame
+	Response *ResponseFrame
 	Ready    bool
 }
 
@@ -253,6 +266,18 @@ func (s *CompanionSession) Handle(payload []byte) (HandleResult, error) {
 		if err := validateCapturedPush(payload); err != nil {
 			return HandleResult{}, err
 		}
+		if payload[0] == ResponseError || payload[0] == ResponseSent {
+			if err := validateCommandResponse(payload); err != nil {
+				return HandleResult{}, err
+			}
+			copied := append([]byte(nil), payload...)
+			return HandleResult{Ready: true, Response: &ResponseFrame{Code: copied[0], Payload: copied}}, nil
+		}
+		if payload[0] == PushTelemetryResponse {
+			if err := validateTelemetryResponse(payload); err != nil {
+				return HandleResult{}, err
+			}
+		}
 		copied := append([]byte(nil), payload...)
 		return HandleResult{Ready: true, Push: &PushFrame{Opcode: copied[0], Payload: copied}}, nil
 
@@ -263,6 +288,24 @@ func (s *CompanionSession) Handle(payload []byte) (HandleResult, error) {
 	default:
 		return s.fail(fmt.Errorf("invalid meshcore companion session state %q", s.state))
 	}
+}
+
+func validateCommandResponse(payload []byte) error {
+	if len(payload) == 0 {
+		return fmt.Errorf("%w: empty command response", ErrInvalidPush)
+	}
+	if payload[0] == ResponseSent && len(payload) < 10 {
+		return fmt.Errorf("%w: SENT got %d bytes, need at least 10", ErrInvalidPush, len(payload))
+	}
+	return nil
+}
+
+func validateTelemetryResponse(payload []byte) error {
+	// [code][reserved][source public-key prefix x6][CayenneLPP payload...]
+	if len(payload) < 8 {
+		return fmt.Errorf("%w: TELEMETRY_RESPONSE got %d bytes, need at least 8", ErrInvalidPush, len(payload))
+	}
+	return nil
 }
 
 func (s *CompanionSession) Snapshot() Snapshot {

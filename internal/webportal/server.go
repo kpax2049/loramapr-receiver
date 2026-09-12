@@ -58,16 +58,23 @@ type MeshCoreBLEPairing interface {
 	ForgetMeshCoreBLE(context.Context, meshcore.BLEConfig) error
 }
 
+// MeshCoreTelemetryRequester is intentionally local to the receiver portal.
+// It does not persist or forward returned telemetry.
+type MeshCoreTelemetryRequester interface {
+	RequestMeshCoreTelemetry(context.Context, string) (meshcore.TelemetryResult, error)
+}
+
 type Server struct {
-	addr        string
-	status      StatusProvider
-	pairing     PairingCodeSubmitter
-	homeAuto    HomeAutoSessionManager
-	outboxOps   NormalizedOutboxOperator
-	meshcoreBLE MeshCoreBLEPairing
-	logger      *slog.Logger
-	templates   map[string]*template.Template
-	httpSrv     *http.Server
+	addr              string
+	status            StatusProvider
+	pairing           PairingCodeSubmitter
+	homeAuto          HomeAutoSessionManager
+	outboxOps         NormalizedOutboxOperator
+	meshcoreBLE       MeshCoreBLEPairing
+	meshcoreTelemetry MeshCoreTelemetryRequester
+	logger            *slog.Logger
+	templates         map[string]*template.Template
+	httpSrv           *http.Server
 }
 
 type pageData struct {
@@ -126,16 +133,21 @@ func New(addr string, statusProvider StatusProvider, pairing PairingCodeSubmitte
 	if backend, ok := pairing.(MeshCoreBLEPairing); ok {
 		meshcoreBLE = backend
 	}
+	var meshcoreTelemetry MeshCoreTelemetryRequester
+	if requester, ok := pairing.(MeshCoreTelemetryRequester); ok {
+		meshcoreTelemetry = requester
+	}
 
 	s := &Server{
-		addr:        addr,
-		status:      statusProvider,
-		pairing:     pairing,
-		homeAuto:    homeAuto,
-		outboxOps:   outboxOps,
-		meshcoreBLE: meshcoreBLE,
-		logger:      logger.With("component", "webportal"),
-		templates:   templates,
+		addr:              addr,
+		status:            statusProvider,
+		pairing:           pairing,
+		homeAuto:          homeAuto,
+		outboxOps:         outboxOps,
+		meshcoreBLE:       meshcoreBLE,
+		meshcoreTelemetry: meshcoreTelemetry,
+		logger:            logger.With("component", "webportal"),
+		templates:         templates,
 	}
 
 	mux := http.NewServeMux()
@@ -150,6 +162,7 @@ func New(addr string, statusProvider StatusProvider, pairing PairingCodeSubmitte
 	mux.HandleFunc("/api/meshcore/ble/devices", s.handleMeshCoreBLEDevices)
 	mux.HandleFunc("/api/meshcore/ble/pair", s.handleMeshCoreBLEPair)
 	mux.HandleFunc("/api/meshcore/ble/forget", s.handleMeshCoreBLEForget)
+	mux.HandleFunc("/api/meshcore/telemetry/request", s.handleMeshCoreTelemetryRequest)
 	mux.Handle("/static/", http.StripPrefix("/static/", portalStaticHandler()))
 	mux.HandleFunc("/pairing", s.routePairing)
 	mux.HandleFunc("/reset", s.routeReset)
@@ -456,6 +469,53 @@ func (s *Server) handleMeshCoreBLEForget(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	writeJSON(w, http.StatusAccepted, map[string]any{"forgotten": true})
+}
+
+func (s *Server) handleMeshCoreTelemetryRequest(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", http.MethodPost)
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.meshcoreTelemetry == nil {
+		http.Error(w, "MeshCore telemetry backend is not available", http.StatusServiceUnavailable)
+		return
+	}
+	var request struct {
+		PublicKey string `json:"publicKey"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		http.Error(w, "invalid JSON body", http.StatusBadRequest)
+		return
+	}
+	// The adapter has a 45-second bounded watchdog. The small margin lets it
+	// return its specific timeout rather than replacing it with HTTP's context.
+	ctx, cancel := context.WithTimeout(r.Context(), 50*time.Second)
+	defer cancel()
+	result, err := s.meshcoreTelemetry.RequestMeshCoreTelemetry(ctx, request.PublicKey)
+	if err == nil {
+		writeJSON(w, http.StatusOK, result)
+		return
+	}
+
+	statusCode, outcome := http.StatusInternalServerError, "failed"
+	switch {
+	case errors.Is(err, meshcore.ErrInvalidTelemetryTarget):
+		statusCode, outcome = http.StatusBadRequest, "invalid_target"
+	case errors.Is(err, meshcore.ErrTelemetryRequestInFlight):
+		statusCode, outcome = http.StatusConflict, "request_in_flight"
+	case errors.Is(err, meshcore.ErrTelemetryAdapterDisconnected):
+		statusCode, outcome = http.StatusServiceUnavailable, "disconnected_adapter"
+	case errors.Is(err, meshcore.ErrTelemetryFirmware):
+		statusCode, outcome = http.StatusBadGateway, "firmware_error"
+	case errors.Is(err, meshcore.ErrTelemetryTimeout), errors.Is(err, context.DeadlineExceeded):
+		statusCode, outcome = http.StatusGatewayTimeout, "timeout"
+	case errors.Is(err, meshcore.ErrTelemetryMismatchedResponse):
+		statusCode, outcome = http.StatusBadGateway, "mismatched_response"
+	case errors.Is(err, meshcore.ErrInvalidTelemetryPayload):
+		statusCode, outcome = http.StatusBadGateway, "invalid_response"
+	}
+	writeJSON(w, statusCode, map[string]string{"outcome": outcome, "error": err.Error()})
 }
 
 func writeJSON(w http.ResponseWriter, status int, value any) {

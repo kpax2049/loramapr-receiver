@@ -2,6 +2,7 @@ package webportal
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -44,6 +45,18 @@ type blePairingSubmitter struct {
 	pairPIN string
 }
 
+type telemetrySubmitter struct {
+	*recordingPairingSubmitter
+	result meshcore.TelemetryResult
+	err    error
+	key    string
+}
+
+func (s *telemetrySubmitter) RequestMeshCoreTelemetry(_ context.Context, key string) (meshcore.TelemetryResult, error) {
+	s.key = key
+	return s.result, s.err
+}
+
 func (s *blePairingSubmitter) DiscoverMeshCoreBLE(_ context.Context, _ string) ([]meshcore.BLEDevice, error) {
 	return append([]meshcore.BLEDevice(nil), s.devices...), nil
 }
@@ -71,6 +84,45 @@ func TestMeshCoreBLEPairingAPIIsLocalAndDoesNotEchoPIN(t *testing.T) {
 	if pair.Code != http.StatusAccepted || strings.Contains(pair.Body.String(), "123456") || submitter.pairPIN != "123456" || submitter.pairCfg.PeerAddress != "AA:BB:CC:DD:EE:FF" {
 		t.Fatalf("pair status=%d body=%s cfg=%#v", pair.Code, pair.Body.String(), submitter.pairCfg)
 	}
+}
+
+func TestMeshCoreTelemetryRequestAPIValidatesAndReturnsLocalResult(t *testing.T) {
+	t.Parallel()
+	key := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	voltage := 4.09
+	submitter := &telemetrySubmitter{
+		recordingPairingSubmitter: &recordingPairingSubmitter{},
+		result: meshcore.TelemetryResult{
+			TargetPublicKey: key, SourcePrefix: key[:12], ReceivedAt: time.Date(2026, 9, 12, 10, 0, 0, 0, time.UTC),
+			Telemetry: meshcore.Telemetry{Voltage: &voltage},
+		},
+	}
+	srv := New("127.0.0.1:0", staticStatusProvider{snapshot: sampleSnapshot()}, submitter, nil)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/meshcore/telemetry/request", strings.NewReader(`{"publicKey":"`+key+`"}`))
+	srv.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || submitter.key != key {
+		t.Fatalf("request status=%d body=%s key=%q", rec.Code, rec.Body.String(), submitter.key)
+	}
+	var result meshcore.TelemetryResult
+	if err := json.Unmarshal(rec.Body.Bytes(), &result); err != nil || result.SourcePrefix != key[:12] || result.Telemetry.Voltage == nil || *result.Telemetry.Voltage != voltage {
+		t.Fatalf("unexpected result=%#v err=%v", result, err)
+	}
+
+	submitter.err = meshcore.ErrTelemetryTimeout
+	timeout := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(timeout, httptest.NewRequest(http.MethodPost, "/api/meshcore/telemetry/request", strings.NewReader(`{"publicKey":"`+key+`"}`)))
+	if timeout.Code != http.StatusGatewayTimeout || !strings.Contains(timeout.Body.String(), `"outcome":"timeout"`) {
+		t.Fatalf("timeout status=%d body=%s", timeout.Code, timeout.Body.String())
+	}
+
+	submitter.err = meshcore.ErrInvalidTelemetryTarget
+	invalid := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(invalid, httptest.NewRequest(http.MethodPost, "/api/meshcore/telemetry/request", strings.NewReader(`{"publicKey":"short"}`)))
+	if invalid.Code != http.StatusBadRequest || !strings.Contains(invalid.Body.String(), `"outcome":"invalid_target"`) {
+		t.Fatalf("invalid status=%d body=%s", invalid.Code, invalid.Body.String())
+	}
+
 }
 
 func (r *recordingPairingSubmitter) SubmitPairingCode(_ context.Context, code string) error {

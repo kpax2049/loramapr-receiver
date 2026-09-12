@@ -488,6 +488,16 @@ func (s *Service) ForgetMeshCoreBLE(ctx context.Context, cfg meshcore.BLEConfig)
 	return s.container.MeshCoreBLE.Forget(ctx, cfg)
 }
 
+// RequestMeshCoreTelemetry is a local portal operation only. It keeps the
+// response in the receiver process and deliberately does not create a cloud
+// event, position, measurement, or session projection.
+func (s *Service) RequestMeshCoreTelemetry(ctx context.Context, publicKey string) (meshcore.TelemetryResult, error) {
+	if s.container == nil || s.container.MeshCore == nil {
+		return meshcore.TelemetryResult{}, meshcore.ErrTelemetryAdapterDisconnected
+	}
+	return s.container.MeshCore.RequestTelemetry(ctx, publicKey)
+}
+
 func (s *Service) ResolveNormalizedDeliveryCollision(_ context.Context, deliveryID string) error {
 	if s.container == nil || s.container.OutboxEngine == nil {
 		return errors.New("normalized outbox is not available")

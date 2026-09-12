@@ -1,0 +1,165 @@
+package meshcore
+
+import (
+	"bytes"
+	"context"
+	"encoding/binary"
+	"errors"
+	"sync"
+	"testing"
+	"time"
+)
+
+func TestBuildTelemetryRequestRequiresCanonicalFullKey(t *testing.T) {
+	t.Parallel()
+	key := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	target, err := parseTelemetryTarget(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	frame := BuildTelemetryRequest(target)
+	if len(frame) != 36 || frame[0] != CommandSendTelemetryRequest || !bytes.Equal(frame[1:4], []byte{0, 0, 0}) || !bytes.Equal(frame[4:], target[:]) {
+		t.Fatalf("unexpected telemetry request frame: %x", frame)
+	}
+	for _, invalid := range []string{"", key[:63], "0123456789ABCDEF0123456789abcdef0123456789abcdef0123456789abcdef"} {
+		if _, err := parseTelemetryTarget(invalid); !errors.Is(err, ErrInvalidTelemetryTarget) {
+			t.Fatalf("target %q error=%v, want invalid target", invalid, err)
+		}
+	}
+}
+
+func TestParseTelemetryLPPSupportsStockWioTrackerFields(t *testing.T) {
+	t.Parallel()
+	payload := []byte{
+		1, 120, 87, // battery percentage
+		1, 116, 0x01, 0x99, // 4.09 V
+		2, 103, 0x01, 0x1d, // 28.5 C
+		3, 136,
+	}
+	payload = appendInt24(payload, 493958) // 49.3958
+	payload = appendInt24(payload, 76102)  // 7.6102
+	payload = appendInt24(payload, 35850)  // 358.5 m
+	telemetry, err := ParseTelemetryLPP(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if telemetry.BatteryPercentage == nil || *telemetry.BatteryPercentage != 87 || telemetry.Voltage == nil || *telemetry.Voltage != 4.09 || telemetry.TemperatureC == nil || *telemetry.TemperatureC != 28.5 || telemetry.Latitude == nil || *telemetry.Latitude != 49.3958 || telemetry.Longitude == nil || *telemetry.Longitude != 7.6102 || telemetry.AltitudeM == nil || *telemetry.AltitudeM != 358.5 {
+		t.Fatalf("unexpected parsed telemetry: %#v", telemetry)
+	}
+}
+
+func TestParseTelemetryLPPSafelyPreservesUnsupportedType(t *testing.T) {
+	t.Parallel()
+	telemetry, err := ParseTelemetryLPP([]byte{1, 116, 0x01, 0x99, 2, 0xfe, 0xaa, 0xbb})
+	if err != nil || telemetry.Voltage == nil || *telemetry.Voltage != 4.09 || len(telemetry.UnsupportedTypes) != 1 || telemetry.UnsupportedTypes[0] != 0xfe {
+		t.Fatalf("unexpected safely partial parse: telemetry=%#v err=%v", telemetry, err)
+	}
+	if _, err := ParseTelemetryLPP([]byte{1, 136, 0, 0}); !errors.Is(err, ErrInvalidTelemetryPayload) {
+		t.Fatalf("truncated known type error=%v, want invalid payload", err)
+	}
+}
+
+func TestCompanionSessionRecognizesTelemetryResponseAndSent(t *testing.T) {
+	t.Parallel()
+	session := readySession(t)
+	sent := make([]byte, 10)
+	sent[0] = ResponseSent
+	binary.LittleEndian.PutUint32(sent[6:], 1234)
+	result, err := session.Handle(sent)
+	if err != nil || result.Response == nil || result.Response.Code != ResponseSent || result.Push != nil {
+		t.Fatalf("unexpected SENT handling: result=%#v err=%v", result, err)
+	}
+	telemetry := []byte{PushTelemetryResponse, 0, 1, 2, 3, 4, 5, 6, 1, 120, 90}
+	result, err = session.Handle(telemetry)
+	if err != nil || result.Push == nil || result.Push.Opcode != PushTelemetryResponse {
+		t.Fatalf("unexpected telemetry push handling: result=%#v err=%v", result, err)
+	}
+}
+
+func TestAdapterTelemetryRequestCorrelatesOnlyInFlightFullTarget(t *testing.T) {
+	key := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	link := &telemetryTestLink{writes: make(chan []byte, 1)}
+	adapter := NewAdapter(Config{Transport: "ble", BLE: BLEConfig{Adapter: "hci0", PeerAddress: "AA:BB:CC:DD:EE:FF"}}, nil, nil)
+	adapter.setLink(link)
+	adapter.setStatus(func(status *AdapterStatus) {
+		status.State = StateConnected
+		status.Session.State = SessionReady
+	})
+	resultCh := make(chan telemetryCompletion, 1)
+	go func() {
+		result, err := adapter.RequestTelemetry(context.Background(), key)
+		resultCh <- telemetryCompletion{result: result, err: err}
+	}()
+	select {
+	case frame := <-link.writes:
+		target := mustTelemetryTarget(t, key)
+		if len(frame) != 36 || !bytes.Equal(frame[4:], target[:]) {
+			t.Fatalf("unexpected write: %x", frame)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("telemetry request was not written")
+	}
+	if _, err := adapter.RequestTelemetry(context.Background(), key); !errors.Is(err, ErrTelemetryRequestInFlight) {
+		t.Fatalf("second request error=%v, want in-flight", err)
+	}
+	frame := []byte{PushTelemetryResponse, 0, 0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 1, 116, 0x01, 0x99}
+	adapter.handleTelemetryResponse(frame, time.Date(2026, 9, 12, 10, 0, 0, 0, time.UTC))
+	select {
+	case completion := <-resultCh:
+		if completion.err != nil || completion.result.TargetPublicKey != key || completion.result.SourcePrefix != key[:12] || completion.result.Telemetry.Voltage == nil || *completion.result.Telemetry.Voltage != 4.09 {
+			t.Fatalf("unexpected completion: %#v err=%v", completion.result, completion.err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("telemetry response did not complete request")
+	}
+}
+
+func TestAdapterTelemetryRequestFailsClosedOnMismatchedPrefix(t *testing.T) {
+	key := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	link := &telemetryTestLink{writes: make(chan []byte, 1)}
+	adapter := NewAdapter(Config{Transport: "physical_serial", Device: "/dev/null"}, nil, nil)
+	adapter.setLink(link)
+	adapter.setStatus(func(status *AdapterStatus) { status.State, status.Session.State = StateConnected, SessionReady })
+	resultCh := make(chan error, 1)
+	go func() { _, err := adapter.RequestTelemetry(context.Background(), key); resultCh <- err }()
+	<-link.writes
+	adapter.handleTelemetryResponse([]byte{PushTelemetryResponse, 0, 9, 9, 9, 9, 9, 9, 1, 120, 90}, time.Now())
+	select {
+	case err := <-resultCh:
+		if !errors.Is(err, ErrTelemetryMismatchedResponse) {
+			t.Fatalf("mismatched prefix error=%v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("mismatched response did not fail request")
+	}
+}
+
+func appendInt24(payload []byte, value int32) []byte {
+	return append(payload, byte(value>>16), byte(value>>8), byte(value))
+}
+
+func mustTelemetryTarget(t *testing.T, value string) [telemetryPublicKeyLength]byte {
+	t.Helper()
+	target, err := parseTelemetryTarget(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return target
+}
+
+type telemetryTestLink struct {
+	writes chan []byte
+	mu     sync.Mutex
+}
+
+func (l *telemetryTestLink) ReadFrame(context.Context) ([]byte, error) {
+	return nil, errors.New("not used")
+}
+func (l *telemetryTestLink) WriteFrame(_ context.Context, frame []byte) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.writes <- append([]byte(nil), frame...)
+	return nil
+}
+func (l *telemetryTestLink) Metadata() TransportMetadata { return TransportMetadata{Kind: "test"} }
+func (l *telemetryTestLink) Close() error                { return nil }

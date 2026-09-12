@@ -78,6 +78,9 @@ type Adapter struct {
 	started bool
 	done    chan struct{}
 
+	telemetryMu sync.Mutex
+	telemetry   *telemetryRequest
+
 	detectFn         func(Config) (detectionResult, error)
 	openFn           func(string) (io.ReadWriteCloser, error)
 	newBLETransport  func(BLEConfig) CompanionTransport
@@ -280,6 +283,7 @@ func (a *Adapter) consume(ctx context.Context, link CompanionLink, device string
 	})
 	defer timer.Stop()
 	defer session.Disconnect()
+	defer a.finishCurrentTelemetry(TelemetryResult{}, ErrTelemetryAdapterDisconnected)
 
 	connected := false
 	for {
@@ -319,9 +323,16 @@ func (a *Adapter) consume(ctx context.Context, link CompanionLink, device string
 			})
 		}
 		if result.Push == nil {
+			if result.Response != nil {
+				a.handleTelemetryCommandResponse(*result.Response)
+			}
 			continue
 		}
 		observedAt := time.Now().UTC()
+		if result.Push.Opcode == PushTelemetryResponse {
+			a.handleTelemetryResponse(result.Push.Payload, observedAt)
+			continue
+		}
 		event := AdapterEvent{
 			Frame: *result.Push, Session: session.Snapshot(), Device: device, ObservedAt: observedAt,
 		}
