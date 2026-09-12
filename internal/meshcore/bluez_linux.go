@@ -141,28 +141,28 @@ func (b *bluezBackend) Connect(ctx context.Context, cfg BLEConfig) (BLEConnectio
 func (b *bluezBackend) Pair(ctx context.Context, cfg BLEConfig, pin string) error {
 	conn, err := b.system()
 	if err != nil {
-		return err
+		return newBLEPairingDiagnostic("system_bus", "unavailable")
 	}
 	path, _, err := findBluezDevice(conn, cfg)
 	if err != nil {
-		return err
+		return newBLEPairingDiagnostic("peer_selection", "unavailable")
 	}
 	agentPath := dbus.ObjectPath(fmt.Sprintf("/io/loramapr/receiver/meshcore/agent/%d", time.Now().UnixNano()))
 	agent := &bluezPairAgent{pin: pin, device: path}
 	if err := conn.Export(agent, agentPath, "org.bluez.Agent1"); err != nil {
-		return err
+		return newBLEPairingDiagnostic("agent_export", "failed")
 	}
 	defer conn.Export(nil, agentPath, "org.bluez.Agent1")
 	defer agent.clear()
 	manager := conn.Object(bluezName, "/org/bluez")
 	if call := manager.CallWithContext(ctx, agentManagerInterface+".RegisterAgent", 0, agentPath, "KeyboardOnly"); call.Err != nil {
-		return fmt.Errorf("%w: register temporary BlueZ pairing agent", ErrBLEPairingFailed)
+		return bluezPairingDiagnostic("agent_register", call.Err)
 	}
 	defer manager.Call(agentManagerInterface+".UnregisterAgent", 0, agentPath)
 	call := conn.Object(bluezName, path).CallWithContext(ctx, deviceInterface+".Pair", 0)
 	if call.Err != nil {
 		_ = conn.Object(bluezName, path).Call(deviceInterface+".CancelPairing", 0).Err
-		return ErrBLEPairingFailed
+		return bluezPairingDiagnostic("pair", call.Err)
 	}
 	return nil
 }
@@ -394,44 +394,3 @@ func (c *bluezConnection) Close() error {
 	})
 	return err
 }
-
-type bluezPairAgent struct {
-	mu     sync.Mutex
-	pin    string
-	device dbus.ObjectPath
-}
-
-func (a *bluezPairAgent) RequestPasskey(device dbus.ObjectPath) (uint32, *dbus.Error) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	if device != a.device || len(a.pin) != 6 {
-		return 0, dbus.NewError("org.bluez.Error.Rejected", []interface{}{"pairing rejected"})
-	}
-	var value uint32
-	for _, digit := range a.pin {
-		value = value*10 + uint32(digit-'0')
-	}
-	return value, nil
-}
-func (a *bluezPairAgent) RequestPinCode(device dbus.ObjectPath) (string, *dbus.Error) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	if device != a.device {
-		return "", dbus.NewError("org.bluez.Error.Rejected", []interface{}{"pairing rejected"})
-	}
-	return a.pin, nil
-}
-func (*bluezPairAgent) DisplayPinCode(dbus.ObjectPath, string) *dbus.Error         { return nil }
-func (*bluezPairAgent) DisplayPasskey(dbus.ObjectPath, uint32, uint16) *dbus.Error { return nil }
-func (*bluezPairAgent) RequestConfirmation(dbus.ObjectPath, uint32) *dbus.Error {
-	return dbus.NewError("org.bluez.Error.Rejected", []interface{}{"confirmation unsupported"})
-}
-func (*bluezPairAgent) RequestAuthorization(dbus.ObjectPath) *dbus.Error { return nil }
-func (a *bluezPairAgent) AuthorizeService(device dbus.ObjectPath, uuid string) *dbus.Error {
-	if device == a.device && strings.EqualFold(uuid, NUSServiceUUID) {
-		return nil
-	}
-	return dbus.NewError("org.bluez.Error.Rejected", []interface{}{"service not authorized"})
-}
-func (*bluezPairAgent) Cancel() *dbus.Error { return nil }
-func (a *bluezPairAgent) clear()            { a.mu.Lock(); a.pin = ""; a.mu.Unlock() }

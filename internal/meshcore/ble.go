@@ -21,6 +21,23 @@ var (
 	ErrBLEPairingFailed = errors.New("meshcore BLE pairing failed")
 )
 
+// BLEPairingDiagnostic is safe to retain in local operational diagnostics. It
+// intentionally contains no D-Bus body or pairing material.
+type BLEPairingDiagnostic struct {
+	Operation string
+	Code      string
+}
+
+func (e *BLEPairingDiagnostic) Error() string {
+	return "meshcore BLE pairing " + e.Operation + " failed: " + e.Code
+}
+
+func (e *BLEPairingDiagnostic) Unwrap() error { return ErrBLEPairingFailed }
+
+func newBLEPairingDiagnostic(operation, code string) error {
+	return &BLEPairingDiagnostic{Operation: operation, Code: code}
+}
+
 // BLEConfig is deliberately transport-local. PeerAddress is a BlueZ locator,
 // never an Ed25519 MeshCore identity.
 type BLEConfig struct {
@@ -194,9 +211,14 @@ func (p *BLEPairingBackend) Pair(ctx context.Context, cfg BLEConfig, pin string)
 		}
 	}
 	if err := p.backend.Pair(ctx, cfg, pin); err != nil {
-		// Do not surface D-Bus errors because an agent or daemon might echo
-		// user-provided material. The PIN is intentionally not retained.
-		return ErrBLEPairingFailed
+		var diagnostic *BLEPairingDiagnostic
+		if errors.As(err, &diagnostic) {
+			return diagnostic
+		}
+		// Do not surface arbitrary D-Bus errors because an agent or daemon
+		// might echo user-provided material. The PIN is intentionally not
+		// retained.
+		return newBLEPairingDiagnostic("pair", "failed")
 	}
 	return nil
 }
