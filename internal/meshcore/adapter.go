@@ -42,6 +42,7 @@ type AdapterEvent struct {
 type Config struct {
 	Transport string
 	Device    string
+	BLE       BLEConfig
 }
 
 type AdapterStatus struct {
@@ -79,6 +80,7 @@ type Adapter struct {
 
 	detectFn         func(Config) (detectionResult, error)
 	openFn           func(string) (io.ReadWriteCloser, error)
+	newBLETransport  func(BLEConfig) CompanionTransport
 	detectionDelay   time.Duration
 	reconnectDelay   time.Duration
 	handshakeTimeout time.Duration
@@ -94,14 +96,20 @@ func NewAdapter(cfg Config, logger *slog.Logger, leases *protocoladapter.SerialL
 	}
 	cfg.Transport = transport
 	cfg.Device = strings.TrimSpace(cfg.Device)
+	cfg.BLE = cfg.BLE.normalized()
+	configured := cfg.Device
+	if transport == "ble" {
+		configured = cfg.BLE.PeerAddress
+	}
 	now := time.Now().UTC()
 	return &Adapter{
 		cfg: cfg, logger: logger.With("component", AdapterName), leases: leases,
 		status: AdapterStatus{
-			State: StateNotPresent, Transport: transport, Configured: cfg.Device, UpdatedAt: now,
+			State: StateNotPresent, Transport: transport, Configured: configured, UpdatedAt: now,
 		},
 		done: make(chan struct{}), detectFn: detectDevice, openFn: openSerial,
-		detectionDelay: 3 * time.Second, reconnectDelay: 2 * time.Second, handshakeTimeout: 15 * time.Second,
+		newBLETransport: func(config BLEConfig) CompanionTransport { return NewBLECompanionTransport(config) },
+		detectionDelay:  3 * time.Second, reconnectDelay: 2 * time.Second, handshakeTimeout: 15 * time.Second,
 	}
 }
 
@@ -129,6 +137,9 @@ func (a *Adapter) Start(ctx context.Context, sink protocoladapter.AdapterSink) e
 		})
 		<-runCtx.Done()
 		return nil
+	}
+	if a.cfg.Transport == "ble" {
+		return a.runBLE(runCtx, sink)
 	}
 	if a.cfg.Transport != "physical_serial" {
 		a.setStatus(func(status *AdapterStatus) {
@@ -209,8 +220,48 @@ func (a *Adapter) run(ctx context.Context, sink protocoladapter.AdapterSink) err
 	return nil
 }
 
+func (a *Adapter) runBLE(ctx context.Context, sink protocoladapter.AdapterSink) error {
+	peer := a.cfg.BLE.PeerAddress
+	if err := a.cfg.BLE.validate(); err != nil {
+		a.degrade(err)
+		return err
+	}
+	for ctx.Err() == nil {
+		a.setStatus(func(status *AdapterStatus) {
+			status.State = StateDetected
+			status.Device = peer
+			status.Candidates = nil
+			status.LastError = ""
+		})
+		a.setStatus(func(status *AdapterStatus) { status.State = StateOpening })
+		transport := a.newBLETransport(a.cfg.BLE)
+		link, err := transport.Open(ctx)
+		if err != nil {
+			a.degrade(err)
+			if !wait(ctx, a.reconnectDelay) {
+				break
+			}
+			continue
+		}
+		a.setLink(link)
+		a.setStatus(func(status *AdapterStatus) { status.State = StateConnecting })
+		err = a.consume(ctx, link, peer, sink)
+		_ = link.Close()
+		a.clearLink(link)
+		if ctx.Err() != nil {
+			break
+		}
+		a.setStatus(func(status *AdapterStatus) { status.Reconnects++ })
+		a.degrade(err)
+		if !wait(ctx, a.reconnectDelay) {
+			break
+		}
+	}
+	return nil
+}
+
 func (a *Adapter) consume(ctx context.Context, link CompanionLink, device string, sink protocoladapter.AdapterSink) error {
-	session := NewCompanionSession("loramapr-receiver")
+	session := NewCompanionSessionForTransport("loramapr-receiver", link.Metadata())
 	a.setStatus(func(status *AdapterStatus) {
 		status.State = StateHandshaking
 		status.Session = session.Snapshot()
@@ -326,7 +377,7 @@ func (a *Adapter) Snapshot() protocoladapter.AdapterSnapshot {
 	return protocoladapter.AdapterSnapshot{
 		Name: AdapterName, Protocol: "meshcore", State: string(status.State),
 		ConnectionState: meshcoreConnectionState(status.State), Enabled: status.Transport != "disabled",
-		Configured: status.Transport == "physical_serial" && strings.TrimSpace(status.Configured) != "",
+		Configured: (status.Transport == "physical_serial" || status.Transport == "ble") && strings.TrimSpace(status.Configured) != "",
 		Ready:      status.State == StateConnected && session.State == SessionReady,
 		Transport:  status.Transport, ConfiguredDevice: status.Configured, Device: status.Device,
 		ProtocolVersion: protocolVersion, Profile: profile, ProfileState: profileState,
@@ -435,7 +486,7 @@ func (a *Adapter) degrade(err error) {
 		if errors.Is(err, ErrUnsupportedProtocol) {
 			status.State = StateIncompatible
 		}
-		if strings.Contains(err.Error(), "requires an explicit device path") {
+		if strings.Contains(err.Error(), "requires an explicit device path") || errors.Is(err, ErrBLEConfiguration) || errors.Is(err, ErrBLEUnsupported) {
 			status.State = StateConfigurationError
 		}
 		status.LastError = err.Error()

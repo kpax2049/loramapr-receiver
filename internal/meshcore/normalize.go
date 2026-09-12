@@ -308,6 +308,8 @@ func trustedDelegatedSession(session Snapshot) bool {
 	return semanticProfileMatched(session) &&
 		session.Trust.Trusted &&
 		!session.Trust.DeviceAttested &&
+		session.Trust.Transport == "physical_serial" &&
+		session.Trust.DelegatedAdvertAllowed &&
 		session.Trust.AllowlistCommit == PinnedSourceCommit
 }
 

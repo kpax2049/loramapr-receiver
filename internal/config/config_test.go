@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -123,8 +124,30 @@ func TestLoadValidatesMeshCorePhysicalSerialConfig(t *testing.T) {
 	if err := os.WriteFile(path, []byte(`{"meshcore":{"transport":"ble"}}`), 0o600); err != nil {
 		t.Fatalf("write invalid config: %v", err)
 	}
-	if _, err := Load(path); err == nil {
-		t.Fatal("expected validation error for unsupported MeshCore transport")
+	if _, err := Load(path); err == nil || !strings.Contains(err.Error(), "peer_address") {
+		t.Fatalf("expected BLE peer validation error, got %v", err)
+	}
+}
+
+func TestLoadValidatesMeshCoreBLEConfigWithoutPIN(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "receiver.json")
+	if err := os.WriteFile(path, []byte(`{"meshcore":{"transport":"ble","ble":{"peer_address":"aa:bb:cc:dd:ee:ff"}}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.MeshCore.BLE.Adapter != "hci0" || cfg.MeshCore.BLE.PeerAddress != "AA:BB:CC:DD:EE:FF" {
+		t.Fatalf("unexpected BLE config: %#v", cfg.MeshCore)
+	}
+	if encoded, err := json.Marshal(cfg); err != nil || strings.Contains(strings.ToLower(string(encoded)), "pin") {
+		t.Fatalf("BLE config must not encode pairing material: %s err=%v", encoded, err)
+	}
+	cfg.MeshCore.BLE.PeerAddress = "not-an-address"
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "Bluetooth address") {
+		t.Fatalf("expected BLE address validation, got %v", err)
 	}
 }
 

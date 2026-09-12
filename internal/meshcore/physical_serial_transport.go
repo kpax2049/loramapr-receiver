@@ -38,7 +38,7 @@ func (l *physicalSerialLink) WriteFrame(_ context.Context, payload []byte) error
 }
 
 func (l *physicalSerialLink) Metadata() TransportMetadata {
-	return TransportMetadata{Kind: "physical_serial"}
+	return TransportMetadata{Kind: "physical_serial", DelegatedAdvertAllowed: true}
 }
 
 func (l *physicalSerialLink) Close() error {

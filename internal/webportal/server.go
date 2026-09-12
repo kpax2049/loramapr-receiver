@@ -19,6 +19,7 @@ import (
 	"github.com/loramapr/loramapr-receiver/internal/buildinfo"
 	"github.com/loramapr/loramapr-receiver/internal/config"
 	"github.com/loramapr/loramapr-receiver/internal/diagnostics"
+	"github.com/loramapr/loramapr-receiver/internal/meshcore"
 	"github.com/loramapr/loramapr-receiver/internal/status"
 )
 
@@ -48,15 +49,25 @@ type NormalizedOutboxOperator interface {
 	ResolveNormalizedDeliveryCollision(ctx context.Context, deliveryID string) error
 }
 
+// MeshCoreBLEPairing is a local-only backend seam for a later portal UI.
+// It never writes receiver configuration; the selected address remains an
+// explicit transport setting owned by the operator.
+type MeshCoreBLEPairing interface {
+	DiscoverMeshCoreBLE(context.Context, string) ([]meshcore.BLEDevice, error)
+	PairMeshCoreBLE(context.Context, meshcore.BLEConfig, string) error
+	ForgetMeshCoreBLE(context.Context, meshcore.BLEConfig) error
+}
+
 type Server struct {
-	addr      string
-	status    StatusProvider
-	pairing   PairingCodeSubmitter
-	homeAuto  HomeAutoSessionManager
-	outboxOps NormalizedOutboxOperator
-	logger    *slog.Logger
-	templates map[string]*template.Template
-	httpSrv   *http.Server
+	addr        string
+	status      StatusProvider
+	pairing     PairingCodeSubmitter
+	homeAuto    HomeAutoSessionManager
+	outboxOps   NormalizedOutboxOperator
+	meshcoreBLE MeshCoreBLEPairing
+	logger      *slog.Logger
+	templates   map[string]*template.Template
+	httpSrv     *http.Server
 }
 
 type pageData struct {
@@ -111,15 +122,20 @@ func New(addr string, statusProvider StatusProvider, pairing PairingCodeSubmitte
 	if operator, ok := pairing.(NormalizedOutboxOperator); ok {
 		outboxOps = operator
 	}
+	var meshcoreBLE MeshCoreBLEPairing
+	if backend, ok := pairing.(MeshCoreBLEPairing); ok {
+		meshcoreBLE = backend
+	}
 
 	s := &Server{
-		addr:      addr,
-		status:    statusProvider,
-		pairing:   pairing,
-		homeAuto:  homeAuto,
-		outboxOps: outboxOps,
-		logger:    logger.With("component", "webportal"),
-		templates: templates,
+		addr:        addr,
+		status:      statusProvider,
+		pairing:     pairing,
+		homeAuto:    homeAuto,
+		outboxOps:   outboxOps,
+		meshcoreBLE: meshcoreBLE,
+		logger:      logger.With("component", "webportal"),
+		templates:   templates,
 	}
 
 	mux := http.NewServeMux()
@@ -131,6 +147,9 @@ func New(addr string, statusProvider StatusProvider, pairing PairingCodeSubmitte
 	mux.HandleFunc("/api/pairing/code", s.handlePairingCode)
 	mux.HandleFunc("/api/lifecycle/reset", s.handleLifecycleReset)
 	mux.HandleFunc("/api/normalized-outbox/collision/resolve", s.handleNormalizedCollisionResolve)
+	mux.HandleFunc("/api/meshcore/ble/devices", s.handleMeshCoreBLEDevices)
+	mux.HandleFunc("/api/meshcore/ble/pair", s.handleMeshCoreBLEPair)
+	mux.HandleFunc("/api/meshcore/ble/forget", s.handleMeshCoreBLEForget)
 	mux.Handle("/static/", http.StripPrefix("/static/", portalStaticHandler()))
 	mux.HandleFunc("/pairing", s.routePairing)
 	mux.HandleFunc("/reset", s.routeReset)
@@ -365,6 +384,88 @@ func (s *Server) handlePairingCode(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusAccepted)
+	_, _ = w.Write(payload)
+}
+
+func (s *Server) handleMeshCoreBLEDevices(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", http.MethodGet)
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.meshcoreBLE == nil {
+		http.Error(w, "MeshCore BLE backend is not available", http.StatusServiceUnavailable)
+		return
+	}
+	devices, err := s.meshcoreBLE.DiscoverMeshCoreBLE(r.Context(), strings.TrimSpace(r.URL.Query().Get("adapter")))
+	if err != nil {
+		http.Error(w, "MeshCore BLE discovery failed", http.StatusBadGateway)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"devices": devices})
+}
+
+func (s *Server) handleMeshCoreBLEPair(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", http.MethodPost)
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.meshcoreBLE == nil {
+		http.Error(w, "MeshCore BLE backend is not available", http.StatusServiceUnavailable)
+		return
+	}
+	var request struct {
+		Adapter     string `json:"adapter"`
+		PeerAddress string `json:"peerAddress"`
+		PIN         string `json:"pin"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		http.Error(w, "invalid JSON body", http.StatusBadRequest)
+		return
+	}
+	if err := s.meshcoreBLE.PairMeshCoreBLE(r.Context(), meshcore.BLEConfig{Adapter: request.Adapter, PeerAddress: request.PeerAddress}, request.PIN); err != nil {
+		// Deliberately omit the underlying error: it may contain sensitive agent
+		// material. The PIN exists only in this active method call.
+		http.Error(w, "MeshCore BLE pairing failed", http.StatusBadRequest)
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]any{"paired": true})
+}
+
+func (s *Server) handleMeshCoreBLEForget(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", http.MethodPost)
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.meshcoreBLE == nil {
+		http.Error(w, "MeshCore BLE backend is not available", http.StatusServiceUnavailable)
+		return
+	}
+	var request struct {
+		Adapter     string `json:"adapter"`
+		PeerAddress string `json:"peerAddress"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		http.Error(w, "invalid JSON body", http.StatusBadRequest)
+		return
+	}
+	if err := s.meshcoreBLE.ForgetMeshCoreBLE(r.Context(), meshcore.BLEConfig{Adapter: request.Adapter, PeerAddress: request.PeerAddress}); err != nil {
+		http.Error(w, "MeshCore BLE forget failed", http.StatusBadRequest)
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]any{"forgotten": true})
+}
+
+func writeJSON(w http.ResponseWriter, status int, value any) {
+	payload, err := json.Marshal(value)
+	if err != nil {
+		http.Error(w, "encode response failed", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
 	_, _ = w.Write(payload)
 }
 

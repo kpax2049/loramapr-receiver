@@ -369,15 +369,17 @@ func pinnedReadySnapshot() Snapshot {
 	return Snapshot{
 		State: SessionReady,
 		Trust: TrustProfile{
-			Trusted:            true,
-			ProtocolCompatible: true,
-			ProfileMatched:     true,
-			ProtocolVersion:    ProtocolVersion,
-			FirmwareBuild:      PinnedFirmwareBuild,
-			FirmwareVersion:    PinnedFirmwareVersion,
-			Model:              "Fixture Companion Board",
-			AllowlistCommit:    PinnedSourceCommit,
-			DeviceAttested:     false,
+			Trusted:                true,
+			ProtocolCompatible:     true,
+			ProfileMatched:         true,
+			ProtocolVersion:        ProtocolVersion,
+			FirmwareBuild:          PinnedFirmwareBuild,
+			FirmwareVersion:        PinnedFirmwareVersion,
+			Model:                  "Fixture Companion Board",
+			AllowlistCommit:        PinnedSourceCommit,
+			DeviceAttested:         false,
+			Transport:              "physical_serial",
+			DelegatedAdvertAllowed: true,
 		},
 	}
 }

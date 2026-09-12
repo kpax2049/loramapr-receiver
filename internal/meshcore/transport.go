@@ -6,7 +6,9 @@ import "context"
 // Companion frames. It is deliberately separate from MeshCore identities and
 // evidence/trust semantics, which remain owned by the session and normalizer.
 type TransportMetadata struct {
-	Kind string
+	Kind                   string
+	DelegatedAdvertAllowed bool
+	PeerSelector           string
 }
 
 // CompanionTransport opens one local carrier to a MeshCore Companion.

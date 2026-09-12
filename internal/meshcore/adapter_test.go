@@ -291,6 +291,129 @@ func TestAdapterConsumeUsesCompleteCompanionLinkFrames(t *testing.T) {
 	}
 }
 
+func TestAdapterBLEUsesSharedHandshakeAndExistingLifecycle(t *testing.T) {
+	t.Parallel()
+	link := &scriptedCompanionLink{frames: [][]byte{
+		readHexFixture(t, "device-info-v1.17.1.hex"),
+		readHexFixture(t, "self-info-v1.17.1.hex"),
+	}}
+	adapter := NewAdapter(Config{Transport: "ble", BLE: BLEConfig{Adapter: "hci0", PeerAddress: "AA:BB:CC:DD:EE:FF"}}, nil, nil)
+	opened := make(chan BLEConfig, 1)
+	adapter.newBLETransport = func(cfg BLEConfig) CompanionTransport {
+		opened <- cfg
+		return staticCompanionTransport{link: link}
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- adapter.Start(ctx, &discardSink{}) }()
+	select {
+	case cfg := <-opened:
+		if cfg.Adapter != "hci0" || cfg.PeerAddress != "AA:BB:CC:DD:EE:FF" {
+			t.Fatalf("unexpected BLE config: %#v", cfg)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("BLE transport was not opened")
+	}
+	deadline := time.Now().Add(time.Second)
+	for adapter.DetailedSnapshot().State != StateConnected && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if snapshot := adapter.Snapshot(); !snapshot.Ready || snapshot.Transport != "ble" || snapshot.ProfileState != "matched" {
+		t.Fatalf("unexpected BLE adapter snapshot: %#v", snapshot)
+	}
+	cancel()
+	if err := adapter.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if len(link.writes) != 2 || !bytes.Equal(link.writes[0], []byte{CommandDeviceQuery, ProtocolVersion}) || link.writes[1][0] != CommandAppStart {
+		t.Fatalf("BLE did not use shared handshake: %x", link.writes)
+	}
+}
+
+func TestAdapterPhysicalSerialHandshakeCancelsWithoutWaitingForTimeout(t *testing.T) {
+	t.Parallel()
+	device := existingDeviceFixture(t)
+	adapter := NewAdapter(Config{Transport: "physical_serial", Device: device}, nil, nil)
+	opened := make(chan struct{}, 1)
+	adapter.openFn = func(string) (io.ReadWriteCloser, error) {
+		host, radio := net.Pipe()
+		opened <- struct{}{}
+		go func() { <-time.After(time.Second); _ = radio.Close() }()
+		return host, nil
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- adapter.Start(ctx, &discardSink{}) }()
+	select {
+	case <-opened:
+	case <-time.After(time.Second):
+		t.Fatal("serial transport was not opened")
+	}
+	deadline := time.Now().Add(time.Second)
+	for adapter.DetailedSnapshot().State != StateHandshaking && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if adapter.DetailedSnapshot().State != StateHandshaking {
+		t.Fatalf("did not reach handshake: %#v", adapter.DetailedSnapshot())
+	}
+	cancel()
+	if err := adapter.Close(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("shutdown error=%v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("physical serial handshake did not cancel")
+	}
+}
+
+func TestAdapterBLEReconnectRepeatsSharedHandshake(t *testing.T) {
+	t.Parallel()
+	first := &scriptedCompanionLink{frames: [][]byte{readHexFixture(t, "device-info-v1.17.1.hex"), readHexFixture(t, "self-info-v1.17.1.hex")}, terminal: io.EOF}
+	second := &scriptedCompanionLink{frames: [][]byte{readHexFixture(t, "device-info-v1.17.1.hex"), readHexFixture(t, "self-info-v1.17.1.hex")}}
+	adapter := NewAdapter(Config{Transport: "ble", BLE: BLEConfig{PeerAddress: "AA:BB:CC:DD:EE:FF"}}, nil, nil)
+	adapter.reconnectDelay = time.Millisecond
+	var opens atomic.Int32
+	adapter.newBLETransport = func(BLEConfig) CompanionTransport {
+		if opens.Add(1) == 1 {
+			return staticCompanionTransport{link: first}
+		}
+		return staticCompanionTransport{link: second}
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- adapter.Start(ctx, &discardSink{}) }()
+	deadline := time.Now().Add(time.Second)
+	for opens.Load() < 2 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if opens.Load() < 2 {
+		t.Fatalf("BLE did not reconnect: opens=%d", opens.Load())
+	}
+	cancel()
+	if err := adapter.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	for _, link := range []*scriptedCompanionLink{first, second} {
+		if len(link.writes) != 2 || !bytes.Equal(link.writes[0], []byte{CommandDeviceQuery, ProtocolVersion}) || link.writes[1][0] != CommandAppStart {
+			t.Fatalf("reconnect did not repeat handshake: %x", link.writes)
+		}
+	}
+}
+
+type staticCompanionTransport struct{ link CompanionLink }
+
+func (t staticCompanionTransport) Open(context.Context) (CompanionLink, error) { return t.link, nil }
+
 type discardSink struct{}
 
 func (*discardSink) Publish(protocoladapter.Event) error    { return nil }
@@ -310,9 +433,10 @@ func (s *recordingSink) TryPublish(event protocoladapter.Event) error {
 }
 
 type scriptedCompanionLink struct {
-	frames [][]byte
-	reads  int
-	writes [][]byte
+	frames   [][]byte
+	reads    int
+	writes   [][]byte
+	terminal error
 }
 
 func (l *scriptedCompanionLink) ReadFrame(ctx context.Context) ([]byte, error) {
@@ -320,6 +444,9 @@ func (l *scriptedCompanionLink) ReadFrame(ctx context.Context) ([]byte, error) {
 		frame := append([]byte(nil), l.frames[l.reads]...)
 		l.reads++
 		return frame, nil
+	}
+	if l.terminal != nil {
+		return nil, l.terminal
 	}
 	<-ctx.Done()
 	return nil, ctx.Err()

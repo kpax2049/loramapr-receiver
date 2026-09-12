@@ -86,16 +86,18 @@ type SelfInfo struct {
 // post-signature-validation NEW_ADVERT push. It is a compatibility assertion,
 // not device attestation: the serial response is self-reported by the device.
 type TrustProfile struct {
-	Trusted            bool
-	ProtocolCompatible bool
-	ProfileMatched     bool
-	ProtocolVersion    byte
-	FirmwareBuild      string
-	FirmwareVersion    string
-	Model              string
-	AllowlistCommit    string
-	DeviceAttested     bool
-	Reason             string
+	Trusted                bool
+	ProtocolCompatible     bool
+	ProfileMatched         bool
+	ProtocolVersion        byte
+	FirmwareBuild          string
+	FirmwareVersion        string
+	Model                  string
+	AllowlistCommit        string
+	DeviceAttested         bool
+	Transport              string
+	DelegatedAdvertAllowed bool
+	Reason                 string
 }
 
 type Snapshot struct {
@@ -117,22 +119,35 @@ type HandleResult struct {
 }
 
 type CompanionSession struct {
-	mu      sync.RWMutex
-	appName string
-	state   SessionState
-	device  *DeviceInfo
-	self    *SelfInfo
-	trust   TrustProfile
+	mu        sync.RWMutex
+	appName   string
+	state     SessionState
+	device    *DeviceInfo
+	self      *SelfInfo
+	trust     TrustProfile
+	transport TransportMetadata
 }
 
 func NewCompanionSession(appName string) *CompanionSession {
+	return NewCompanionSessionForTransport(appName, TransportMetadata{Kind: "physical_serial", DelegatedAdvertAllowed: true})
+}
+
+// NewCompanionSessionForTransport keeps Companion protocol handling shared
+// while making the narrowly delegated NEW_ADVERT policy transport-explicit.
+func NewCompanionSessionForTransport(appName string, transport TransportMetadata) *CompanionSession {
+	if strings.TrimSpace(transport.Kind) == "" {
+		transport.Kind = "physical_serial"
+	}
 	return &CompanionSession{
-		appName: strings.TrimSpace(appName),
-		state:   SessionDisconnected,
+		appName:   strings.TrimSpace(appName),
+		transport: transport,
+		state:     SessionDisconnected,
 		trust: TrustProfile{
-			AllowlistCommit: PinnedSourceCommit,
-			DeviceAttested:  false,
-			Reason:          "serial session is disconnected",
+			AllowlistCommit:        PinnedSourceCommit,
+			DeviceAttested:         false,
+			Transport:              transport.Kind,
+			DelegatedAdvertAllowed: transport.DelegatedAdvertAllowed,
+			Reason:                 "serial session is disconnected",
 		},
 	}
 }
@@ -146,10 +161,12 @@ func (s *CompanionSession) Begin() []byte {
 	s.device = nil
 	s.self = nil
 	s.trust = TrustProfile{
-		ProtocolVersion: ProtocolVersion,
-		AllowlistCommit: PinnedSourceCommit,
-		DeviceAttested:  false,
-		Reason:          "awaiting pinned device profile and self info",
+		ProtocolVersion:        ProtocolVersion,
+		AllowlistCommit:        PinnedSourceCommit,
+		DeviceAttested:         false,
+		Transport:              s.transport.Kind,
+		DelegatedAdvertAllowed: s.transport.DelegatedAdvertAllowed,
+		Reason:                 "awaiting pinned device profile and self info",
 	}
 	return []byte{CommandDeviceQuery, ProtocolVersion}
 }
@@ -222,7 +239,11 @@ func (s *CompanionSession) Handle(payload []byte) (HandleResult, error) {
 		s.trust.Trusted = s.trust.ProfileMatched
 		s.trust.DeviceAttested = false
 		if s.trust.Trusted {
-			s.trust.Reason = "pinned self-reported firmware profile negotiated over physical serial; not device attestation"
+			if s.trust.DelegatedAdvertAllowed {
+				s.trust.Reason = "pinned self-reported firmware profile negotiated over physical serial; not device attestation"
+			} else {
+				s.trust.Reason = "pinned profile matched; transport permits raw signed evidence only and delegated adverts remain untrusted"
+			}
 		} else {
 			s.trust.Reason = "protocol-compatible Companion profile mismatch; delegated trust disabled, raw capture enabled"
 		}

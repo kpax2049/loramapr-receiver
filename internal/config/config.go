@@ -17,7 +17,7 @@ const (
 	// DefaultPath is the local development fallback.
 	DefaultPath = "./receiver.json"
 
-	CurrentSchemaVersion = 4
+	CurrentSchemaVersion = 5
 )
 
 type RunMode string
@@ -84,8 +84,16 @@ type MeshtasticConfig struct {
 }
 
 type MeshCoreConfig struct {
-	Transport string `json:"transport,omitempty"`
-	Device    string `json:"device,omitempty"`
+	Transport string            `json:"transport,omitempty"`
+	Device    string            `json:"device,omitempty"`
+	BLE       MeshCoreBLEConfig `json:"ble,omitempty"`
+}
+
+// MeshCoreBLEConfig selects a local BlueZ adapter and a bonded Companion.
+// PeerAddress is only a local transport locator; it is never MeshCore identity.
+type MeshCoreBLEConfig struct {
+	Adapter     string `json:"adapter,omitempty"`
+	PeerAddress string `json:"peer_address,omitempty"`
 }
 
 type HomeAutoSessionMode string
@@ -324,6 +332,16 @@ func (c Config) Validate() error {
 		if strings.TrimSpace(c.MeshCore.Device) == "" {
 			return errors.New("meshcore.device is required when meshcore.transport is physical_serial")
 		}
+	case "ble":
+		if strings.TrimSpace(c.MeshCore.BLE.PeerAddress) == "" {
+			return errors.New("meshcore.ble.peer_address is required when meshcore.transport is ble")
+		}
+		if !validBLEAddress(c.MeshCore.BLE.PeerAddress) {
+			return errors.New("meshcore.ble.peer_address must be a Bluetooth address")
+		}
+		if strings.TrimSpace(c.MeshCore.BLE.Adapter) == "" {
+			return errors.New("meshcore.ble.adapter is required when meshcore.transport is ble")
+		}
 	case "disabled":
 	default:
 		return fmt.Errorf("invalid meshcore.transport %q", c.MeshCore.Transport)
@@ -408,6 +426,11 @@ func (c *Config) applyDefaults() {
 		c.MeshCore.Transport = defaults.MeshCore.Transport
 	}
 	c.MeshCore.Device = strings.TrimSpace(c.MeshCore.Device)
+	c.MeshCore.BLE.Adapter = strings.TrimSpace(c.MeshCore.BLE.Adapter)
+	if c.MeshCore.BLE.Adapter == "" {
+		c.MeshCore.BLE.Adapter = "hci0"
+	}
+	c.MeshCore.BLE.PeerAddress = strings.ToUpper(strings.TrimSpace(c.MeshCore.BLE.PeerAddress))
 	if c.HomeAutoSession.Mode == "" {
 		c.HomeAutoSession.Mode = defaults.HomeAutoSession.Mode
 	}
@@ -452,12 +475,31 @@ func (c *Config) migrate() error {
 	if version <= 3 {
 		version = 4
 	}
+	if version <= 4 {
+		version = 5
+	}
 	if version > CurrentSchemaVersion {
 		return fmt.Errorf("config schema version %d is newer than runtime supports (%d)", version, CurrentSchemaVersion)
 	}
 
 	c.SchemaVersion = version
 	return nil
+}
+
+func validBLEAddress(value string) bool {
+	parts := strings.Split(strings.TrimSpace(value), ":")
+	if len(parts) != 6 {
+		return false
+	}
+	for _, part := range parts {
+		if len(part) != 2 {
+			return false
+		}
+		if _, err := strconv.ParseUint(part, 16, 8); err != nil {
+			return false
+		}
+	}
+	return true
 }
 
 func (c Config) validateHomeAutoSession() error {

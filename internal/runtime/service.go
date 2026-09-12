@@ -104,6 +104,7 @@ type Container struct {
 	Pairing         *pairing.Manager
 	Meshtastic      meshtastic.Adapter
 	MeshCore        *meshcore.Adapter
+	MeshCoreBLE     *meshcore.BLEPairingBackend
 	Adapters        *protocoladapter.Manager
 	SerialLeases    *protocoladapter.SerialLeaseRegistry
 	SerialReleases  []func()
@@ -263,11 +264,13 @@ func New(cfg config.Config, logger *slog.Logger) (*Service, error) {
 	mesh := meshtastic.NewAdapterWithLeases(cfg.Meshtastic, logger.With("component", "meshtastic"), serialLeases)
 	radioAdapters := make([]protocoladapter.RadioAdapter, 0, 2)
 	var meshCoreAdapter *meshcore.Adapter
-	meshCoreEnabled := strings.EqualFold(strings.TrimSpace(cfg.MeshCore.Transport), "physical_serial")
+	meshCoreTransport := strings.ToLower(strings.TrimSpace(cfg.MeshCore.Transport))
+	meshCoreEnabled := meshCoreTransport == "physical_serial" || meshCoreTransport == "ble"
 	if meshCoreEnabled {
 		meshCoreAdapter = meshcore.NewAdapter(meshcore.Config{
 			Transport: cfg.MeshCore.Transport,
 			Device:    cfg.MeshCore.Device,
+			BLE:       meshcore.BLEConfig{Adapter: cfg.MeshCore.BLE.Adapter, PeerAddress: cfg.MeshCore.BLE.PeerAddress},
 		}, logger.With("component", meshcore.AdapterName), serialLeases)
 		radioAdapters = append(radioAdapters, meshCoreAdapter)
 	}
@@ -286,7 +289,7 @@ func New(cfg config.Config, logger *slog.Logger) (*Service, error) {
 	meshSnap := mesh.Snapshot()
 	statusModel.SetComponent("meshtastic", string(meshSnap.State), meshtasticStatusMessage(meshSnap))
 	if meshCoreEnabled {
-		statusModel.SetComponent(meshcore.AdapterName, string(meshcore.StateNotPresent), "MeshCore physical serial adapter awaiting startup")
+		statusModel.SetComponent(meshcore.AdapterName, string(meshcore.StateNotPresent), "MeshCore Companion adapter awaiting startup")
 		statusModel.SetComponent("normalized_outbox", "starting", "durable normalized event outbox opened")
 	} else {
 		statusModel.SetComponent(meshcore.AdapterName, string(meshcore.StateDisabled), "MeshCore transport disabled")
@@ -303,6 +306,7 @@ func New(cfg config.Config, logger *slog.Logger) (*Service, error) {
 		Cloud:          cloud,
 		Meshtastic:     mesh,
 		MeshCore:       meshCoreAdapter,
+		MeshCoreBLE:    meshcore.NewBLEPairingBackend(),
 		Adapters:       adapters,
 		SerialLeases:   serialLeases,
 		SerialReleases: serialReleases,
@@ -458,6 +462,30 @@ func (s *Service) SubmitPairingCode(ctx context.Context, code string) error {
 
 func (s *Service) ResetPairing(_ context.Context, deauthorize bool) error {
 	return s.container.Pairing.ResetPairing(deauthorize)
+}
+
+// DiscoverMeshCoreBLE, PairMeshCoreBLE and ForgetMeshCoreBLE are local-only
+// operations. They deliberately do not select or persist a runtime peer;
+// transport selection remains ordinary receiver configuration.
+func (s *Service) DiscoverMeshCoreBLE(ctx context.Context, adapter string) ([]meshcore.BLEDevice, error) {
+	if s.container == nil || s.container.MeshCoreBLE == nil {
+		return nil, meshcore.ErrBLEUnsupported
+	}
+	return s.container.MeshCoreBLE.Discover(ctx, adapter)
+}
+
+func (s *Service) PairMeshCoreBLE(ctx context.Context, cfg meshcore.BLEConfig, pin string) error {
+	if s.container == nil || s.container.MeshCoreBLE == nil {
+		return meshcore.ErrBLEUnsupported
+	}
+	return s.container.MeshCoreBLE.Pair(ctx, cfg, pin)
+}
+
+func (s *Service) ForgetMeshCoreBLE(ctx context.Context, cfg meshcore.BLEConfig) error {
+	if s.container == nil || s.container.MeshCoreBLE == nil {
+		return meshcore.ErrBLEUnsupported
+	}
+	return s.container.MeshCoreBLE.Forget(ctx, cfg)
 }
 
 func (s *Service) ResolveNormalizedDeliveryCollision(_ context.Context, deliveryID string) error {

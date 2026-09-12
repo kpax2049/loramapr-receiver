@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/loramapr/loramapr-receiver/internal/config"
+	"github.com/loramapr/loramapr-receiver/internal/meshcore"
 	"github.com/loramapr/loramapr-receiver/internal/status"
 )
 
@@ -34,6 +35,42 @@ type recordingPairingSubmitter struct {
 	homeResetStateCalls   int
 	lastSavedHomeMode     config.HomeAutoSessionMode
 	lastSavedTrackedNodes []string
+}
+
+type blePairingSubmitter struct {
+	*recordingPairingSubmitter
+	devices []meshcore.BLEDevice
+	pairCfg meshcore.BLEConfig
+	pairPIN string
+}
+
+func (s *blePairingSubmitter) DiscoverMeshCoreBLE(_ context.Context, _ string) ([]meshcore.BLEDevice, error) {
+	return append([]meshcore.BLEDevice(nil), s.devices...), nil
+}
+func (s *blePairingSubmitter) PairMeshCoreBLE(_ context.Context, cfg meshcore.BLEConfig, pin string) error {
+	s.pairCfg, s.pairPIN = cfg, pin
+	return nil
+}
+func (s *blePairingSubmitter) ForgetMeshCoreBLE(_ context.Context, cfg meshcore.BLEConfig) error {
+	s.pairCfg = cfg
+	return nil
+}
+
+func TestMeshCoreBLEPairingAPIIsLocalAndDoesNotEchoPIN(t *testing.T) {
+	t.Parallel()
+	submitter := &blePairingSubmitter{recordingPairingSubmitter: &recordingPairingSubmitter{}, devices: []meshcore.BLEDevice{{Address: "AA:BB:CC:DD:EE:FF", Name: "MeshCore", Bonded: true}}}
+	srv := New("127.0.0.1:0", staticStatusProvider{snapshot: sampleSnapshot()}, submitter, nil)
+	devices := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(devices, httptest.NewRequest(http.MethodGet, "/api/meshcore/ble/devices?adapter=hci0", nil))
+	if devices.Code != http.StatusOK || !strings.Contains(devices.Body.String(), "AA:BB:CC:DD:EE:FF") {
+		t.Fatalf("devices status=%d body=%s", devices.Code, devices.Body.String())
+	}
+	pair := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/meshcore/ble/pair", strings.NewReader(`{"adapter":"hci0","peerAddress":"AA:BB:CC:DD:EE:FF","pin":"123456"}`))
+	srv.Handler().ServeHTTP(pair, req)
+	if pair.Code != http.StatusAccepted || strings.Contains(pair.Body.String(), "123456") || submitter.pairPIN != "123456" || submitter.pairCfg.PeerAddress != "AA:BB:CC:DD:EE:FF" {
+		t.Fatalf("pair status=%d body=%s cfg=%#v", pair.Code, pair.Body.String(), submitter.pairCfg)
+	}
 }
 
 func (r *recordingPairingSubmitter) SubmitPairingCode(_ context.Context, code string) error {
