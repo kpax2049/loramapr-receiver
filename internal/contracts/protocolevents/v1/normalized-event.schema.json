@@ -221,6 +221,20 @@
         }
       }
     },
+    "solicitedTelemetry": {
+      "type": "object",
+      "required": ["correlation", "authenticity", "sourcePrefix"],
+      "properties": {
+        "correlation": { "const": "request_correlated" },
+        "authenticity": { "const": "not_independently_signed" },
+        "sourcePrefix": { "type": "string", "pattern": "^[0-9a-f]{12}$" },
+        "voltage": { "type": "number", "minimum": 0, "maximum": 100 },
+        "latitude": { "type": "number", "minimum": -90, "maximum": 90 },
+        "longitude": { "type": "number", "minimum": -180, "maximum": 180 },
+        "altitudeM": { "type": "number", "minimum": -10000, "maximum": 100000 },
+        "temperatureC": { "type": "number", "minimum": -100, "maximum": 200 }
+      }
+    },
     "capabilities": {
       "type": "object",
       "additionalProperties": {
@@ -252,5 +266,37 @@
         "originalObservedAt": { "type": "string", "format": "date-time", "pattern": "Z$" }
       }
     }
-  }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": { "eventType": { "const": "meshcore_solicited_telemetry" } },
+        "required": ["eventType"]
+      },
+      "then": {
+        "required": ["subject", "solicitedTelemetry"],
+        "properties": {
+          "protocol": { "const": "meshcore" },
+          "subject": {
+            "type": "object",
+            "properties": {
+              "protocolNamespace": { "const": "ed25519" },
+              "canonicalId": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+              "verification": { "const": "unverified" }
+            }
+          },
+          "solicitedTelemetry": {
+            "type": "object",
+            "anyOf": [
+              { "required": ["voltage"], "properties": { "voltage": {} } },
+              { "required": ["latitude", "longitude"], "properties": { "latitude": {}, "longitude": {} } },
+              { "required": ["altitudeM"], "properties": { "altitudeM": {} } },
+              { "required": ["temperatureC"], "properties": { "temperatureC": {} } }
+            ]
+          }
+        },
+        "not": { "required": ["position"], "properties": { "position": {} } }
+      }
+    }
+  ]
 }

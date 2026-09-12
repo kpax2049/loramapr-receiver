@@ -106,11 +106,41 @@ func TestAdapterTelemetryRequestCorrelatesOnlyInFlightFullTarget(t *testing.T) {
 	adapter.handleTelemetryResponse(frame, time.Date(2026, 9, 12, 10, 0, 0, 0, time.UTC))
 	select {
 	case completion := <-resultCh:
-		if completion.err != nil || completion.result.TargetPublicKey != key || completion.result.SourcePrefix != key[:12] || completion.result.Telemetry.Voltage == nil || *completion.result.Telemetry.Voltage != 4.09 {
+		if completion.err != nil || completion.result.TargetPublicKey != key || completion.result.SourcePrefix != key[:12] || completion.result.Telemetry.Voltage == nil || *completion.result.Telemetry.Voltage != 4.09 || !bytes.Equal(completion.result.RawFrame, frame) {
 			t.Fatalf("unexpected completion: %#v err=%v", completion.result, completion.err)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("telemetry response did not complete request")
+	}
+}
+
+func TestNormalizeTelemetryResultPreservesCorrelationWithoutPositionTrust(t *testing.T) {
+	t.Parallel()
+	voltage, latitude, longitude, altitude, temperature := 4.04, 49.3958, 7.6103, 360.2, 26.2
+	key := "5bed5393ba6f5bba71ed2f4df6ed54048467dbb728de5fa3acd10c8a04dd0c2b"
+	frame := []byte{PushTelemetryResponse, 0, 0x5b, 0xed, 0x53, 0x93, 0xba, 0x6f, 1, 116, 0x01, 0x94}
+	normalized, err := NormalizeTelemetryResult(TelemetryResult{
+		TargetPublicKey: key,
+		SourcePrefix:    key[:12],
+		ReceivedAt:      time.Date(2026, 9, 12, 19, 1, 5, 0, time.UTC),
+		RawFrame:        frame,
+		Telemetry: Telemetry{
+			Voltage: &voltage, Latitude: &latitude, Longitude: &longitude, AltitudeM: &altitude, TemperatureC: &temperature,
+		},
+	}, ReceiverBinding{InstallationID: "00112233445566778899aabbccddeeff", AdapterVersion: "test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if normalized["eventType"] != "meshcore_solicited_telemetry" || normalized["position"] != nil {
+		t.Fatalf("unexpected telemetry normalization: %#v", normalized)
+	}
+	subject := normalized["subject"].(map[string]any)
+	if subject["canonicalId"] != key || subject["verification"] != "unverified" {
+		t.Fatalf("telemetry subject lost canonical correlation: %#v", subject)
+	}
+	evidence := normalized["solicitedTelemetry"].(map[string]any)
+	if evidence["sourcePrefix"] != key[:12] || evidence["correlation"] != "request_correlated" || evidence["authenticity"] != "not_independently_signed" {
+		t.Fatalf("telemetry provenance was not retained: %#v", evidence)
 	}
 }
 

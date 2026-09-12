@@ -275,6 +275,33 @@ func TestNewSelectsConcurrentAdaptersAndStagesMeshCoreDurably(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for runtime durable stage")
 	}
+
+	voltage := 4.04
+	telemetry := meshcore.TelemetryResult{
+		TargetPublicKey: strings.Repeat("d", 64),
+		SourcePrefix:    strings.Repeat("d", 12),
+		ReceivedAt:      observedAt.Add(time.Second),
+		RawFrame:        []byte{meshcore.PushTelemetryResponse, 0, 0xdd, 0xdd, 0xdd, 0xdd, 0xdd, 0xdd, 1, 116, 0x01, 0x94},
+		Telemetry:       meshcore.Telemetry{Voltage: &voltage},
+	}
+	if err := svc.stageMeshCoreTelemetry(telemetry); err != nil {
+		t.Fatalf("stage correlated telemetry: %v", err)
+	}
+	select {
+	case result := <-svc.container.OutboxResults:
+		if result.Err != nil {
+			t.Fatalf("telemetry durable stage failed: %v", result.Err)
+		}
+		record, err := svc.container.OutboxEngine.Get(result.DeliveryID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(record.Envelope), `"eventType":"meshcore_solicited_telemetry"`) || !strings.Contains(string(record.Envelope), `"canonicalId":"`+telemetry.TargetPublicKey+`"`) || !strings.Contains(string(record.Envelope), `"sourcePrefix":"`+telemetry.SourcePrefix+`"`) {
+			t.Fatalf("unexpected persisted telemetry delivery: %s", record.Envelope)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for telemetry durable stage")
+	}
 }
 
 type mockCloudClient struct {

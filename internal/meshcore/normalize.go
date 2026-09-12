@@ -378,6 +378,8 @@ func opcodeName(opcode byte) string {
 		return "NEW_ADVERT"
 	case PushControlData:
 		return "CONTROL_DATA"
+	case PushTelemetryResponse:
+		return "TELEMETRY_RESPONSE"
 	default:
 		return fmt.Sprintf("UNKNOWN_0X%02X", opcode)
 	}

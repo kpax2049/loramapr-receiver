@@ -488,14 +488,22 @@ func (s *Service) ForgetMeshCoreBLE(ctx context.Context, cfg meshcore.BLEConfig)
 	return s.container.MeshCoreBLE.Forget(ctx, cfg)
 }
 
-// RequestMeshCoreTelemetry is a local portal operation only. It keeps the
-// response in the receiver process and deliberately does not create a cloud
-// event, position, measurement, or session projection.
+// RequestMeshCoreTelemetry sends one manual request and durably stages a
+// normalized observation only after its response is correlated to the full
+// requested public key. It never creates local position, track, or session
+// state; cloud decides only the read-model representation of the event.
 func (s *Service) RequestMeshCoreTelemetry(ctx context.Context, publicKey string) (meshcore.TelemetryResult, error) {
 	if s.container == nil || s.container.MeshCore == nil {
 		return meshcore.TelemetryResult{}, meshcore.ErrTelemetryAdapterDisconnected
 	}
-	return s.container.MeshCore.RequestTelemetry(ctx, publicKey)
+	result, err := s.container.MeshCore.RequestTelemetry(ctx, publicKey)
+	if err != nil {
+		return result, err
+	}
+	if err := s.stageMeshCoreTelemetry(result); err != nil {
+		return result, err
+	}
+	return result, nil
 }
 
 func (s *Service) ResolveNormalizedDeliveryCollision(_ context.Context, deliveryID string) error {
@@ -793,6 +801,49 @@ func (s *Service) onMeshCoreEvent(event protocoladapter.Event, meshEvent meshcor
 		return
 	}
 	c.Status.SetComponent("normalized_outbox", "persisting", "MeshCore observation staged for durable persistence")
+}
+
+func (s *Service) stageMeshCoreTelemetry(result meshcore.TelemetryResult) error {
+	c := s.container
+	if c == nil || c.OutboxEngine == nil {
+		return errors.New("normalized outbox is unavailable")
+	}
+	snapshot := c.State.Snapshot()
+	binding, ok := normalizedBinding(snapshot)
+	if !ok {
+		return errors.New("receiver binding is unavailable for MeshCore telemetry")
+	}
+	normalized, err := meshcore.NormalizeTelemetryResult(result, meshcore.ReceiverBinding{
+		ReceiverAgentID: binding.ReceiverAgentID,
+		InstallationID:  binding.InstallationID,
+		AdapterVersion:  s.build.Version,
+		Clock:           clockattestation.Envelope(snapshot.Cloud.ClockSamples, result.ReceivedAt.UTC(), binding.ReceiverAgentID, binding.InstallationID),
+	})
+	if err != nil {
+		return fmt.Errorf("normalize MeshCore telemetry: %w", err)
+	}
+	prepared, err := receiverevents.Prepare(normalized, time.Now().UTC())
+	if err != nil {
+		return fmt.Errorf("prepare MeshCore telemetry event: %w", err)
+	}
+	delivery := outbox.Delivery{
+		DeliveryID:              prepared.DeliveryID,
+		Envelope:                prepared.Envelope,
+		EnvelopeSHA256:          prepared.EnvelopeSHA256,
+		IdempotencyKey:          prepared.DeliveryID,
+		OwnerID:                 binding.OwnerID,
+		ReceiverAgentIDSnapshot: binding.ReceiverAgentID,
+		InstallationID:          binding.InstallationID,
+		CredentialGeneration:    binding.CredentialGeneration,
+		BindingGeneration:       binding.BindingGeneration,
+		Endpoint:                receiverevents.EndpointPath,
+		EnqueuedAt:              time.Now().UTC(),
+	}
+	if err := c.OutboxEngine.TryStage(delivery); err != nil {
+		return fmt.Errorf("stage MeshCore telemetry event: %w", err)
+	}
+	c.Status.SetComponent("normalized_outbox", "persisting", "MeshCore solicited telemetry staged for durable persistence")
+	return nil
 }
 
 func (s *Service) onOutboxStageResult(result outbox.StageResult) {

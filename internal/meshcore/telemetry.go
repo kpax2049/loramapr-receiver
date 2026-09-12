@@ -48,6 +48,7 @@ type TelemetryResult struct {
 	SourcePrefix    string    `json:"sourcePrefix"`
 	ReceivedAt      time.Time `json:"receivedAt"`
 	Telemetry       Telemetry `json:"telemetry"`
+	RawFrame        []byte    `json:"-"`
 }
 
 type telemetryCompletion struct {
@@ -229,6 +230,7 @@ func parseTelemetryResponse(frame []byte, receivedAt time.Time) (TelemetryResult
 		SourcePrefix: hex.EncodeToString(prefix[:]),
 		ReceivedAt:   receivedAt.UTC(),
 		Telemetry:    telemetry,
+		RawFrame:     append([]byte(nil), frame...),
 	}, prefix, nil
 }
 
