@@ -80,6 +80,7 @@ type Adapter struct {
 
 	telemetryMu sync.Mutex
 	telemetry   *telemetryRequest
+	pathReset   *pathResetRequest
 
 	detectFn         func(Config) (detectionResult, error)
 	openFn           func(string) (io.ReadWriteCloser, error)
@@ -284,6 +285,7 @@ func (a *Adapter) consume(ctx context.Context, link CompanionLink, device string
 	defer timer.Stop()
 	defer session.Disconnect()
 	defer a.finishCurrentTelemetry(TelemetryResult{}, ErrTelemetryAdapterDisconnected)
+	defer a.finishCurrentPathReset(ErrTelemetryAdapterDisconnected)
 
 	connected := false
 	for {

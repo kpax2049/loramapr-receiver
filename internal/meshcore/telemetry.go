@@ -17,6 +17,7 @@ const (
 	defaultTelemetryTimeout  = 45 * time.Second
 	minimumTelemetryTimeout  = time.Second
 	routeSnapshotTimeout     = 2 * time.Second
+	pathResetTimeout         = 5 * time.Second
 )
 
 var (
@@ -27,6 +28,8 @@ var (
 	ErrTelemetryTimeout             = errors.New("MeshCore telemetry response timed out")
 	ErrTelemetryMismatchedResponse  = errors.New("MeshCore telemetry response source prefix does not match request target")
 	ErrInvalidTelemetryPayload      = errors.New("invalid MeshCore telemetry payload")
+	ErrPathResetFirmware            = errors.New("MeshCore firmware rejected path reset")
+	ErrPathResetTimeout             = errors.New("MeshCore path reset response timed out")
 )
 
 // Telemetry contains the small CayenneLPP subset emitted by the stock Wio
@@ -73,6 +76,12 @@ type telemetryRequest struct {
 	requestedAt     time.Time
 }
 
+type pathResetRequest struct {
+	target [telemetryPublicKeyLength]byte
+	done   chan error
+	timer  *time.Timer
+}
+
 func parseTelemetryTarget(value string) ([telemetryPublicKeyLength]byte, error) {
 	var target [telemetryPublicKeyLength]byte
 	if len(value) != hex.EncodedLen(len(target)) || strings.ToLower(value) != value {
@@ -102,6 +111,60 @@ func buildContactByKeyRequest(target [telemetryPublicKeyLength]byte) []byte {
 	return frame
 }
 
+// BuildPathResetRequest creates CMD_RESET_PATH [0x0d][public key x32]. The
+// reset changes Companion-owned contact state only after RESP_CODE_OK.
+func BuildPathResetRequest(target [telemetryPublicKeyLength]byte) []byte {
+	frame := make([]byte, 1+len(target))
+	frame[0] = CommandResetPath
+	copy(frame[1:], target[:])
+	return frame
+}
+
+// ResetPath asks the Companion to invalidate its cached route for a contact.
+// It shares the telemetry arbiter, so a path reset cannot interleave with a
+// prefix-correlated telemetry request or its contact route snapshot.
+func (a *Adapter) ResetPath(ctx context.Context, publicKey string) error {
+	target, err := parseTelemetryTarget(publicKey)
+	if err != nil {
+		return err
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	a.telemetryMu.Lock()
+	if a.telemetry != nil || a.pathReset != nil {
+		a.telemetryMu.Unlock()
+		return ErrTelemetryRequestInFlight
+	}
+	a.mu.RLock()
+	link := a.link
+	ready := a.status.State == StateConnected && a.status.Session.State == SessionReady
+	closed := a.closed
+	a.mu.RUnlock()
+	if closed || !ready || link == nil {
+		a.telemetryMu.Unlock()
+		return ErrTelemetryAdapterDisconnected
+	}
+	request := &pathResetRequest{target: target, done: make(chan error, 1)}
+	request.timer = time.AfterFunc(pathResetTimeout, func() {
+		a.finishPathReset(request, ErrPathResetTimeout)
+	})
+	a.pathReset = request
+	a.telemetryMu.Unlock()
+	if err := link.WriteFrame(ctx, BuildPathResetRequest(target)); err != nil {
+		wrapped := fmt.Errorf("%w: %v", ErrTelemetryAdapterDisconnected, err)
+		a.finishPathReset(request, wrapped)
+		return wrapped
+	}
+	select {
+	case err := <-request.done:
+		return err
+	case <-ctx.Done():
+		a.finishPathReset(request, ctx.Err())
+		return ctx.Err()
+	}
+}
+
 // RequestTelemetry sends one manually initiated request. The adapter allows
 // only one outstanding request because PUSH_CODE_TELEMETRY_RESPONSE exposes
 // only a six-byte source-key prefix.
@@ -115,7 +178,7 @@ func (a *Adapter) RequestTelemetry(ctx context.Context, publicKey string) (Telem
 	}
 
 	a.telemetryMu.Lock()
-	if a.telemetry != nil {
+	if a.telemetry != nil || a.pathReset != nil {
 		a.telemetryMu.Unlock()
 		return TelemetryResult{}, ErrTelemetryRequestInFlight
 	}
@@ -257,6 +320,9 @@ func (a *Adapter) handleTelemetryResponse(frame []byte, receivedAt time.Time) {
 }
 
 func (a *Adapter) handleTelemetryCommandResponse(frame ResponseFrame) {
+	if a.handlePathResetCommandResponse(frame) {
+		return
+	}
 	if frame.Code == ResponseContact {
 		a.handleTelemetryContactResponse(frame.Payload)
 		return
@@ -306,6 +372,50 @@ func (a *Adapter) handleTelemetryCommandResponse(frame ResponseFrame) {
 		}
 		a.telemetryMu.Unlock()
 	}
+}
+
+func (a *Adapter) handlePathResetCommandResponse(frame ResponseFrame) bool {
+	a.telemetryMu.Lock()
+	request := a.pathReset
+	a.telemetryMu.Unlock()
+	if request == nil {
+		return false
+	}
+	switch frame.Code {
+	case ResponseOK:
+		a.finishPathReset(request, nil)
+	case ResponseError:
+		a.finishPathReset(request, ErrPathResetFirmware)
+	default:
+		return false
+	}
+	return true
+}
+
+func (a *Adapter) finishCurrentPathReset(err error) {
+	a.telemetryMu.Lock()
+	request := a.pathReset
+	a.telemetryMu.Unlock()
+	if request != nil {
+		a.finishPathReset(request, err)
+	}
+}
+
+func (a *Adapter) finishPathReset(request *pathResetRequest, err error) {
+	if request == nil {
+		return
+	}
+	a.telemetryMu.Lock()
+	if a.pathReset != request {
+		a.telemetryMu.Unlock()
+		return
+	}
+	a.pathReset = nil
+	if request.timer != nil {
+		request.timer.Stop()
+	}
+	a.telemetryMu.Unlock()
+	request.done <- err
 }
 
 func (a *Adapter) handleTelemetryContactResponse(frame []byte) {

@@ -12,10 +12,12 @@ const (
 	ProtocolVersion = byte(13)
 
 	CommandAppStart             = byte(0x01)
+	CommandResetPath            = byte(0x0d)
 	CommandDeviceQuery          = byte(0x16)
 	CommandGetContactByKey      = byte(0x1e)
 	CommandSendTelemetryRequest = byte(0x27)
 
+	ResponseOK         = byte(0x00)
 	ResponseError      = byte(0x01)
 	ResponseContact    = byte(0x03)
 	ResponseSelfInfo   = byte(0x05)
@@ -23,6 +25,7 @@ const (
 	ResponseDeviceInfo = byte(0x0D)
 
 	PushRawData           = byte(0x84)
+	PushPathUpdated       = byte(0x81)
 	PushLogRXData         = byte(0x88)
 	PushNewAdvert         = byte(0x8A)
 	PushTelemetryResponse = byte(0x8B)
@@ -268,7 +271,7 @@ func (s *CompanionSession) Handle(payload []byte) (HandleResult, error) {
 		if err := validateCapturedPush(payload); err != nil {
 			return HandleResult{}, err
 		}
-		if payload[0] == ResponseError || payload[0] == ResponseSent || payload[0] == ResponseContact {
+		if payload[0] == ResponseOK || payload[0] == ResponseError || payload[0] == ResponseSent || payload[0] == ResponseContact {
 			if err := validateCommandResponse(payload); err != nil {
 				return HandleResult{}, err
 			}
@@ -393,6 +396,8 @@ func validatePush(payload []byte) error {
 	}
 	minimum := 0
 	switch payload[0] {
+	case PushPathUpdated:
+		minimum = 1 + telemetryPublicKeyLength
 	case PushRawData:
 		minimum = 4
 	case PushLogRXData:

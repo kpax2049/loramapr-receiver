@@ -126,11 +126,47 @@ successful response after that transition is useful evidence. A stable route
 snapshot followed by timeout is not evidence that routing was absent, that a
 specific repeater was used, or that the response travelled the same path.
 
+## M7A.2 stale zero-hop recovery
+
+Bike validation showed that a stored zero-hop route remains a zero-hop route
+across telemetry timeouts: it does not automatically become a flood or
+repeater-routed request merely because direct RF is lost. The receiver now
+performs one narrowly-scoped recovery action per active local tracking run:
+
+```text
+zero-hop telemetry timeout
+  -> CMD_RESET_PATH for that contact
+  -> existing backoff remains in force
+  -> next normal telemetry poll re-queries the contact
+  -> Companion may send flood and later learn an explicit path
+```
+
+The command is the exact pinned Companion frame
+`[CMD_RESET_PATH=13][public-key x32]`. The firmware looks up that full key,
+sets only its stored `out_path_len` to `OUT_PATH_UNKNOWN`, persists the
+contact, and responds `RESP_CODE_OK`; an unknown contact responds with
+`RESP_CODE_ERR` ([`MyMesh.cpp:1179-1189`](https://github.com/meshcore-dev/MeshCore/blob/d92964352441e53b93e8667b802e04f6e072b39e/examples/companion_radio/MyMesh.cpp#L1179-L1189)). The route selection after the acknowledged reset remains firmware-owned:
+`sendRequest` floods for `OUT_PATH_UNKNOWN` and otherwise uses `sendDirect`
+([`BaseChatMesh.cpp:576-600`](https://github.com/meshcore-dev/MeshCore/blob/d92964352441e53b93e8667b802e04f6e072b39e/src/helpers/BaseChatMesh.cpp#L576-L600)). LoRaMapr does not select a repeater or construct a custom path.
+
+Recovery is intentionally limited to a telemetry timeout whose attempted route
+was `zero_hop`. A reset is not repeated for subsequent failures in the same
+tracking run, and explicit-path timeouts do not currently trigger a reset.
+The existing 30s/60s/... capped backoff is unchanged, so a reset never creates
+a tight flood or retry loop. A firmware error, timeout, disconnect, or stop is
+recorded as `path_reset_failed` without preventing normal future polling.
+
+`PUSH_CODE_PATH_UPDATED` carries only the contact public key
+([`MyMesh.cpp:377-382`](https://github.com/meshcore-dev/MeshCore/blob/d92964352441e53b93e8667b802e04f6e072b39e/examples/companion_radio/MyMesh.cpp#L377-L382)). It marks the active target for a fresh normal pre-poll contact
+snapshot; that next poll exposes `flood` or the newly learned `explicit_path`
+in `recentPolls`. No identity is inferred from route hashes, and telemetry
+response routing remains unknown.
+
 ## Next physical gate
 
 1. Stationary desk test.
 2. Walking test.
 3. Faster movement test.
 4. Bike test: capture slow-to-fast confirmation and the 30s-to-15s change,
-   then compare request route snapshots before/after direct-range loss and
-   record whether a repeater-routed attempt succeeds or times out.
+   then verify initial zero-hop, reset after direct-range loss, a subsequent
+   flood attempt, mesh success if coverage exists, and any later explicit path.

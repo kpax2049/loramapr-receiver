@@ -354,7 +354,7 @@ func New(cfg config.Config, logger *slog.Logger) (*Service, error) {
 	// cloud Session lifecycle can own Start/Stop without changing radio or
 	// normalized-event semantics.
 	if meshCoreEnabled {
-		svc.container.MeshCoreTracking = meshcore.NewTrackingController(svc.RequestMeshCoreTelemetry, meshcore.DefaultTrackingPolicy(), logger)
+		svc.container.MeshCoreTracking = meshcore.NewTrackingControllerWithRouteRecovery(svc.RequestMeshCoreTelemetry, meshCoreAdapter.ResetPath, meshcore.DefaultTrackingPolicy(), logger)
 	}
 	svc.container.Portal = webportal.New(cfg.Portal.BindAddress, svc, svc, logger.With("component", "webportal"))
 	svc.configureInitialReadiness(current.Pairing.Phase)
@@ -780,6 +780,16 @@ func (s *Service) onAdapterEvent(event protocoladapter.Event) {
 
 func (s *Service) onMeshCoreEvent(event protocoladapter.Event, meshEvent meshcore.AdapterEvent) {
 	c := s.container
+	if meshEvent.Frame.Opcode == meshcore.PushPathUpdated {
+		if c.MeshCoreTracking != nil {
+			if target, ok := meshcore.PathUpdatedTarget(meshEvent.Frame.Payload); ok {
+				c.MeshCoreTracking.HandlePathUpdated(target, meshEvent.ObservedAt)
+			}
+		}
+		// This key-only Companion control notice has no normalized observation
+		// contract. It is consumed locally to refresh later route evidence.
+		return
+	}
 	if c.OutboxEngine == nil {
 		c.Logger.Warn("MeshCore event rejected because durable outbox is unavailable")
 		c.Status.SetComponent("normalized_outbox", "unavailable", "MeshCore observation rejected: durable outbox unavailable")

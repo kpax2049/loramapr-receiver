@@ -62,3 +62,12 @@ func (r RouteEvidence) copy() RouteEvidence {
 func (r RouteEvidence) logValue() string {
 	return fmt.Sprintf("%s/%d/%s", r.Mode, r.PathLength, r.Source)
 }
+
+// PathUpdatedTarget decodes the key-only PUSH_CODE_PATH_UPDATED notice. The
+// notice does not carry path bytes; the next contact query is authoritative.
+func PathUpdatedTarget(payload []byte) (string, bool) {
+	if len(payload) != 1+telemetryPublicKeyLength || payload[0] != PushPathUpdated {
+		return "", false
+	}
+	return hex.EncodeToString(payload[1:]), true
+}

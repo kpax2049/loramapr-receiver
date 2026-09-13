@@ -36,6 +36,23 @@ func TestRouteEvidenceFromContactOutPath(t *testing.T) {
 	}
 }
 
+func TestPathUpdatedPushCarriesOnlyTargetAndIsAccepted(t *testing.T) {
+	t.Parallel()
+	target := mustTelemetryTarget(t, trackingKey)
+	payload := append([]byte{PushPathUpdated}, target[:]...)
+	if got, ok := PathUpdatedTarget(payload); !ok || got != trackingKey {
+		t.Fatalf("path update target=%q ok=%t", got, ok)
+	}
+	session := readySession(t)
+	result, err := session.Handle(payload)
+	if err != nil || result.Push == nil || result.Push.Opcode != PushPathUpdated {
+		t.Fatalf("path update session result=%#v err=%v", result, err)
+	}
+	if _, ok := PathUpdatedTarget(payload[:1]); ok {
+		t.Fatal("truncated path update accepted")
+	}
+}
+
 func TestTelemetryTimeoutPreservesAttemptedRouteWithoutResponseRoute(t *testing.T) {
 	key := trackingKey
 	link := &telemetryTestLink{writes: make(chan []byte, 2)}

@@ -28,6 +28,60 @@ func TestBuildTelemetryRequestRequiresCanonicalFullKey(t *testing.T) {
 	}
 }
 
+func TestPathResetUsesExactFullKeyAndRequiresCompanionAcknowledgement(t *testing.T) {
+	key := trackingKey
+	target := mustTelemetryTarget(t, key)
+	if frame := BuildPathResetRequest(target); len(frame) != 33 || frame[0] != CommandResetPath || !bytes.Equal(frame[1:], target[:]) {
+		t.Fatalf("unexpected reset frame: %x", frame)
+	}
+	if err := NewAdapter(Config{}, nil, nil).ResetPath(context.Background(), "short"); !errors.Is(err, ErrInvalidTelemetryTarget) {
+		t.Fatalf("malformed target error=%v", err)
+	}
+
+	newAdapter := func() (*Adapter, *telemetryTestLink) {
+		link := &telemetryTestLink{writes: make(chan []byte, 1)}
+		adapter := NewAdapter(Config{Transport: "ble", BLE: BLEConfig{Adapter: "hci0", PeerAddress: "AA:BB:CC:DD:EE:FF"}}, nil, nil)
+		adapter.setLink(link)
+		adapter.setStatus(func(status *AdapterStatus) { status.State, status.Session.State = StateConnected, SessionReady })
+		return adapter, link
+	}
+	t.Run("acknowledged", func(t *testing.T) {
+		adapter, link := newAdapter()
+		done := make(chan error, 1)
+		go func() { done <- adapter.ResetPath(context.Background(), key) }()
+		if frame := <-link.writes; !bytes.Equal(frame, BuildPathResetRequest(target)) {
+			t.Fatalf("reset frame=%x", frame)
+		}
+		if _, err := adapter.RequestTelemetry(context.Background(), key); !errors.Is(err, ErrTelemetryRequestInFlight) {
+			t.Fatalf("telemetry interleaved with reset: %v", err)
+		}
+		adapter.handleTelemetryCommandResponse(ResponseFrame{Code: ResponseOK, Payload: []byte{ResponseOK}})
+		if err := <-done; err != nil {
+			t.Fatalf("reset error=%v", err)
+		}
+	})
+	t.Run("firmware error", func(t *testing.T) {
+		adapter, link := newAdapter()
+		done := make(chan error, 1)
+		go func() { done <- adapter.ResetPath(context.Background(), key) }()
+		<-link.writes
+		adapter.handleTelemetryCommandResponse(ResponseFrame{Code: ResponseError, Payload: []byte{ResponseError, 2}})
+		if err := <-done; !errors.Is(err, ErrPathResetFirmware) {
+			t.Fatalf("reset error=%v", err)
+		}
+	})
+	t.Run("disconnect", func(t *testing.T) {
+		adapter, link := newAdapter()
+		done := make(chan error, 1)
+		go func() { done <- adapter.ResetPath(context.Background(), key) }()
+		<-link.writes
+		adapter.finishCurrentPathReset(ErrTelemetryAdapterDisconnected)
+		if err := <-done; !errors.Is(err, ErrTelemetryAdapterDisconnected) {
+			t.Fatalf("reset error=%v", err)
+		}
+	})
+}
+
 func TestParseTelemetryLPPSupportsStockWioTrackerFields(t *testing.T) {
 	t.Parallel()
 	payload := []byte{
