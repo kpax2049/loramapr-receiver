@@ -7,8 +7,14 @@ GO ?= $(shell command -v go 2>/dev/null || echo /usr/local/go/bin/go)
 .PHONY: build run test test-m5-corpus fmt tidy release clean
 
 build:
-	mkdir -p $(BIN_DIR)
-	$(GO) build -o $(BIN_DIR)/$(BINARY_NAME) ./cmd/loramapr-receiverd
+	@set -e; build_started=$$(date +%s); \
+		echo "[build] preparing $(BIN_DIR)/"; \
+		mkdir -p $(BIN_DIR); \
+		echo "[build] compiling $(BINARY_NAME)..."; \
+		$(GO) build -o $(BIN_DIR)/$(BINARY_NAME) ./cmd/loramapr-receiverd; \
+		build_elapsed=$$(( $$(date +%s) - $$build_started )); \
+		echo "[build] wrote $(BIN_DIR)/$(BINARY_NAME)"; \
+		echo "[build] complete in $${build_elapsed}s"
 
 run:
 	$(GO) run ./cmd/loramapr-receiverd
