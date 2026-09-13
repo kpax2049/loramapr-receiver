@@ -44,7 +44,7 @@ type TrackingPolicy struct {
 
 func DefaultTrackingPolicy() TrackingPolicy {
 	return TrackingPolicy{
-		UnknownInterval: 30 * time.Second, StationaryInterval: 120 * time.Second,
+		UnknownInterval: 30 * time.Second, StationaryInterval: 45 * time.Second,
 		SlowInterval: 30 * time.Second, FastInterval: 15 * time.Second,
 		MinimumInterval: 10 * time.Second, MaximumBackoff: 5 * time.Minute,
 		StationaryKmh: 1, SlowKmh: 8, MinimumSampleAge: 5 * time.Second,

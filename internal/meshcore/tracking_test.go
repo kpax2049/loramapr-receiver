@@ -10,6 +10,13 @@ import (
 
 const trackingKey = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 
+func TestDefaultTrackingPolicyIntervals(t *testing.T) {
+	policy := DefaultTrackingPolicy()
+	if policy.UnknownInterval != 30*time.Second || policy.StationaryInterval != 45*time.Second || policy.SlowInterval != 30*time.Second || policy.FastInterval != 15*time.Second || policy.MinimumInterval != 10*time.Second {
+		t.Fatalf("unexpected default policy: %#v", policy)
+	}
+}
+
 func TestTrackingStartValidatesTargetAndIssuesFirstRequest(t *testing.T) {
 	requested := make(chan string, 1)
 	release := make(chan struct{})

@@ -37,7 +37,7 @@ The centralized conservative defaults are:
 | Operational state | Poll interval |
 | --- | ---: |
 | unknown / startup | 30 seconds |
-| stationary, under 1 km/h | 120 seconds |
+| stationary, under 1 km/h | 45 seconds |
 | slow, 1–8 km/h | 30 seconds |
 | fast, over 8 km/h | 15 seconds |
 | hard minimum | 10 seconds |
