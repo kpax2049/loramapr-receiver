@@ -20,6 +20,7 @@
 - [APT Hosting via GitHub Pages (Temporary)](./apt-pages-hosting.md)
 - [Pairing and Bootstrap Lifecycle](./pairing-lifecycle.md)
 - [Embedded Home Auto Session (Milestone 4)](./home-auto-session.md)
+- [MeshCore Adaptive Telemetry Polling (M7A)](./meshcore-adaptive-telemetry-polling.md)
 - [Multi-Receiver Identity and Guidance](./multi-receiver-identity.md)
 - [Receiver Lifecycle Management](./receiver-lifecycle.md)
 - [Steady-State Cloud Loop](./steady-state.md)

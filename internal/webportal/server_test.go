@@ -52,9 +52,27 @@ type telemetrySubmitter struct {
 	key    string
 }
 
+type trackingSubmitter struct {
+	*recordingPairingSubmitter
+	status meshcore.TrackingStatus
+	key    string
+	err    error
+}
+
 func (s *telemetrySubmitter) RequestMeshCoreTelemetry(_ context.Context, key string) (meshcore.TelemetryResult, error) {
 	s.key = key
 	return s.result, s.err
+}
+
+func (s *trackingSubmitter) StartMeshCoreTracking(_ context.Context, key string) (meshcore.TrackingStatus, error) {
+	s.key = key
+	return s.status, s.err
+}
+func (s *trackingSubmitter) StopMeshCoreTracking(context.Context) (meshcore.TrackingStatus, error) {
+	return s.status, s.err
+}
+func (s *trackingSubmitter) MeshCoreTrackingStatus(context.Context) (meshcore.TrackingStatus, error) {
+	return s.status, s.err
 }
 
 func (s *blePairingSubmitter) DiscoverMeshCoreBLE(_ context.Context, _ string) ([]meshcore.BLEDevice, error) {
@@ -123,6 +141,34 @@ func TestMeshCoreTelemetryRequestAPIValidatesAndReturnsLocalResult(t *testing.T)
 		t.Fatalf("invalid status=%d body=%s", invalid.Code, invalid.Body.String())
 	}
 
+}
+
+func TestMeshCoreTrackingAPIsAreExplicitLocalLifecycleHarness(t *testing.T) {
+	t.Parallel()
+	key := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	submitter := &trackingSubmitter{recordingPairingSubmitter: &recordingPairingSubmitter{}, status: meshcore.TrackingStatus{Active: true, TargetPublicKey: key, MotionState: meshcore.MotionUnknown, CurrentIntervalSeconds: 30}}
+	srv := New("127.0.0.1:0", staticStatusProvider{snapshot: sampleSnapshot()}, submitter, nil)
+	start := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(start, httptest.NewRequest(http.MethodPost, "/api/meshcore/tracking/start", strings.NewReader(`{"publicKey":"`+key+`"}`)))
+	if start.Code != http.StatusAccepted || submitter.key != key || !strings.Contains(start.Body.String(), `"active":true`) {
+		t.Fatalf("start status=%d body=%s key=%q", start.Code, start.Body.String(), submitter.key)
+	}
+	status := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(status, httptest.NewRequest(http.MethodGet, "/api/meshcore/tracking/status", nil))
+	if status.Code != http.StatusOK || !strings.Contains(status.Body.String(), `"targetPublicKey":"`+key+`"`) {
+		t.Fatalf("status=%d body=%s", status.Code, status.Body.String())
+	}
+	stop := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(stop, httptest.NewRequest(http.MethodPost, "/api/meshcore/tracking/stop", nil))
+	if stop.Code != http.StatusOK {
+		t.Fatalf("stop status=%d body=%s", stop.Code, stop.Body.String())
+	}
+	submitter.err = meshcore.ErrTrackingDifferentTarget
+	conflict := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(conflict, httptest.NewRequest(http.MethodPost, "/api/meshcore/tracking/start", strings.NewReader(`{"publicKey":"`+key+`"}`)))
+	if conflict.Code != http.StatusConflict || !strings.Contains(conflict.Body.String(), `"outcome":"tracking_active"`) {
+		t.Fatalf("conflict status=%d body=%s", conflict.Code, conflict.Body.String())
+	}
 }
 
 func (r *recordingPairingSubmitter) SubmitPairingCode(_ context.Context, code string) error {

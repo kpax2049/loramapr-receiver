@@ -64,6 +64,15 @@ type MeshCoreTelemetryRequester interface {
 	RequestMeshCoreTelemetry(context.Context, string) (meshcore.TelemetryResult, error)
 }
 
+// MeshCoreTrackingController is an explicitly temporary local test harness.
+// Production ownership will move to LoRaMapr Session lifecycle in the next
+// milestone, while this interface keeps the portal out of radio scheduling.
+type MeshCoreTrackingController interface {
+	StartMeshCoreTracking(context.Context, string) (meshcore.TrackingStatus, error)
+	StopMeshCoreTracking(context.Context) (meshcore.TrackingStatus, error)
+	MeshCoreTrackingStatus(context.Context) (meshcore.TrackingStatus, error)
+}
+
 type Server struct {
 	addr              string
 	status            StatusProvider
@@ -72,6 +81,7 @@ type Server struct {
 	outboxOps         NormalizedOutboxOperator
 	meshcoreBLE       MeshCoreBLEPairing
 	meshcoreTelemetry MeshCoreTelemetryRequester
+	meshcoreTracking  MeshCoreTrackingController
 	logger            *slog.Logger
 	templates         map[string]*template.Template
 	httpSrv           *http.Server
@@ -137,6 +147,10 @@ func New(addr string, statusProvider StatusProvider, pairing PairingCodeSubmitte
 	if requester, ok := pairing.(MeshCoreTelemetryRequester); ok {
 		meshcoreTelemetry = requester
 	}
+	var meshcoreTracking MeshCoreTrackingController
+	if controller, ok := pairing.(MeshCoreTrackingController); ok {
+		meshcoreTracking = controller
+	}
 
 	s := &Server{
 		addr:              addr,
@@ -146,6 +160,7 @@ func New(addr string, statusProvider StatusProvider, pairing PairingCodeSubmitte
 		outboxOps:         outboxOps,
 		meshcoreBLE:       meshcoreBLE,
 		meshcoreTelemetry: meshcoreTelemetry,
+		meshcoreTracking:  meshcoreTracking,
 		logger:            logger.With("component", "webportal"),
 		templates:         templates,
 	}
@@ -163,6 +178,9 @@ func New(addr string, statusProvider StatusProvider, pairing PairingCodeSubmitte
 	mux.HandleFunc("/api/meshcore/ble/pair", s.handleMeshCoreBLEPair)
 	mux.HandleFunc("/api/meshcore/ble/forget", s.handleMeshCoreBLEForget)
 	mux.HandleFunc("/api/meshcore/telemetry/request", s.handleMeshCoreTelemetryRequest)
+	mux.HandleFunc("/api/meshcore/tracking/start", s.handleMeshCoreTrackingStart)
+	mux.HandleFunc("/api/meshcore/tracking/stop", s.handleMeshCoreTrackingStop)
+	mux.HandleFunc("/api/meshcore/tracking/status", s.handleMeshCoreTrackingStatus)
 	mux.Handle("/static/", http.StripPrefix("/static/", portalStaticHandler()))
 	mux.HandleFunc("/pairing", s.routePairing)
 	mux.HandleFunc("/reset", s.routeReset)
@@ -516,6 +534,75 @@ func (s *Server) handleMeshCoreTelemetryRequest(w http.ResponseWriter, r *http.R
 		statusCode, outcome = http.StatusBadGateway, "invalid_response"
 	}
 	writeJSON(w, statusCode, map[string]string{"outcome": outcome, "error": err.Error()})
+}
+
+func (s *Server) handleMeshCoreTrackingStart(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", http.MethodPost)
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.meshcoreTracking == nil {
+		http.Error(w, "MeshCore tracking backend is not available", http.StatusServiceUnavailable)
+		return
+	}
+	var request struct {
+		PublicKey string `json:"publicKey"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		http.Error(w, "invalid JSON body", http.StatusBadRequest)
+		return
+	}
+	tracking, err := s.meshcoreTracking.StartMeshCoreTracking(r.Context(), request.PublicKey)
+	if err == nil {
+		writeJSON(w, http.StatusAccepted, tracking)
+		return
+	}
+	if errors.Is(err, meshcore.ErrInvalidTelemetryTarget) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"outcome": "invalid_target", "error": err.Error()})
+		return
+	}
+	if errors.Is(err, meshcore.ErrTrackingAlreadyActive) || errors.Is(err, meshcore.ErrTrackingDifferentTarget) {
+		writeJSON(w, http.StatusConflict, map[string]any{"outcome": "tracking_active", "tracking": tracking, "error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusServiceUnavailable, map[string]string{"outcome": "tracking_unavailable", "error": err.Error()})
+}
+
+func (s *Server) handleMeshCoreTrackingStop(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", http.MethodPost)
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.meshcoreTracking == nil {
+		http.Error(w, "MeshCore tracking backend is not available", http.StatusServiceUnavailable)
+		return
+	}
+	tracking, err := s.meshcoreTracking.StopMeshCoreTracking(r.Context())
+	if err != nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"outcome": "tracking_unavailable", "error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, tracking)
+}
+
+func (s *Server) handleMeshCoreTrackingStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", http.MethodGet)
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.meshcoreTracking == nil {
+		http.Error(w, "MeshCore tracking backend is not available", http.StatusServiceUnavailable)
+		return
+	}
+	tracking, err := s.meshcoreTracking.MeshCoreTrackingStatus(r.Context())
+	if err != nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"outcome": "tracking_unavailable", "error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, tracking)
 }
 
 func writeJSON(w http.ResponseWriter, status int, value any) {

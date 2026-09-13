@@ -96,25 +96,26 @@ type Service struct {
 }
 
 type Container struct {
-	Config          config.Config
-	Logger          *slog.Logger
-	State           *state.Store
-	Status          *status.Model
-	Cloud           CloudClient
-	Pairing         *pairing.Manager
-	Meshtastic      meshtastic.Adapter
-	MeshCore        *meshcore.Adapter
-	MeshCoreBLE     *meshcore.BLEPairingBackend
-	Adapters        *protocoladapter.Manager
-	SerialLeases    *protocoladapter.SerialLeaseRegistry
-	SerialReleases  []func()
-	HomeAutoSession *homeautosession.Module
-	AdapterEvents   <-chan protocoladapter.Event
-	OutboxStore     *outbox.Store
-	OutboxEngine    *outbox.Engine
-	OutboxResults   <-chan outbox.StageResult
-	Normalized      *receiverevents.Dispatcher
-	Portal          *webportal.Server
+	Config           config.Config
+	Logger           *slog.Logger
+	State            *state.Store
+	Status           *status.Model
+	Cloud            CloudClient
+	Pairing          *pairing.Manager
+	Meshtastic       meshtastic.Adapter
+	MeshCore         *meshcore.Adapter
+	MeshCoreBLE      *meshcore.BLEPairingBackend
+	MeshCoreTracking *meshcore.TrackingController
+	Adapters         *protocoladapter.Manager
+	SerialLeases     *protocoladapter.SerialLeaseRegistry
+	SerialReleases   []func()
+	HomeAutoSession  *homeautosession.Module
+	AdapterEvents    <-chan protocoladapter.Event
+	OutboxStore      *outbox.Store
+	OutboxEngine     *outbox.Engine
+	OutboxResults    <-chan outbox.StageResult
+	Normalized       *receiverevents.Dispatcher
+	Portal           *webportal.Server
 }
 
 type steadyState struct {
@@ -348,6 +349,13 @@ func New(cfg config.Config, logger *slog.Logger) (*Service, error) {
 		cloud,
 	)
 	svc.applyHomeAutoLocalFallbackConfig(homeAutoConfigApplyLocalStartup, "")
+	// M7A is intentionally wired through this service seam: the controller
+	// invokes the same request-and-stage path as manual telemetry. A future
+	// cloud Session lifecycle can own Start/Stop without changing radio or
+	// normalized-event semantics.
+	if meshCoreEnabled {
+		svc.container.MeshCoreTracking = meshcore.NewTrackingController(svc.RequestMeshCoreTelemetry, meshcore.DefaultTrackingPolicy(), logger)
+	}
 	svc.container.Portal = webportal.New(cfg.Portal.BindAddress, svc, svc, logger.With("component", "webportal"))
 	svc.configureInitialReadiness(current.Pairing.Phase)
 	return svc, nil
@@ -378,6 +386,9 @@ func (s *Service) Run(ctx context.Context) (runErr error) {
 	}
 	c.AdapterEvents = adapterEvents
 	defer func() {
+		if c.MeshCoreTracking != nil {
+			c.MeshCoreTracking.Stop()
+		}
 		if err := c.Adapters.Close(); err != nil {
 			c.Logger.Warn("protocol adapter shutdown failed", "err", err)
 			runErr = errors.Join(runErr, err)
@@ -504,6 +515,31 @@ func (s *Service) RequestMeshCoreTelemetry(ctx context.Context, publicKey string
 		return result, err
 	}
 	return result, nil
+}
+
+// StartMeshCoreTracking and StopMeshCoreTracking are a temporary local portal
+// harness for M7A. They deliberately delegate to an ephemeral controller so
+// the next milestone can bind the exact same lifecycle to cloud Session start
+// and stop; they are not an independent always-on tracking subsystem.
+func (s *Service) StartMeshCoreTracking(_ context.Context, publicKey string) (meshcore.TrackingStatus, error) {
+	if s.container == nil || s.container.MeshCoreTracking == nil {
+		return meshcore.TrackingStatus{}, meshcore.ErrTrackingUnavailable
+	}
+	return s.container.MeshCoreTracking.Start(publicKey)
+}
+
+func (s *Service) StopMeshCoreTracking(_ context.Context) (meshcore.TrackingStatus, error) {
+	if s.container == nil || s.container.MeshCoreTracking == nil {
+		return meshcore.TrackingStatus{}, meshcore.ErrTrackingUnavailable
+	}
+	return s.container.MeshCoreTracking.Stop(), nil
+}
+
+func (s *Service) MeshCoreTrackingStatus(_ context.Context) (meshcore.TrackingStatus, error) {
+	if s.container == nil || s.container.MeshCoreTracking == nil {
+		return meshcore.TrackingStatus{}, meshcore.ErrTrackingUnavailable
+	}
+	return s.container.MeshCoreTracking.Status(), nil
 }
 
 func (s *Service) ResolveNormalizedDeliveryCollision(_ context.Context, deliveryID string) error {
