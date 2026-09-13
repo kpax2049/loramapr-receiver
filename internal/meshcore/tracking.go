@@ -98,16 +98,36 @@ func (p TrackingPolicy) normalized() TrackingPolicy {
 // TrackingStatus is ephemeral operational state. The future Session lifecycle
 // owner can bind directly to Start and Stop; it must not be persisted.
 type TrackingStatus struct {
-	Active                 bool        `json:"active"`
-	TargetPublicKey        string      `json:"targetPublicKey,omitempty"`
-	MotionState            MotionState `json:"motionState"`
-	EstimatedSpeedKmh      *float64    `json:"estimatedSpeedKmh"`
-	CurrentIntervalSeconds int64       `json:"currentIntervalSeconds"`
-	LastRequestAt          *time.Time  `json:"lastRequestAt"`
-	LastResponseAt         *time.Time  `json:"lastResponseAt"`
-	NextRequestAt          *time.Time  `json:"nextRequestAt"`
-	ConsecutiveFailures    int         `json:"consecutiveFailures"`
-	LastError              *string     `json:"lastError"`
+	Active                 bool           `json:"active"`
+	TargetPublicKey        string         `json:"targetPublicKey,omitempty"`
+	MotionState            MotionState    `json:"motionState"`
+	EstimatedSpeedKmh      *float64       `json:"estimatedSpeedKmh"`
+	CurrentIntervalSeconds int64          `json:"currentIntervalSeconds"`
+	LastRequestAt          *time.Time     `json:"lastRequestAt"`
+	LastResponseAt         *time.Time     `json:"lastResponseAt"`
+	NextRequestAt          *time.Time     `json:"nextRequestAt"`
+	ConsecutiveFailures    int            `json:"consecutiveFailures"`
+	LastError              *string        `json:"lastError"`
+	RecentPolls            []TrackingPoll `json:"recentPolls"`
+}
+
+const recentPollLimit = 30
+
+// TrackingPoll is bounded, receiver-local route observability for field
+// validation. ResponseRoute remains nil unless a future Companion payload
+// proves a return route.
+type TrackingPoll struct {
+	RequestAt            time.Time      `json:"requestAt"`
+	ResponseAt           *time.Time     `json:"responseAt,omitempty"`
+	Outcome              string         `json:"outcome"`
+	Error                *string        `json:"error,omitempty"`
+	EstimatedSpeedKmh    *float64       `json:"estimatedSpeedKmh"`
+	MotionState          MotionState    `json:"motionState"`
+	IntervalSeconds      int64          `json:"intervalSeconds"`
+	RouteAttempt         RouteEvidence  `json:"routeAttempt"`
+	ResponseRoute        *RouteEvidence `json:"responseRoute"`
+	ResponseRouteUnknown bool           `json:"responseRouteUnknown"`
+	ConsecutiveFailures  int            `json:"consecutiveFailures"`
 }
 
 type telemetryRequester func(context.Context, string) (TelemetryResult, error)
@@ -140,7 +160,7 @@ func NewTrackingController(request func(context.Context, string) (TelemetryResul
 		logger = slog.Default()
 	}
 	p := policy.normalized()
-	return &TrackingController{request: request, policy: p, logger: logger.With("component", "meshcore_tracking"), now: func() time.Time { return time.Now().UTC() }, status: TrackingStatus{MotionState: MotionUnknown, CurrentIntervalSeconds: int64(p.UnknownInterval / time.Second)}}
+	return &TrackingController{request: request, policy: p, logger: logger.With("component", "meshcore_tracking"), now: func() time.Time { return time.Now().UTC() }, status: TrackingStatus{MotionState: MotionUnknown, CurrentIntervalSeconds: int64(p.UnknownInterval / time.Second), RecentPolls: []TrackingPoll{}}}
 }
 
 func (c *TrackingController) Start(publicKey string) (TrackingStatus, error) {
@@ -163,7 +183,7 @@ func (c *TrackingController) Start(publicKey string) (TrackingStatus, error) {
 	c.generation++
 	generation := c.generation
 	c.fix, c.pending, c.pendingCount = nil, MotionUnknown, 0
-	c.status = TrackingStatus{Active: true, TargetPublicKey: publicKey, MotionState: MotionUnknown, CurrentIntervalSeconds: int64(c.policy.UnknownInterval / time.Second)}
+	c.status = TrackingStatus{Active: true, TargetPublicKey: publicKey, MotionState: MotionUnknown, CurrentIntervalSeconds: int64(c.policy.UnknownInterval / time.Second), RecentPolls: []TrackingPoll{}}
 	now := c.now().UTC()
 	c.status.NextRequestAt = timePtr(now)
 	c.logger.Info("MeshCore tracking started", "target_public_key", publicKey)
@@ -214,7 +234,29 @@ func (c *TrackingController) statusCopyLocked() TrackingStatus {
 		value := *c.status.LastError
 		result.LastError = &value
 	}
+	result.RecentPolls = make([]TrackingPoll, len(c.status.RecentPolls))
+	for i, poll := range c.status.RecentPolls {
+		result.RecentPolls[i] = copyTrackingPoll(poll)
+	}
 	return result
+}
+
+func copyTrackingPoll(poll TrackingPoll) TrackingPoll {
+	poll.ResponseAt = copyTime(poll.ResponseAt)
+	poll.RouteAttempt = poll.RouteAttempt.copy()
+	if poll.ResponseRoute != nil {
+		value := poll.ResponseRoute.copy()
+		poll.ResponseRoute = &value
+	}
+	if poll.EstimatedSpeedKmh != nil {
+		value := *poll.EstimatedSpeedKmh
+		poll.EstimatedSpeedKmh = &value
+	}
+	if poll.Error != nil {
+		value := *poll.Error
+		poll.Error = &value
+	}
+	return poll
 }
 
 func (c *TrackingController) run(ctx context.Context, target string, generation uint64) {
@@ -254,14 +296,22 @@ func (c *TrackingController) poll(target string, generation uint64) {
 	c.mu.Unlock()
 	c.logger.Info("MeshCore tracking poll initiated", "target_public_key", target)
 	result, err := c.request(context.Background(), target)
+	requestAt := now
+	if !result.RequestedAt.IsZero() {
+		requestAt = result.RequestedAt.UTC()
+	}
 	if err != nil {
-		c.recordFailure(target, generation, err)
+		c.recordFailure(target, generation, result, err, requestAt)
 		return
 	}
-	c.recordSuccess(target, generation, result)
+	c.recordSuccess(target, generation, result, requestAt)
 }
 
-func (c *TrackingController) recordSuccess(target string, generation uint64, result TelemetryResult) {
+func (c *TrackingController) recordSuccess(target string, generation uint64, result TelemetryResult, requestTimes ...time.Time) {
+	requestAt := result.ReceivedAt.UTC()
+	if len(requestTimes) > 0 {
+		requestAt = requestTimes[0].UTC()
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if !c.currentLocked(target, generation) {
@@ -273,7 +323,17 @@ func (c *TrackingController) recordSuccess(target string, generation uint64, res
 	c.status.ConsecutiveFailures, c.status.LastError = 0, nil
 	c.applyFixLocked(result)
 	c.status.CurrentIntervalSeconds = int64(c.intervalForLocked() / time.Second)
-	c.logger.Info("MeshCore tracking poll succeeded", "target_public_key", target)
+	c.appendPollLocked(TrackingPoll{
+		RequestAt: requestAt, ResponseAt: timePtr(result.ReceivedAt), Outcome: "success",
+		EstimatedSpeedKmh: copyFloat64(c.status.EstimatedSpeedKmh), MotionState: c.status.MotionState,
+		IntervalSeconds: c.status.CurrentIntervalSeconds, RouteAttempt: routeEvidenceOrUnknown(result.RouteAttempt),
+		ResponseRouteUnknown: true, ConsecutiveFailures: c.status.ConsecutiveFailures,
+	})
+	c.logger.Info("MeshCore tracking poll succeeded", "target_public_key", target,
+		"elapsed", result.ReceivedAt.Sub(requestAt).String(), "motion_state", c.status.MotionState,
+		"estimated_speed_kmh", c.status.EstimatedSpeedKmh, "route_mode", routeEvidenceOrUnknown(result.RouteAttempt).Mode,
+		"path_length", routeEvidenceOrUnknown(result.RouteAttempt).PathLength, "route_source", routeEvidenceOrUnknown(result.RouteAttempt).Source,
+		"response_route_unknown", true)
 	if c.status.CurrentIntervalSeconds != previousInterval {
 		c.logger.Info("MeshCore tracking interval changed", "target_public_key", target, "interval_seconds", c.status.CurrentIntervalSeconds)
 	}
@@ -282,7 +342,11 @@ func (c *TrackingController) recordSuccess(target string, generation uint64, res
 	}
 }
 
-func (c *TrackingController) recordFailure(target string, generation uint64, err error) {
+func (c *TrackingController) recordFailure(target string, generation uint64, result TelemetryResult, err error, requestTimes ...time.Time) {
+	requestAt := c.now().UTC()
+	if len(requestTimes) > 0 {
+		requestAt = requestTimes[0].UTC()
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if !c.currentLocked(target, generation) {
@@ -303,12 +367,52 @@ func (c *TrackingController) recordFailure(target string, generation uint64, err
 	}
 	previous = maxDuration(previous, c.policy.MinimumInterval)
 	c.status.CurrentIntervalSeconds = int64(previous / time.Second)
-	c.logger.Warn("MeshCore tracking poll failed", "target_public_key", target, "err", err, "consecutive_failures", c.status.ConsecutiveFailures)
+	c.appendPollLocked(TrackingPoll{
+		RequestAt: requestAt, Outcome: trackingOutcome(err), Error: stringPtr(message),
+		EstimatedSpeedKmh: copyFloat64(c.status.EstimatedSpeedKmh), MotionState: c.status.MotionState,
+		IntervalSeconds: c.status.CurrentIntervalSeconds, RouteAttempt: routeEvidenceOrUnknown(result.RouteAttempt),
+		ResponseRouteUnknown: true, ConsecutiveFailures: c.status.ConsecutiveFailures,
+	})
+	c.logger.Warn("MeshCore tracking poll timed out", "target_public_key", target, "err", err,
+		"route_mode", routeEvidenceOrUnknown(result.RouteAttempt).Mode, "path_length", routeEvidenceOrUnknown(result.RouteAttempt).PathLength,
+		"route_source", routeEvidenceOrUnknown(result.RouteAttempt).Source, "consecutive_failures", c.status.ConsecutiveFailures,
+		"next_backoff", previous.String())
 	c.logger.Info("MeshCore tracking backoff changed", "target_public_key", target, "interval", previous.String())
 	if errors.Is(err, ErrTelemetryAdapterDisconnected) && !wasUnavailable {
 		c.logger.Warn("MeshCore tracking adapter unavailable", "target_public_key", target)
 	}
 }
+
+func (c *TrackingController) appendPollLocked(poll TrackingPoll) {
+	c.status.RecentPolls = append(c.status.RecentPolls, copyTrackingPoll(poll))
+	if len(c.status.RecentPolls) > recentPollLimit {
+		c.status.RecentPolls = append([]TrackingPoll(nil), c.status.RecentPolls[len(c.status.RecentPolls)-recentPollLimit:]...)
+	}
+}
+
+func trackingOutcome(err error) string {
+	if errors.Is(err, ErrTelemetryTimeout) || errors.Is(err, context.DeadlineExceeded) {
+		return "timeout"
+	}
+	return "error"
+}
+
+func copyFloat64(value *float64) *float64 {
+	if value == nil {
+		return nil
+	}
+	copy := *value
+	return &copy
+}
+
+func routeEvidenceOrUnknown(evidence RouteEvidence) RouteEvidence {
+	if evidence.Mode == "" {
+		return unknownRouteEvidence("not_available")
+	}
+	return evidence.copy()
+}
+
+func stringPtr(value string) *string { return &value }
 
 func (c *TrackingController) applyFixLocked(result TelemetryResult) {
 	lat, lon := result.Telemetry.Latitude, result.Telemetry.Longitude

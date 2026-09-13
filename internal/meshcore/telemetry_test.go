@@ -74,6 +74,11 @@ func TestCompanionSessionRecognizesTelemetryResponseAndSent(t *testing.T) {
 	if err != nil || result.Push == nil || result.Push.Opcode != PushTelemetryResponse {
 		t.Fatalf("unexpected telemetry push handling: result=%#v err=%v", result, err)
 	}
+	contact := telemetryContactFrame(t, trackingKey, 0, nil)
+	result, err = session.Handle(contact)
+	if err != nil || result.Response == nil || result.Response.Code != ResponseContact {
+		t.Fatalf("unexpected contact response handling: result=%#v err=%v", result, err)
+	}
 }
 
 func TestAdapterTelemetryRequestCorrelatesOnlyInFlightFullTarget(t *testing.T) {
@@ -93,12 +98,23 @@ func TestAdapterTelemetryRequestCorrelatesOnlyInFlightFullTarget(t *testing.T) {
 	select {
 	case frame := <-link.writes:
 		target := mustTelemetryTarget(t, key)
+		if len(frame) != 33 || frame[0] != CommandGetContactByKey || !bytes.Equal(frame[1:], target[:]) {
+			t.Fatalf("unexpected route snapshot request: %x", frame)
+		}
+		adapter.handleTelemetryContactResponse(telemetryContactFrame(t, key, 2, []byte{0xaa, 0xbb}))
+	case <-time.After(time.Second):
+		t.Fatal("route snapshot request was not written")
+	}
+	select {
+	case frame := <-link.writes:
+		target := mustTelemetryTarget(t, key)
 		if len(frame) != 36 || !bytes.Equal(frame[4:], target[:]) {
-			t.Fatalf("unexpected write: %x", frame)
+			t.Fatalf("unexpected telemetry request: %x", frame)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("telemetry request was not written")
 	}
+	adapter.handleTelemetryCommandResponse(ResponseFrame{Code: ResponseSent, Payload: []byte{ResponseSent, 0, 0, 0, 0, 0, 0, 0, 0, 0}})
 	if _, err := adapter.RequestTelemetry(context.Background(), key); !errors.Is(err, ErrTelemetryRequestInFlight) {
 		t.Fatalf("second request error=%v, want in-flight", err)
 	}
@@ -106,7 +122,7 @@ func TestAdapterTelemetryRequestCorrelatesOnlyInFlightFullTarget(t *testing.T) {
 	adapter.handleTelemetryResponse(frame, time.Date(2026, 9, 12, 10, 0, 0, 0, time.UTC))
 	select {
 	case completion := <-resultCh:
-		if completion.err != nil || completion.result.TargetPublicKey != key || completion.result.SourcePrefix != key[:12] || completion.result.Telemetry.Voltage == nil || *completion.result.Telemetry.Voltage != 4.09 || !bytes.Equal(completion.result.RawFrame, frame) {
+		if completion.err != nil || completion.result.TargetPublicKey != key || completion.result.SourcePrefix != key[:12] || completion.result.Telemetry.Voltage == nil || *completion.result.Telemetry.Voltage != 4.09 || completion.result.RouteAttempt.Mode != RouteModeExplicitPath || completion.result.RouteAttempt.Source != "contact_out_path+response_sent" || !completion.result.ResponseRouteUnknown || !bytes.Equal(completion.result.RawFrame, frame) {
 			t.Fatalf("unexpected completion: %#v err=%v", completion.result, completion.err)
 		}
 	case <-time.After(time.Second):
@@ -153,6 +169,8 @@ func TestAdapterTelemetryRequestFailsClosedOnMismatchedPrefix(t *testing.T) {
 	resultCh := make(chan error, 1)
 	go func() { _, err := adapter.RequestTelemetry(context.Background(), key); resultCh <- err }()
 	<-link.writes
+	adapter.handleTelemetryContactResponse(telemetryContactFrame(t, key, 0, nil))
+	<-link.writes
 	adapter.handleTelemetryResponse([]byte{PushTelemetryResponse, 0, 9, 9, 9, 9, 9, 9, 1, 120, 90}, time.Now())
 	select {
 	case err := <-resultCh:
@@ -162,6 +180,17 @@ func TestAdapterTelemetryRequestFailsClosedOnMismatchedPrefix(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("mismatched response did not fail request")
 	}
+}
+
+func telemetryContactFrame(t *testing.T, key string, pathEncoding byte, path []byte) []byte {
+	t.Helper()
+	target := mustTelemetryTarget(t, key)
+	frame := make([]byte, newAdvertLength)
+	frame[0] = ResponseContact
+	copy(frame[1:], target[:])
+	frame[35] = pathEncoding
+	copy(frame[36:100], path)
+	return frame
 }
 
 func appendInt24(payload []byte, value int32) []byte {

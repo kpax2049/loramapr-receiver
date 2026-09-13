@@ -13,9 +13,11 @@ const (
 
 	CommandAppStart             = byte(0x01)
 	CommandDeviceQuery          = byte(0x16)
+	CommandGetContactByKey      = byte(0x1e)
 	CommandSendTelemetryRequest = byte(0x27)
 
 	ResponseError      = byte(0x01)
+	ResponseContact    = byte(0x03)
 	ResponseSelfInfo   = byte(0x05)
 	ResponseSent       = byte(0x06)
 	ResponseDeviceInfo = byte(0x0D)
@@ -266,7 +268,7 @@ func (s *CompanionSession) Handle(payload []byte) (HandleResult, error) {
 		if err := validateCapturedPush(payload); err != nil {
 			return HandleResult{}, err
 		}
-		if payload[0] == ResponseError || payload[0] == ResponseSent {
+		if payload[0] == ResponseError || payload[0] == ResponseSent || payload[0] == ResponseContact {
 			if err := validateCommandResponse(payload); err != nil {
 				return HandleResult{}, err
 			}
@@ -296,6 +298,11 @@ func validateCommandResponse(payload []byte) error {
 	}
 	if payload[0] == ResponseSent && len(payload) < 10 {
 		return fmt.Errorf("%w: SENT got %d bytes, need at least 10", ErrInvalidPush, len(payload))
+	}
+	// writeContactRespFrame emits a fixed 148-byte payload. We only parse the
+	// public key and route fields, but validate the complete pinned layout.
+	if payload[0] == ResponseContact && len(payload) != newAdvertLength {
+		return fmt.Errorf("%w: CONTACT got %d bytes, want %d", ErrInvalidPush, len(payload), newAdvertLength)
 	}
 	return nil
 }

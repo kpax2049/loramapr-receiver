@@ -16,6 +16,7 @@ const (
 	telemetryPrefixLength    = 6
 	defaultTelemetryTimeout  = 45 * time.Second
 	minimumTelemetryTimeout  = time.Second
+	routeSnapshotTimeout     = 2 * time.Second
 )
 
 var (
@@ -44,11 +45,14 @@ type Telemetry struct {
 // TelemetryResult is deliberately an observation from a prefix-correlated
 // request, not an authenticated identity assertion.
 type TelemetryResult struct {
-	TargetPublicKey string    `json:"targetPublicKey"`
-	SourcePrefix    string    `json:"sourcePrefix"`
-	ReceivedAt      time.Time `json:"receivedAt"`
-	Telemetry       Telemetry `json:"telemetry"`
-	RawFrame        []byte    `json:"-"`
+	TargetPublicKey      string        `json:"targetPublicKey"`
+	RequestedAt          time.Time     `json:"requestedAt"`
+	SourcePrefix         string        `json:"sourcePrefix"`
+	ReceivedAt           time.Time     `json:"receivedAt"`
+	Telemetry            Telemetry     `json:"telemetry"`
+	RouteAttempt         RouteEvidence `json:"routeAttempt"`
+	ResponseRouteUnknown bool          `json:"responseRouteUnknown"`
+	RawFrame             []byte        `json:"-"`
 }
 
 type telemetryCompletion struct {
@@ -62,7 +66,11 @@ type telemetryRequest struct {
 	timer  *time.Timer
 	// suggestedTimer is separate from the initial bounded watchdog so a timer
 	// callback racing with RESP_CODE_SENT cannot accidentally extend a request.
-	suggestedTimer *time.Timer
+	suggestedTimer  *time.Timer
+	routeAttempt    RouteEvidence
+	routeDone       chan RouteEvidence
+	awaitingContact bool
+	requestedAt     time.Time
 }
 
 func parseTelemetryTarget(value string) ([telemetryPublicKeyLength]byte, error) {
@@ -84,6 +92,13 @@ func BuildTelemetryRequest(target [telemetryPublicKeyLength]byte) []byte {
 	frame := make([]byte, 4+len(target))
 	frame[0] = CommandSendTelemetryRequest
 	copy(frame[4:], target[:])
+	return frame
+}
+
+func buildContactByKeyRequest(target [telemetryPublicKeyLength]byte) []byte {
+	frame := make([]byte, 1+len(target))
+	frame[0] = CommandGetContactByKey
+	copy(frame[1:], target[:])
 	return frame
 }
 
@@ -114,13 +129,28 @@ func (a *Adapter) RequestTelemetry(ctx context.Context, publicKey string) (Telem
 		return TelemetryResult{}, ErrTelemetryAdapterDisconnected
 	}
 
-	request := &telemetryRequest{target: target, done: make(chan telemetryCompletion, 1)}
+	request := &telemetryRequest{
+		target:       target,
+		done:         make(chan telemetryCompletion, 1),
+		routeAttempt: unknownRouteEvidence("contact_out_path_unavailable"),
+	}
 	request.timer = time.AfterFunc(defaultTelemetryTimeout, func() {
 		a.finishTelemetry(request, TelemetryResult{}, ErrTelemetryTimeout)
 	})
 	a.telemetry = request
 	a.telemetryMu.Unlock()
 
+	// The contact record is Companion-owned state. Snapshot it immediately
+	// before the telemetry command so the attempt can distinguish cached
+	// zero-hop, cached routed-path, and flood selection. Failure to obtain the
+	// optional snapshot never changes telemetry polling policy or blocks a send.
+	a.captureTelemetryRoute(ctx, link, request)
+	if !a.currentTelemetry(request) {
+		completion := <-request.done
+		return completion.result, completion.err
+	}
+
+	a.setTelemetryRequestedAt(request, time.Now().UTC())
 	if err := link.WriteFrame(ctx, BuildTelemetryRequest(target)); err != nil {
 		wrapped := fmt.Errorf("%w: %v", ErrTelemetryAdapterDisconnected, err)
 		a.finishTelemetry(request, TelemetryResult{}, wrapped)
@@ -133,6 +163,72 @@ func (a *Adapter) RequestTelemetry(ctx context.Context, publicKey string) (Telem
 	case <-ctx.Done():
 		a.finishTelemetry(request, TelemetryResult{}, ctx.Err())
 		return TelemetryResult{}, ctx.Err()
+	}
+}
+
+func (a *Adapter) setTelemetryRequestedAt(request *telemetryRequest, at time.Time) {
+	a.telemetryMu.Lock()
+	defer a.telemetryMu.Unlock()
+	if a.telemetry == request {
+		request.requestedAt = at.UTC()
+	}
+}
+
+func (a *Adapter) captureTelemetryRoute(ctx context.Context, link CompanionLink, request *telemetryRequest) {
+	if request == nil || !a.currentTelemetry(request) {
+		return
+	}
+	a.telemetryMu.Lock()
+	if a.telemetry != request {
+		a.telemetryMu.Unlock()
+		return
+	}
+	request.awaitingContact = true
+	request.routeDone = make(chan RouteEvidence, 1)
+	routeDone := request.routeDone
+	a.telemetryMu.Unlock()
+	if err := link.WriteFrame(ctx, buildContactByKeyRequest(request.target)); err != nil {
+		a.completeRouteSnapshot(request, unknownRouteEvidence("contact_out_path_unavailable"))
+		return
+	}
+	timer := time.NewTimer(routeSnapshotTimeout)
+	defer timer.Stop()
+	select {
+	case evidence := <-routeDone:
+		a.setRouteAttempt(request, evidence)
+	case <-timer.C:
+		a.completeRouteSnapshot(request, unknownRouteEvidence("contact_out_path_unavailable"))
+	case <-ctx.Done():
+		a.completeRouteSnapshot(request, unknownRouteEvidence("contact_out_path_unavailable"))
+	}
+}
+
+func (a *Adapter) currentTelemetry(request *telemetryRequest) bool {
+	a.telemetryMu.Lock()
+	defer a.telemetryMu.Unlock()
+	return a.telemetry == request
+}
+
+func (a *Adapter) setRouteAttempt(request *telemetryRequest, evidence RouteEvidence) {
+	a.telemetryMu.Lock()
+	defer a.telemetryMu.Unlock()
+	if a.telemetry == request {
+		request.routeAttempt = evidence.copy()
+	}
+}
+
+func (a *Adapter) completeRouteSnapshot(request *telemetryRequest, evidence RouteEvidence) {
+	a.telemetryMu.Lock()
+	if a.telemetry != request || !request.awaitingContact {
+		a.telemetryMu.Unlock()
+		return
+	}
+	request.awaitingContact = false
+	routeDone := request.routeDone
+	a.telemetryMu.Unlock()
+	select {
+	case routeDone <- evidence:
+	default:
 	}
 }
 
@@ -155,11 +251,36 @@ func (a *Adapter) handleTelemetryResponse(frame []byte, receivedAt time.Time) {
 		return
 	}
 	result.TargetPublicKey = hex.EncodeToString(request.target[:])
+	result.RequestedAt = request.requestedAt
 	a.telemetryMu.Unlock()
 	a.finishTelemetry(request, result, nil)
 }
 
 func (a *Adapter) handleTelemetryCommandResponse(frame ResponseFrame) {
+	if frame.Code == ResponseContact {
+		a.handleTelemetryContactResponse(frame.Payload)
+		return
+	}
+	a.telemetryMu.Lock()
+	request := a.telemetry
+	if request != nil && request.awaitingContact {
+		// A contact lookup error is only missing route observability. It must
+		// not replace the telemetry request with a fabricated firmware failure.
+		a.telemetryMu.Unlock()
+		a.completeRouteSnapshot(request, unknownRouteEvidence("contact_out_path_unavailable"))
+		return
+	}
+	if request != nil && frame.Code == ResponseSent && len(frame.Payload) >= 2 {
+		if frame.Payload[1] != 0 {
+			request.routeAttempt = RouteEvidence{Mode: RouteModeFlood, Source: "response_sent"}
+		} else if request.routeAttempt.Mode == RouteModeZeroHop || request.routeAttempt.Mode == RouteModeExplicitPath {
+			request.routeAttempt.Source = "contact_out_path+response_sent"
+		} else {
+			// RESP_CODE_SENT calls both zero-hop and cached routed sends "direct".
+			request.routeAttempt = unknownRouteEvidence("response_sent_direct_path_unavailable")
+		}
+	}
+	a.telemetryMu.Unlock()
 	switch frame.Code {
 	case ResponseError:
 		a.finishCurrentTelemetry(TelemetryResult{}, ErrTelemetryFirmware)
@@ -187,6 +308,21 @@ func (a *Adapter) handleTelemetryCommandResponse(frame ResponseFrame) {
 	}
 }
 
+func (a *Adapter) handleTelemetryContactResponse(frame []byte) {
+	if len(frame) != newAdvertLength || frame[0] != ResponseContact {
+		return
+	}
+	a.telemetryMu.Lock()
+	request := a.telemetry
+	if request == nil || !request.awaitingContact || !bytes.Equal(frame[1:1+telemetryPublicKeyLength], request.target[:]) {
+		a.telemetryMu.Unlock()
+		return
+	}
+	a.telemetryMu.Unlock()
+	// [code][pubkey x32][type][flags][out_path_len][out_path x64]...
+	a.completeRouteSnapshot(request, routeEvidenceFromContactOutPath(frame[35], frame[36:100]))
+}
+
 func (a *Adapter) finishCurrentTelemetry(result TelemetryResult, err error) {
 	a.telemetryMu.Lock()
 	request := a.telemetry
@@ -205,6 +341,12 @@ func (a *Adapter) finishTelemetry(request *telemetryRequest, result TelemetryRes
 		a.telemetryMu.Unlock()
 		return
 	}
+	result.TargetPublicKey = hex.EncodeToString(request.target[:])
+	result.RouteAttempt = request.routeAttempt.copy()
+	// PUSH_CODE_TELEMETRY_RESPONSE contains a source-key prefix and CayenneLPP
+	// payload only. It does not prove its return path, flood/direct mode, or
+	// receiver-local RF metadata.
+	result.ResponseRouteUnknown = true
 	a.telemetry = nil
 	if request.timer != nil {
 		request.timer.Stop()

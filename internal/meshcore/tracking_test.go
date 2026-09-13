@@ -163,12 +163,12 @@ func TestTrackingIgnoresMissingInvalidAndAbsurdGPS(t *testing.T) {
 
 func TestTrackingFailureBackoffCapsAndSuccessfulResponseResets(t *testing.T) {
 	controller := activeTrackingController()
-	controller.recordFailure(trackingKey, 1, ErrTelemetryTimeout)
+	controller.recordFailure(trackingKey, 1, TelemetryResult{}, ErrTelemetryTimeout)
 	if status := controller.Status(); status.ConsecutiveFailures != 1 || status.CurrentIntervalSeconds != 30 {
 		t.Fatalf("first failure=%#v", status)
 	}
 	for i := 0; i < 8; i++ {
-		controller.recordFailure(trackingKey, 1, ErrTelemetryAdapterDisconnected)
+		controller.recordFailure(trackingKey, 1, TelemetryResult{}, ErrTelemetryAdapterDisconnected)
 	}
 	if status := controller.Status(); status.ConsecutiveFailures != 9 || status.CurrentIntervalSeconds != 300 {
 		t.Fatalf("capped backoff=%#v", status)
