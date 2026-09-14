@@ -21,6 +21,7 @@
 - [Pairing and Bootstrap Lifecycle](./pairing-lifecycle.md)
 - [Embedded Home Auto Session (Milestone 4)](./home-auto-session.md)
 - [MeshCore Adaptive Telemetry Polling (M7A)](./meshcore-adaptive-telemetry-polling.md)
+- [MeshCore BLE lifecycle](./meshcore-ble-lifecycle.md)
 - [Multi-Receiver Identity and Guidance](./multi-receiver-identity.md)
 - [Receiver Lifecycle Management](./receiver-lifecycle.md)
 - [Steady-State Cloud Loop](./steady-state.md)

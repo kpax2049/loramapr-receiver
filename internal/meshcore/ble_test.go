@@ -137,6 +137,7 @@ type fakeBLEBackend struct {
 	connection                          *fakeBLEConnection
 	devices                             []BLEDevice
 	pairAddress, pairPin, forgetAddress string
+	disconnectAddress                   string
 	pairErr                             error
 }
 
@@ -148,6 +149,10 @@ func (b *fakeBLEBackend) Connect(_ context.Context, _ BLEConfig) (BLEConnection,
 		return nil, errors.New("no connection")
 	}
 	return b.connection, nil
+}
+func (b *fakeBLEBackend) Disconnect(_ context.Context, cfg BLEConfig) error {
+	b.disconnectAddress = cfg.PeerAddress
+	return nil
 }
 func (b *fakeBLEBackend) Pair(_ context.Context, cfg BLEConfig, pin string) error {
 	b.pairAddress = cfg.PeerAddress

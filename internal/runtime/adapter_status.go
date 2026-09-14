@@ -62,8 +62,10 @@ func statusFromAdapterSnapshot(snapshot protocoladapter.AdapterSnapshot) status.
 		Lifecycle: strings.TrimSpace(snapshot.State), ConnectionState: strings.TrimSpace(snapshot.ConnectionState),
 		Enabled: snapshot.Enabled, Configured: snapshot.Configured, Ready: snapshot.Ready,
 		Transport: strings.TrimSpace(snapshot.Transport), ConfiguredDevice: strings.TrimSpace(snapshot.ConfiguredDevice),
-		Device: strings.TrimSpace(snapshot.Device), ProtocolVersion: strings.TrimSpace(snapshot.ProtocolVersion),
+		ConnectedDevice: strings.TrimSpace(snapshot.ConnectedDevice),
+		Device:          strings.TrimSpace(snapshot.Device), ProtocolVersion: strings.TrimSpace(snapshot.ProtocolVersion),
 		Profile: strings.TrimSpace(snapshot.Profile), ProfileState: strings.TrimSpace(snapshot.ProfileState),
+		ReconnectSuppressed: snapshot.ReconnectSuppressed, ReleasedByUser: snapshot.ReleasedByUser,
 		LastError: strings.TrimSpace(snapshot.LastError), UpdatedAt: updatedAt,
 	}
 }

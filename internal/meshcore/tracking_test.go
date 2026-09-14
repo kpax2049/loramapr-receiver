@@ -3,6 +3,7 @@ package meshcore
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -94,6 +95,40 @@ func TestTrackingNewControllerDoesNotResume(t *testing.T) {
 	}, DefaultTrackingPolicy(), nil)
 	if status := controller.Status(); status.Active || status.TargetPublicKey != "" || status.MotionState != MotionUnknown {
 		t.Fatalf("initial status=%#v", status)
+	}
+}
+
+func TestTrackingStopClearsRouteRecoveryEpisodeState(t *testing.T) {
+	controller := NewTrackingControllerWithRouteRecovery(func(context.Context, string) (TelemetryResult, error) {
+		return TelemetryResult{}, nil
+	}, func(context.Context, string) error { return nil }, DefaultTrackingPolicy(), nil)
+	key := strings.Repeat("a", 64)
+	if _, err := controller.Start(key); err != nil {
+		t.Fatal(err)
+	}
+	controller.mu.Lock()
+	controller.routeFingerprint = "zero_hop:"
+	controller.routeGeneration = 7
+	controller.recoveryEpisodeActive = true
+	controller.pendingRecoveryEvent = "path_reset_acknowledged"
+	now := time.Now().UTC()
+	controller.status.RouteRecoveryState = "recovery_active"
+	controller.status.LastRouteRecoveryEvent = "path_reset_acknowledged"
+	controller.status.RecoveryEpisodeActive = true
+	controller.status.RouteGeneration = 7
+	controller.status.RouteFingerprint = "zero_hop:"
+	controller.status.LastPathUpdateAt = &now
+	controller.status.PathUpdatePending = true
+	controller.mu.Unlock()
+
+	status := controller.Stop()
+	if status.Active || status.RouteRecoveryState != "idle" || status.LastRouteRecoveryEvent != "" || status.RecoveryEpisodeActive || status.RouteGeneration != 0 || status.RouteFingerprint != "" || status.LastPathUpdateAt != nil || status.PathUpdatePending {
+		t.Fatalf("Stop preserved route-recovery state: %#v", status)
+	}
+	controller.mu.RLock()
+	defer controller.mu.RUnlock()
+	if controller.routeFingerprint != "" || controller.routeGeneration != 0 || controller.recoveryEpisodeActive || controller.pendingRecoveryEvent != "" {
+		t.Fatalf("Stop preserved private route-recovery state")
 	}
 }
 

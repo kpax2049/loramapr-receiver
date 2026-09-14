@@ -78,6 +78,7 @@ type BLEDevice struct {
 type BLEBackend interface {
 	Discover(context.Context, string) ([]BLEDevice, error)
 	Connect(context.Context, BLEConfig) (BLEConnection, error)
+	Disconnect(context.Context, BLEConfig) error
 	Pair(context.Context, BLEConfig, string) error
 	Forget(context.Context, BLEConfig) error
 }
@@ -124,6 +125,19 @@ func (t *BLECompanionTransport) Open(ctx context.Context) (CompanionLink, error)
 		return nil, err
 	}
 	return &bleCompanionLink{connection: connection, peer: t.cfg.PeerAddress}, nil
+}
+
+// Disconnect releases the configured BlueZ device without changing its
+// pairing record. It is intentionally available independently of a live
+// CompanionLink so a cancelled connection attempt cannot retain the peer.
+func (t *BLECompanionTransport) Disconnect(ctx context.Context) error {
+	if err := t.cfg.validate(); err != nil {
+		return err
+	}
+	if t.backend == nil {
+		return ErrBLEUnsupported
+	}
+	return t.backend.Disconnect(ctx, t.cfg)
 }
 
 func validateBLEConnection(cfg BLEConfig, connection BLEConnection) error {

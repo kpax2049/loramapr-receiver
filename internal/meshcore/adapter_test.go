@@ -145,6 +145,7 @@ func TestAdapterSnapshotReportsProfileAndConnectionFacts(t *testing.T) {
 
 	adapter.setStatus(func(status *AdapterStatus) {
 		status.State = StateConnected
+		status.ConnectedDevice = "AA:BB:CC:DD:EE:FF"
 		status.Session = Snapshot{
 			State:      SessionReady,
 			DeviceInfo: &DeviceInfo{ProtocolVersion: ProtocolVersion, FirmwareVersion: PinnedFirmwareVersion},
@@ -152,8 +153,23 @@ func TestAdapterSnapshotReportsProfileAndConnectionFacts(t *testing.T) {
 		}
 	})
 	ready := adapter.Snapshot()
-	if !ready.Enabled || !ready.Configured || !ready.Ready || ready.ConnectionState != "connected" || ready.ProtocolVersion != "13" || ready.Profile != PinnedFirmwareVersion || ready.ProfileState != "matched" {
+	if !ready.Enabled || !ready.Configured || !ready.Ready || ready.ConnectionState != "connected" || ready.ConnectedDevice != "AA:BB:CC:DD:EE:FF" || ready.ProtocolVersion != "13" || ready.Profile != PinnedFirmwareVersion || ready.ProfileState != "matched" {
 		t.Fatalf("unexpected ready snapshot: %#v", ready)
+	}
+}
+
+func TestAdapterSnapshotDistinguishesReconnectReleaseAndErrorStates(t *testing.T) {
+	t.Parallel()
+	adapter := NewAdapter(Config{Transport: "ble", BLE: BLEConfig{PeerAddress: "AA:BB:CC:DD:EE:FF"}}, nil, nil)
+	for state, want := range map[ConnectionState]string{
+		StateDegraded:           "reconnecting",
+		StateConfigurationError: "error",
+		StateReleased:           "released",
+	} {
+		adapter.setStatus(func(status *AdapterStatus) { status.State = state })
+		if got := adapter.Snapshot().ConnectionState; got != want {
+			t.Fatalf("state %q connectionState=%q, want %q", state, got, want)
+		}
 	}
 }
 
@@ -410,9 +426,214 @@ func TestAdapterBLEReconnectRepeatsSharedHandshake(t *testing.T) {
 	}
 }
 
+func TestAdapterBLEReleaseDisconnectsAndSuppressesReconnect(t *testing.T) {
+	link := &countingCompanionLink{scriptedCompanionLink: scriptedCompanionLink{frames: [][]byte{
+		readHexFixture(t, "device-info-v1.17.1.hex"), readHexFixture(t, "self-info-v1.17.1.hex"),
+	}}}
+	adapter := NewAdapter(Config{Transport: "ble", BLE: BLEConfig{PeerAddress: "AA:BB:CC:DD:EE:FF"}}, nil, nil)
+	adapter.reconnectDelay = time.Millisecond
+	var opens atomic.Int32
+	adapter.newBLETransport = func(BLEConfig) CompanionTransport {
+		opens.Add(1)
+		return staticCompanionTransport{link: link}
+	}
+	var deviceDisconnects atomic.Int32
+	adapter.disconnectBLE = func(context.Context, BLEConfig) error {
+		deviceDisconnects.Add(1)
+		return nil
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- adapter.Start(ctx, &discardSink{}) }()
+	waitForAdapterState(t, adapter, StateConnected)
+	if err := adapter.Release(); err != nil {
+		t.Fatal(err)
+	}
+	if status := adapter.DetailedSnapshot(); status.State != StateReleased || !status.ReconnectSuppressed || !status.ReleasedByUser || status.LastError != "" || status.Device != "" || status.ConnectedDevice != "" {
+		t.Fatalf("unexpected released status: %#v", status)
+	}
+	if link.closes.Load() == 0 {
+		t.Fatal("release did not close the active BLE link")
+	}
+	if deviceDisconnects.Load() == 0 {
+		t.Fatal("release did not explicitly disconnect the configured BLE device")
+	}
+	opened := opens.Load()
+	time.Sleep(20 * time.Millisecond)
+	if opens.Load() != opened {
+		t.Fatalf("release allowed reconnect attempts: before=%d after=%d", opened, opens.Load())
+	}
+	if err := adapter.Release(); err != nil {
+		t.Fatalf("repeated release: %v", err)
+	}
+	if err := adapter.Resume(); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(time.Second)
+	for opens.Load() < opened+1 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if opens.Load() < opened+1 {
+		t.Fatal("resume did not re-enable BLE reconnect")
+	}
+	if err := adapter.Resume(); err != nil {
+		t.Fatalf("repeated resume: %v", err)
+	}
+	closesBeforeShutdown := link.closes.Load()
+	if err := adapter.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if link.closes.Load() <= closesBeforeShutdown {
+		t.Fatal("graceful shutdown did not close the active BLE link")
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAdapterBLEReleaseDisconnectsInFlightOpen(t *testing.T) {
+	adapter := NewAdapter(Config{Transport: "ble", BLE: BLEConfig{PeerAddress: "AA:BB:CC:DD:EE:FF"}}, nil, nil)
+	opened := make(chan struct{})
+	adapter.newBLETransport = func(BLEConfig) CompanionTransport {
+		return blockingOpenTransport{opened: opened}
+	}
+	deviceDisconnect := make(chan struct{}, 1)
+	adapter.disconnectBLE = func(context.Context, BLEConfig) error {
+		deviceDisconnect <- struct{}{}
+		return nil
+	}
+	done := make(chan error, 1)
+	go func() { done <- adapter.Start(context.Background(), &discardSink{}) }()
+	select {
+	case <-opened:
+	case <-time.After(time.Second):
+		t.Fatal("BLE open did not begin")
+	}
+	if err := adapter.Release(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-deviceDisconnect:
+	case <-time.After(time.Second):
+		t.Fatal("release did not disconnect a BLE device during an in-flight open")
+	}
+	if err := adapter.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAdapterBLEShutdownDisconnectsInFlightOpen(t *testing.T) {
+	adapter := NewAdapter(Config{Transport: "ble", BLE: BLEConfig{PeerAddress: "AA:BB:CC:DD:EE:FF"}}, nil, nil)
+	opened := make(chan struct{})
+	adapter.newBLETransport = func(BLEConfig) CompanionTransport {
+		return blockingOpenTransport{opened: opened}
+	}
+	deviceDisconnect := make(chan struct{}, 1)
+	adapter.disconnectBLE = func(context.Context, BLEConfig) error {
+		deviceDisconnect <- struct{}{}
+		return nil
+	}
+	done := make(chan error, 1)
+	go func() { done <- adapter.Start(context.Background(), &discardSink{}) }()
+	select {
+	case <-opened:
+	case <-time.After(time.Second):
+		t.Fatal("BLE open did not begin")
+	}
+	if err := adapter.Close(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-deviceDisconnect:
+	case <-time.After(time.Second):
+		t.Fatal("shutdown did not disconnect a BLE device during an in-flight open")
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAdapterBLEShutdownDisconnectIsBoundedWhenCloseFails(t *testing.T) {
+	link := &blockingCloseCompanionLink{scriptedCompanionLink: scriptedCompanionLink{frames: [][]byte{
+		readHexFixture(t, "device-info-v1.17.1.hex"), readHexFixture(t, "self-info-v1.17.1.hex"),
+	}}}
+	adapter := NewAdapter(Config{Transport: "ble", BLE: BLEConfig{PeerAddress: "AA:BB:CC:DD:EE:FF"}}, nil, nil)
+	adapter.shutdownTimeout = 10 * time.Millisecond
+	adapter.newBLETransport = func(BLEConfig) CompanionTransport { return staticCompanionTransport{link: link} }
+	done := make(chan error, 1)
+	go func() { done <- adapter.Start(context.Background(), &discardSink{}) }()
+	waitForAdapterState(t, adapter, StateConnected)
+	started := time.Now()
+	if err := adapter.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if elapsed := time.Since(started); elapsed > 250*time.Millisecond {
+		t.Fatalf("shutdown was not bounded: %s", elapsed)
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("adapter did not exit after bounded BLE disconnect")
+	}
+}
+
+func TestAdapterBLEShutdownWhileDisconnectedIsSafe(t *testing.T) {
+	adapter := NewAdapter(Config{Transport: "ble", BLE: BLEConfig{PeerAddress: "AA:BB:CC:DD:EE:FF"}}, nil, nil)
+	adapter.reconnectDelay = time.Millisecond
+	adapter.newBLETransport = func(BLEConfig) CompanionTransport { return failingCompanionTransport{} }
+	done := make(chan error, 1)
+	go func() { done <- adapter.Start(context.Background(), &discardSink{}) }()
+	deadline := time.Now().Add(time.Second)
+	for adapter.DetailedSnapshot().State != StateDegraded && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if err := adapter.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func waitForAdapterState(t *testing.T, adapter *Adapter, want ConnectionState) {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for adapter.DetailedSnapshot().State != want && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if got := adapter.DetailedSnapshot().State; got != want {
+		t.Fatalf("adapter state=%q, want %q: %#v", got, want, adapter.DetailedSnapshot())
+	}
+}
+
 type staticCompanionTransport struct{ link CompanionLink }
 
 func (t staticCompanionTransport) Open(context.Context) (CompanionLink, error) { return t.link, nil }
+
+type failingCompanionTransport struct{}
+
+func (failingCompanionTransport) Open(context.Context) (CompanionLink, error) {
+	return nil, errors.New("BlueZ unavailable")
+}
+
+type blockingOpenTransport struct{ opened chan<- struct{} }
+
+func (t blockingOpenTransport) Open(ctx context.Context) (CompanionLink, error) {
+	select {
+	case t.opened <- struct{}{}:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
 
 type discardSink struct{}
 
@@ -462,6 +683,22 @@ func (*scriptedCompanionLink) Metadata() TransportMetadata {
 }
 
 func (*scriptedCompanionLink) Close() error { return nil }
+
+type countingCompanionLink struct {
+	scriptedCompanionLink
+	closes atomic.Int32
+}
+
+func (l *countingCompanionLink) Close() error {
+	l.closes.Add(1)
+	return nil
+}
+
+type blockingCloseCompanionLink struct{ scriptedCompanionLink }
+
+func (*blockingCloseCompanionLink) Close() error {
+	select {}
+}
 
 func existingDeviceFixture(t *testing.T) string {
 	t.Helper()

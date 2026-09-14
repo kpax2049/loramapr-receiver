@@ -49,6 +49,40 @@ func TestResolveMode(t *testing.T) {
 	}
 }
 
+func TestReleaseMeshCoreBLEStopsTrackingAndBlocksNewTrackingUntilResume(t *testing.T) {
+	t.Parallel()
+	key := strings.Repeat("a", 64)
+	adapter := meshcore.NewAdapter(meshcore.Config{Transport: "ble", BLE: meshcore.BLEConfig{PeerAddress: "AA:BB:CC:DD:EE:FF"}}, nil, nil)
+	tracking := meshcore.NewTrackingController(func(ctx context.Context, _ string) (meshcore.TelemetryResult, error) {
+		<-ctx.Done()
+		return meshcore.TelemetryResult{}, ctx.Err()
+	}, meshcore.DefaultTrackingPolicy(), nil)
+	if _, err := tracking.Start(key); err != nil {
+		t.Fatal(err)
+	}
+	svc := &Service{container: &Container{MeshCore: adapter, MeshCoreTracking: tracking}}
+	released, err := svc.ReleaseMeshCoreBLE(context.Background())
+	if err != nil || released.State != meshcore.StateReleased || !released.ReconnectSuppressed || !released.ReleasedByUser {
+		t.Fatalf("release result=%#v err=%v", released, err)
+	}
+	if tracking.Status().Active {
+		t.Fatal("release left tracking active")
+	}
+	if _, err := svc.StartMeshCoreTracking(context.Background(), key); !errors.Is(err, meshcore.ErrTrackingUnavailable) {
+		t.Fatalf("tracking while released error=%v, want unavailable", err)
+	}
+	if _, err := svc.ReleaseMeshCoreBLE(context.Background()); err != nil {
+		t.Fatalf("repeated release: %v", err)
+	}
+	resumed, err := svc.ResumeMeshCoreBLE(context.Background())
+	if err != nil || resumed.ReconnectSuppressed || resumed.ReleasedByUser {
+		t.Fatalf("resume result=%#v err=%v", resumed, err)
+	}
+	if _, err := svc.ResumeMeshCoreBLE(context.Background()); err != nil {
+		t.Fatalf("repeated resume: %v", err)
+	}
+}
+
 func TestDetectRuntimeProfile(t *testing.T) {
 	t.Parallel()
 

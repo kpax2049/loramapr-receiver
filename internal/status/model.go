@@ -26,22 +26,25 @@ type ComponentStatus struct {
 // adapter. It deliberately contains operational facts only: it never carries
 // raw radio frames, pairing secrets, or protocol identity keys.
 type AdapterStatus struct {
-	Name             string                 `json:"name"`
-	Protocol         string                 `json:"protocol"`
-	Lifecycle        string                 `json:"lifecycle"`
-	ConnectionState  string                 `json:"connection_state"`
-	Enabled          bool                   `json:"enabled"`
-	Configured       bool                   `json:"configured"`
-	Ready            bool                   `json:"ready"`
-	Transport        string                 `json:"transport,omitempty"`
-	ConfiguredDevice string                 `json:"configured_device,omitempty"`
-	Device           string                 `json:"device,omitempty"`
-	ProtocolVersion  string                 `json:"protocol_version,omitempty"`
-	Profile          string                 `json:"profile,omitempty"`
-	ProfileState     string                 `json:"profile_state,omitempty"`
-	LastError        string                 `json:"last_error,omitempty"`
-	UpdatedAt        time.Time              `json:"updated_at"`
-	Delivery         *AdapterDeliveryStatus `json:"delivery,omitempty"`
+	Name                string                 `json:"name"`
+	Protocol            string                 `json:"protocol"`
+	Lifecycle           string                 `json:"lifecycle"`
+	ConnectionState     string                 `json:"connection_state"`
+	Enabled             bool                   `json:"enabled"`
+	Configured          bool                   `json:"configured"`
+	Ready               bool                   `json:"ready"`
+	Transport           string                 `json:"transport,omitempty"`
+	ConfiguredDevice    string                 `json:"configured_device,omitempty"`
+	ConnectedDevice     string                 `json:"connected_device,omitempty"`
+	Device              string                 `json:"device,omitempty"`
+	ProtocolVersion     string                 `json:"protocol_version,omitempty"`
+	Profile             string                 `json:"profile,omitempty"`
+	ProfileState        string                 `json:"profile_state,omitempty"`
+	ReconnectSuppressed bool                   `json:"reconnect_suppressed,omitempty"`
+	ReleasedByUser      bool                   `json:"released_by_user,omitempty"`
+	LastError           string                 `json:"last_error,omitempty"`
+	UpdatedAt           time.Time              `json:"updated_at"`
+	Delivery            *AdapterDeliveryStatus `json:"delivery,omitempty"`
 }
 
 // AdapterDeliveryStatus reports durable delivery health without exposing any

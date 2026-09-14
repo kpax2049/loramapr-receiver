@@ -499,6 +499,31 @@ func (s *Service) ForgetMeshCoreBLE(ctx context.Context, cfg meshcore.BLEConfig)
 	return s.container.MeshCoreBLE.Forget(ctx, cfg)
 }
 
+// ReleaseMeshCoreBLE stops receiver-owned tracking before releasing the
+// configured BLE Companion. The release is local to this process and is not
+// persisted, so a later receiver restart follows normal configured startup.
+func (s *Service) ReleaseMeshCoreBLE(_ context.Context) (meshcore.AdapterStatus, error) {
+	if s.container == nil || s.container.MeshCore == nil {
+		return meshcore.AdapterStatus{}, meshcore.ErrBLEUnsupported
+	}
+	if s.container.MeshCoreTracking != nil {
+		s.container.MeshCoreTracking.Stop()
+	}
+	err := s.container.MeshCore.Release()
+	s.refreshAdapterStatuses()
+	return s.container.MeshCore.DetailedSnapshot(), err
+}
+
+// ResumeMeshCoreBLE restores the normal configured BLE reconnect lifecycle.
+func (s *Service) ResumeMeshCoreBLE(_ context.Context) (meshcore.AdapterStatus, error) {
+	if s.container == nil || s.container.MeshCore == nil {
+		return meshcore.AdapterStatus{}, meshcore.ErrBLEUnsupported
+	}
+	err := s.container.MeshCore.Resume()
+	s.refreshAdapterStatuses()
+	return s.container.MeshCore.DetailedSnapshot(), err
+}
+
 // RequestMeshCoreTelemetry sends one manual request and durably stages a
 // normalized observation only after its response is correlated to the full
 // requested public key. It never creates local position, track, or session
@@ -524,6 +549,9 @@ func (s *Service) RequestMeshCoreTelemetry(ctx context.Context, publicKey string
 func (s *Service) StartMeshCoreTracking(_ context.Context, publicKey string) (meshcore.TrackingStatus, error) {
 	if s.container == nil || s.container.MeshCoreTracking == nil {
 		return meshcore.TrackingStatus{}, meshcore.ErrTrackingUnavailable
+	}
+	if s.container.MeshCore != nil && s.container.MeshCore.ReconnectSuppressed() {
+		return s.container.MeshCoreTracking.Status(), meshcore.ErrTrackingUnavailable
 	}
 	return s.container.MeshCoreTracking.Start(publicKey)
 }

@@ -59,6 +59,24 @@ type trackingSubmitter struct {
 	err    error
 }
 
+type lifecycleSubmitter struct {
+	*recordingPairingSubmitter
+	status       meshcore.AdapterStatus
+	releaseCalls int
+	resumeCalls  int
+	err          error
+}
+
+func (s *lifecycleSubmitter) ReleaseMeshCoreBLE(context.Context) (meshcore.AdapterStatus, error) {
+	s.releaseCalls++
+	return s.status, s.err
+}
+
+func (s *lifecycleSubmitter) ResumeMeshCoreBLE(context.Context) (meshcore.AdapterStatus, error) {
+	s.resumeCalls++
+	return s.status, s.err
+}
+
 func (s *telemetrySubmitter) RequestMeshCoreTelemetry(_ context.Context, key string) (meshcore.TelemetryResult, error) {
 	s.key = key
 	return s.result, s.err
@@ -141,6 +159,13 @@ func TestMeshCoreTelemetryRequestAPIValidatesAndReturnsLocalResult(t *testing.T)
 		t.Fatalf("invalid status=%d body=%s", invalid.Code, invalid.Body.String())
 	}
 
+	submitter.err = meshcore.ErrTelemetryAdapterDisconnected
+	released := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(released, httptest.NewRequest(http.MethodPost, "/api/meshcore/telemetry/request", strings.NewReader(`{"publicKey":"`+key+`"}`)))
+	if released.Code != http.StatusServiceUnavailable || !strings.Contains(released.Body.String(), `"outcome":"disconnected_adapter"`) {
+		t.Fatalf("released status=%d body=%s", released.Code, released.Body.String())
+	}
+
 }
 
 func TestMeshCoreTrackingAPIsAreExplicitLocalLifecycleHarness(t *testing.T) {
@@ -168,6 +193,35 @@ func TestMeshCoreTrackingAPIsAreExplicitLocalLifecycleHarness(t *testing.T) {
 	srv.Handler().ServeHTTP(conflict, httptest.NewRequest(http.MethodPost, "/api/meshcore/tracking/start", strings.NewReader(`{"publicKey":"`+key+`"}`)))
 	if conflict.Code != http.StatusConflict || !strings.Contains(conflict.Body.String(), `"outcome":"tracking_active"`) {
 		t.Fatalf("conflict status=%d body=%s", conflict.Code, conflict.Body.String())
+	}
+}
+
+func TestMeshCoreBLELifecycleAPIsAreLocalAndIdempotent(t *testing.T) {
+	t.Parallel()
+	submitter := &lifecycleSubmitter{recordingPairingSubmitter: &recordingPairingSubmitter{}, status: meshcore.AdapterStatus{
+		State: meshcore.StateReleased, Transport: "ble", Configured: "AA:BB:CC:DD:EE:FF", ReconnectSuppressed: true, ReleasedByUser: true,
+	}}
+	srv := New("127.0.0.1:0", staticStatusProvider{snapshot: sampleSnapshot()}, submitter, nil)
+	for range 2 {
+		release := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(release, httptest.NewRequest(http.MethodPost, "/api/meshcore/adapter/release", nil))
+		if release.Code != http.StatusOK || !strings.Contains(release.Body.String(), `"ReconnectSuppressed":true`) || !strings.Contains(release.Body.String(), `"ReleasedByUser":true`) {
+			t.Fatalf("release status=%d body=%s", release.Code, release.Body.String())
+		}
+	}
+	if submitter.releaseCalls != 2 {
+		t.Fatalf("release calls=%d", submitter.releaseCalls)
+	}
+	submitter.status = meshcore.AdapterStatus{State: meshcore.StateNotPresent, Transport: "ble", Configured: "AA:BB:CC:DD:EE:FF"}
+	for range 2 {
+		resume := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(resume, httptest.NewRequest(http.MethodPost, "/api/meshcore/adapter/resume", nil))
+		if resume.Code != http.StatusOK || strings.Contains(resume.Body.String(), `"ReleasedByUser":true`) {
+			t.Fatalf("resume status=%d body=%s", resume.Code, resume.Body.String())
+		}
+	}
+	if submitter.resumeCalls != 2 {
+		t.Fatalf("resume calls=%d", submitter.resumeCalls)
 	}
 }
 

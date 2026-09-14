@@ -28,6 +28,21 @@ func TestBuildTelemetryRequestRequiresCanonicalFullKey(t *testing.T) {
 	}
 }
 
+func TestAdapterTelemetryRequestFailsClosedWhenReleased(t *testing.T) {
+	adapter := NewAdapter(Config{Transport: "ble", BLE: BLEConfig{PeerAddress: "AA:BB:CC:DD:EE:FF"}}, nil, nil)
+	adapter.disconnectBLE = func(context.Context, BLEConfig) error { return nil }
+	if err := adapter.Release(); err != nil {
+		t.Fatal(err)
+	}
+	_, err := adapter.RequestTelemetry(context.Background(), "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
+	if !errors.Is(err, ErrTelemetryAdapterDisconnected) {
+		t.Fatalf("released telemetry error=%v, want disconnected adapter", err)
+	}
+	if status := adapter.DetailedSnapshot(); status.State != StateReleased || !status.ReconnectSuppressed {
+		t.Fatalf("telemetry request changed released adapter state: %#v", status)
+	}
+}
+
 func TestPathResetUsesExactFullKeyAndRequiresCompanionAcknowledgement(t *testing.T) {
 	key := trackingKey
 	target := mustTelemetryTarget(t, key)

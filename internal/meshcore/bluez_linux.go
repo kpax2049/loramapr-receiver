@@ -138,6 +138,24 @@ func (b *bluezBackend) Connect(ctx context.Context, cfg BLEConfig) (BLEConnectio
 	return link, nil
 }
 
+// Disconnect is deliberately separate from BLEConnection.Close: release and
+// shutdown can arrive while Connect is still resolving services and has not
+// yet produced a connection object to close.
+func (b *bluezBackend) Disconnect(ctx context.Context, cfg BLEConfig) error {
+	conn, err := b.system()
+	if err != nil {
+		return err
+	}
+	path, _, err := findBluezDevice(conn, cfg)
+	if err != nil {
+		return err
+	}
+	if call := conn.Object(bluezName, path).CallWithContext(ctx, deviceInterface+".Disconnect", 0); call.Err != nil {
+		return fmt.Errorf("%w: disconnect selected BLE peer", ErrBLEConfiguration)
+	}
+	return nil
+}
+
 func (b *bluezBackend) Pair(ctx context.Context, cfg BLEConfig, pin string) error {
 	conn, err := b.system()
 	if err != nil {
@@ -385,7 +403,18 @@ func (c *bluezConnection) Close() error {
 	var err error
 	c.closeOnce.Do(func() {
 		if c.tx != nil {
-			err = c.tx.Call(gattCharInterface+".StopNotify", 0).Err
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			err = c.tx.CallWithContext(ctx, gattCharInterface+".StopNotify", 0).Err
+			cancel()
+		}
+		// StopNotify only ends the GATT subscription. Explicitly disconnect the
+		// Device1 link as well so BlueZ releases the peer without removing its
+		// trusted pairing record.
+		if c.conn != nil && c.devicePath != "" {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			disconnectErr := c.conn.Object(bluezName, c.devicePath).CallWithContext(ctx, deviceInterface+".Disconnect", 0).Err
+			cancel()
+			err = errors.Join(err, disconnectErr)
 		}
 		if c.signals != nil {
 			c.conn.RemoveSignal(c.signals)

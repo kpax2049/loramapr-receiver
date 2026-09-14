@@ -231,6 +231,18 @@ func (c *TrackingController) Stop() TrackingStatus {
 	c.generation++
 	c.status.Active, c.status.TargetPublicKey, c.status.NextRequestAt = false, "", nil
 	c.status.CurrentIntervalSeconds = int64(c.policy.UnknownInterval / time.Second)
+	// A future tracking run must not inherit a stale-route episode from the
+	// previous target/run. In particular, Release uses Stop before handing the
+	// Companion to another client.
+	c.fix, c.pending, c.pendingCount = nil, MotionUnknown, 0
+	c.routeFingerprint, c.routeGeneration, c.recoveryEpisodeActive, c.pendingRecoveryEvent = "", 0, false, ""
+	c.status.RouteRecoveryState = "idle"
+	c.status.LastRouteRecoveryEvent = ""
+	c.status.RecoveryEpisodeActive = false
+	c.status.RouteGeneration = 0
+	c.status.RouteFingerprint = ""
+	c.status.LastPathUpdateAt = nil
+	c.status.PathUpdatePending = false
 	c.mu.Unlock()
 	if wasActive {
 		c.logger.Info("MeshCore tracking stopped", "target_public_key", target)

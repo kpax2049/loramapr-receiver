@@ -14,6 +14,9 @@ func (unsupportedBLEBackend) Discover(ctx context.Context, adapter string) ([]BL
 func (unsupportedBLEBackend) Connect(ctx context.Context, cfg BLEConfig) (BLEConnection, error) {
 	return nil, ErrBLEUnsupported
 }
+func (unsupportedBLEBackend) Disconnect(ctx context.Context, cfg BLEConfig) error {
+	return ErrBLEUnsupported
+}
 func (unsupportedBLEBackend) Pair(ctx context.Context, cfg BLEConfig, pin string) error {
 	return ErrBLEUnsupported
 }
