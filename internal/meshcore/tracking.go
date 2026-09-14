@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"math"
+	"strings"
 	"sync"
 	"time"
 )
@@ -109,12 +110,16 @@ type TrackingStatus struct {
 	ConsecutiveFailures    int            `json:"consecutiveFailures"`
 	LastError              *string        `json:"lastError"`
 	RouteRecoveryState     string         `json:"routeRecoveryState"`
+	LastRouteRecoveryEvent string         `json:"lastRouteRecoveryEvent"`
+	RecoveryEpisodeActive  bool           `json:"recoveryEpisodeActive"`
+	RouteGeneration        uint64         `json:"routeGeneration"`
+	RouteFingerprint       string         `json:"routeFingerprint"`
 	LastPathUpdateAt       *time.Time     `json:"lastPathUpdateAt"`
 	PathUpdatePending      bool           `json:"pathUpdatePending"`
 	RecentPolls            []TrackingPoll `json:"recentPolls"`
 }
 
-const recentPollLimit = 30
+const recentPollLimit = 50
 
 // TrackingPoll is bounded, receiver-local route observability for field
 // validation. ResponseRoute remains nil unless a future Companion payload
@@ -160,7 +165,10 @@ type TrackingController struct {
 	pendingCount          int
 	cancel                context.CancelFunc
 	generation            uint64
-	zeroHopResetAttempted bool
+	routeFingerprint      string
+	routeGeneration       uint64
+	recoveryEpisodeActive bool
+	pendingRecoveryEvent  string
 }
 
 func NewTrackingController(request func(context.Context, string) (TelemetryResult, error), policy TrackingPolicy, logger *slog.Logger) *TrackingController {
@@ -168,8 +176,8 @@ func NewTrackingController(request func(context.Context, string) (TelemetryResul
 }
 
 // NewTrackingControllerWithRouteRecovery extends the local tracking harness
-// with the single source-supported recovery action: reset a stale zero-hop
-// contact path and let Companion choose flood/path learning itself.
+// with the single source-supported recovery action: reset a stale contact
+// path and let Companion choose flood/path learning itself.
 func NewTrackingControllerWithRouteRecovery(request func(context.Context, string) (TelemetryResult, error), reset func(context.Context, string) error, policy TrackingPolicy, logger *slog.Logger) *TrackingController {
 	if logger == nil {
 		logger = slog.Default()
@@ -197,8 +205,9 @@ func (c *TrackingController) Start(publicKey string) (TrackingStatus, error) {
 	c.cancel = cancel
 	c.generation++
 	generation := c.generation
-	c.fix, c.pending, c.pendingCount, c.zeroHopResetAttempted = nil, MotionUnknown, 0, false
-	c.status = TrackingStatus{Active: true, TargetPublicKey: publicKey, MotionState: MotionUnknown, CurrentIntervalSeconds: int64(c.policy.UnknownInterval / time.Second), RecentPolls: []TrackingPoll{}}
+	c.fix, c.pending, c.pendingCount = nil, MotionUnknown, 0
+	c.routeFingerprint, c.routeGeneration, c.recoveryEpisodeActive, c.pendingRecoveryEvent = "", 0, false, ""
+	c.status = TrackingStatus{Active: true, TargetPublicKey: publicKey, MotionState: MotionUnknown, CurrentIntervalSeconds: int64(c.policy.UnknownInterval / time.Second), RouteRecoveryState: "idle", RecentPolls: []TrackingPoll{}}
 	now := c.now().UTC()
 	c.status.NextRequestAt = timePtr(now)
 	c.logger.Info("MeshCore tracking started", "target_public_key", publicKey)
@@ -317,30 +326,34 @@ func (c *TrackingController) poll(ctx context.Context, target string, generation
 		requestAt = result.RequestedAt.UTC()
 	}
 	if err != nil {
-		c.recoverZeroHopTimeout(ctx, target, generation, result, err)
+		c.recoverStaleRouteTimeout(ctx, target, generation, result, err)
 		c.recordFailure(target, generation, result, err, requestAt)
 		return
 	}
 	c.recordSuccess(target, generation, result, requestAt)
 }
 
-func (c *TrackingController) recoverZeroHopTimeout(ctx context.Context, target string, generation uint64, result TelemetryResult, err error) string {
-	if !errors.Is(err, ErrTelemetryTimeout) || result.RouteAttempt.Mode != RouteModeZeroHop || c.reset == nil {
+func (c *TrackingController) recoverStaleRouteTimeout(ctx context.Context, target string, generation uint64, result TelemetryResult, err error) string {
+	if !errors.Is(err, ErrTelemetryTimeout) || !recoverableRoute(result.RouteAttempt) || c.reset == nil {
 		return ""
 	}
 	c.mu.Lock()
-	if !c.currentLocked(target, generation) || c.zeroHopResetAttempted || ctx.Err() != nil {
+	if !c.currentLocked(target, generation) || c.recoveryEpisodeActive || ctx.Err() != nil {
 		c.mu.Unlock()
 		return ""
 	}
-	c.zeroHopResetAttempted = true
+	c.recoveryEpisodeActive = true
 	c.status.RouteRecoveryState = "path_reset_requested"
+	c.status.RecoveryEpisodeActive = true
+	c.status.LastRouteRecoveryEvent = "path_reset_requested"
 	c.mu.Unlock()
-	c.logger.Warn("MeshCore tracking zero-hop telemetry timed out; requesting path reset", "target_public_key", target)
+	c.logger.Warn("MeshCore tracking stale-route telemetry timed out; requesting path reset", "target_public_key", target, "route_mode", result.RouteAttempt.Mode, "path_length", result.RouteAttempt.PathLength)
 	if err := c.reset(ctx, target); err != nil {
 		c.mu.Lock()
 		if c.currentLocked(target, generation) {
-			c.status.RouteRecoveryState = "path_reset_failed"
+			c.status.RouteRecoveryState = "recovery_active"
+			c.status.LastRouteRecoveryEvent = "path_reset_failed"
+			c.pendingRecoveryEvent = "path_reset_failed"
 		}
 		c.mu.Unlock()
 		c.logger.Warn("MeshCore tracking path reset failed", "target_public_key", target, "err", err)
@@ -348,7 +361,9 @@ func (c *TrackingController) recoverZeroHopTimeout(ctx context.Context, target s
 	}
 	c.mu.Lock()
 	if c.currentLocked(target, generation) {
-		c.status.RouteRecoveryState = "path_reset_acknowledged"
+		c.status.RouteRecoveryState = "recovery_active"
+		c.status.LastRouteRecoveryEvent = "path_reset_acknowledged"
+		c.pendingRecoveryEvent = "path_reset_acknowledged"
 	}
 	c.mu.Unlock()
 	c.logger.Info("MeshCore tracking path reset acknowledged", "target_public_key", target)
@@ -371,20 +386,15 @@ func (c *TrackingController) recordSuccess(target string, generation uint64, res
 	c.status.ConsecutiveFailures, c.status.LastError = 0, nil
 	c.applyFixLocked(result)
 	c.status.CurrentIntervalSeconds = int64(c.intervalForLocked() / time.Second)
-	if result.RouteAttempt.Mode == RouteModeFlood && c.status.RouteRecoveryState == "path_reset_acknowledged" {
-		c.status.RouteRecoveryState = "flood_attempted"
-		c.logger.Info("MeshCore tracking poll used flood after path reset", "target_public_key", target)
-	} else if result.RouteAttempt.Mode == RouteModeExplicitPath && (c.status.RouteRecoveryState == "path_reset_acknowledged" || c.status.RouteRecoveryState == "flood_attempted") {
-		c.status.RouteRecoveryState = "explicit_path_observed"
-		c.logger.Info("MeshCore tracking explicit path observed after route recovery", "target_public_key", target, "path_length", result.RouteAttempt.PathLength)
-	}
+	recovery := c.routeRecoveryForPollLocked(result.RouteAttempt)
+	c.establishRouteLocked(result.RouteAttempt)
 	pathUpdateObserved := c.status.PathUpdatePending
 	c.status.PathUpdatePending = false
 	c.appendPollLocked(TrackingPoll{
 		RequestAt: requestAt, ResponseAt: timePtr(result.ReceivedAt), Outcome: "success",
 		EstimatedSpeedKmh: copyFloat64(c.status.EstimatedSpeedKmh), MotionState: c.status.MotionState,
 		IntervalSeconds: c.status.CurrentIntervalSeconds, RouteAttempt: routeEvidenceOrUnknown(result.RouteAttempt),
-		ResponseRouteUnknown: true, RouteRecovery: c.status.RouteRecoveryState, PathUpdateObserved: pathUpdateObserved, ConsecutiveFailures: c.status.ConsecutiveFailures,
+		ResponseRouteUnknown: true, RouteRecovery: recovery, PathUpdateObserved: pathUpdateObserved, ConsecutiveFailures: c.status.ConsecutiveFailures,
 	})
 	c.logger.Info("MeshCore tracking poll succeeded", "target_public_key", target,
 		"elapsed", result.ReceivedAt.Sub(requestAt).String(), "motion_state", c.status.MotionState,
@@ -424,7 +434,7 @@ func (c *TrackingController) recordFailure(target string, generation uint64, res
 	}
 	previous = maxDuration(previous, c.policy.MinimumInterval)
 	c.status.CurrentIntervalSeconds = int64(previous / time.Second)
-	recovery := c.status.RouteRecoveryState
+	recovery := c.routeRecoveryForPollLocked(result.RouteAttempt)
 	pathUpdateObserved := c.status.PathUpdatePending
 	c.status.PathUpdatePending = false
 	c.appendPollLocked(TrackingPoll{
@@ -440,6 +450,64 @@ func (c *TrackingController) recordFailure(target string, generation uint64, res
 	c.logger.Info("MeshCore tracking backoff changed", "target_public_key", target, "interval", previous.String())
 	if errors.Is(err, ErrTelemetryAdapterDisconnected) && !wasUnavailable {
 		c.logger.Warn("MeshCore tracking adapter unavailable", "target_public_key", target)
+	}
+}
+
+func recoverableRoute(evidence RouteEvidence) bool {
+	return evidence.Mode == RouteModeZeroHop || evidence.Mode == RouteModeExplicitPath
+}
+
+func routeFingerprint(evidence RouteEvidence) string {
+	if !recoverableRoute(evidence) && evidence.Mode != RouteModeFlood {
+		return ""
+	}
+	return string(evidence.Mode) + ":" + strings.Join(evidence.Path, ",")
+}
+
+// routeRecoveryForPollLocked creates history evidence only for an actual
+// recovery action or actual route mode. It never carries an old flood label
+// into a later zero-hop poll.
+func (c *TrackingController) routeRecoveryForPollLocked(evidence RouteEvidence) string {
+	if c.pendingRecoveryEvent != "" {
+		event := c.pendingRecoveryEvent
+		c.pendingRecoveryEvent = ""
+		return event
+	}
+	if !c.recoveryEpisodeActive {
+		return ""
+	}
+	switch evidence.Mode {
+	case RouteModeFlood:
+		return "flood_attempted"
+	case RouteModeExplicitPath:
+		return "explicit_path_observed"
+	case RouteModeZeroHop:
+		return "zero_hop_observed"
+	default:
+		return ""
+	}
+}
+
+// establishRouteLocked closes a recovery episode only after a successful
+// actual telemetry response. A changed zero-hop or explicit route becomes a
+// new generation that can later have its own stale-route recovery episode.
+func (c *TrackingController) establishRouteLocked(evidence RouteEvidence) {
+	fingerprint := routeFingerprint(evidence)
+	if fingerprint == "" {
+		return
+	}
+	if fingerprint != c.routeFingerprint {
+		c.routeFingerprint = fingerprint
+		c.routeGeneration++
+		c.status.RouteFingerprint = fingerprint
+		c.status.RouteGeneration = c.routeGeneration
+	}
+	if c.recoveryEpisodeActive {
+		c.recoveryEpisodeActive = false
+		c.status.RecoveryEpisodeActive = false
+		c.status.RouteRecoveryState = "recovery_complete"
+		c.status.LastRouteRecoveryEvent = "route_recovered"
+		c.logger.Info("MeshCore tracking route recovery episode completed", "route_generation", c.routeGeneration, "route_mode", evidence.Mode, "path_length", evidence.PathLength)
 	}
 }
 

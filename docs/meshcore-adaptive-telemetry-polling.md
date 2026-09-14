@@ -73,7 +73,7 @@ recovered states without logging raw payloads.
 
 ## M7A.1 route observability
 
-The controller records the last 30 attempts in the existing local-only
+The controller records the last 50 attempts in the existing local-only
 `GET /api/meshcore/tracking/status` response as `recentPolls`. This history is
 bounded, process-local, and cleared when a new local tracking run starts; it is
 not sent to the cloud or stored in a database.
@@ -126,19 +126,25 @@ successful response after that transition is useful evidence. A stable route
 snapshot followed by timeout is not evidence that routing was absent, that a
 specific repeater was used, or that the response travelled the same path.
 
-## M7A.2 stale zero-hop recovery
+## M7A.3 repeatable stale-route recovery
 
 Bike validation showed that a stored zero-hop route remains a zero-hop route
 across telemetry timeouts: it does not automatically become a flood or
-repeater-routed request merely because direct RF is lost. The receiver now
-performs one narrowly-scoped recovery action per active local tracking run:
+repeater-routed request merely because direct RF is lost. M7A.2 guarded that
+reset with a one-per-tracking-run latch. A transient timeout could therefore
+consume the latch, let the contact recover, and leave a later genuinely stale
+route unrecoverable until the whole local tracking run was restarted.
+
+M7A.3 instead scopes the guard to a recovery episode. A timeout on an actual
+`zero_hop` or `explicit_path` attempt opens one episode and makes exactly one
+path-reset request:
 
 ```text
-zero-hop telemetry timeout
+stale zero-hop or explicit-path telemetry timeout
   -> CMD_RESET_PATH for that contact
   -> existing backoff remains in force
   -> next normal telemetry poll re-queries the contact
-  -> Companion may send flood and later learn an explicit path
+  -> Companion may send flood and later learn a usable route
 ```
 
 The command is the exact pinned Companion frame
@@ -149,12 +155,21 @@ contact, and responds `RESP_CODE_OK`; an unknown contact responds with
 `sendRequest` floods for `OUT_PATH_UNKNOWN` and otherwise uses `sendDirect`
 ([`BaseChatMesh.cpp:576-600`](https://github.com/meshcore-dev/MeshCore/blob/d92964352441e53b93e8667b802e04f6e072b39e/src/helpers/BaseChatMesh.cpp#L576-L600)). LoRaMapr does not select a repeater or construct a custom path.
 
-Recovery is intentionally limited to a telemetry timeout whose attempted route
-was `zero_hop`. A reset is not repeated for subsequent failures in the same
-tracking run, and explicit-path timeouts do not currently trigger a reset.
-The existing 30s/60s/... capped backoff is unchanged, so a reset never creates
-a tight flood or retry loop. A firmware error, timeout, disconnect, or stop is
-recorded as `path_reset_failed` without preventing normal future polling.
+The controller fingerprints only the observable route mode and route-hash
+sequence; hashes are not repeater identities. A successful usable route closes
+the episode and updates its route generation. That makes a later stale
+generation eligible for one new reset. Until such a success, the episode stays
+active: continuous zero-hop failures, a failing flood, a firmware reset error,
+or a disconnect cannot generate reset loops. The existing 30s/60s/... capped
+backoff is unchanged, so a reset never creates a tight flood or retry loop.
+
+`routeRecovery` in a history record is evidence for that particular poll. It
+is `flood_attempted` only when that request actually used `flood`; it is never
+inferred from a reset acknowledgement or a later zero-hop failure. Reset
+events (`path_reset_acknowledged` or `path_reset_failed`) are likewise attached
+to the timeout that caused them. The status also exposes the current episode,
+last recovery event, route generation, and route fingerprint so field testing
+can distinguish a completed recovery from a still-failing route.
 
 `PUSH_CODE_PATH_UPDATED` carries only the contact public key
 ([`MyMesh.cpp:377-382`](https://github.com/meshcore-dev/MeshCore/blob/d92964352441e53b93e8667b802e04f6e072b39e/examples/companion_radio/MyMesh.cpp#L377-L382)). It marks the active target for a fresh normal pre-poll contact
@@ -167,6 +182,11 @@ response routing remains unknown.
 1. Stationary desk test.
 2. Walking test.
 3. Faster movement test.
-4. Bike test: capture slow-to-fast confirmation and the 30s-to-15s change,
-   then verify initial zero-hop, reset after direct-range loss, a subsequent
-   flood attempt, mesh success if coverage exists, and any later explicit path.
+4. Bike test: capture slow-to-fast confirmation and the 30s-to-15s change.
+   Verify every visible direct-range poll is `zero_hop` with `pathLength: 0`;
+   after loss of direct range, verify exactly one reset event and then a fresh
+   normal contact snapshot. Confirm a later actual flood is recorded as
+   `flood_attempted`, a flood failure does not reset again, and a successful
+   flood or learned route completes the episode. Return to direct range and
+   confirm a zero-hop success; then make the route stale again and verify one
+   new reset for that later episode, with the existing backoff preserved.

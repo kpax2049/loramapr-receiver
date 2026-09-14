@@ -187,15 +187,15 @@ func TestTrackingZeroHopTimeoutResetsPathOnceAndRetainsBackoff(t *testing.T) {
 		return nil
 	}
 	zeroHopTimeout := TelemetryResult{RouteAttempt: RouteEvidence{Mode: RouteModeZeroHop, Source: "contact_out_path+response_sent"}}
-	if recovery := controller.recoverZeroHopTimeout(context.Background(), trackingKey, 1, zeroHopTimeout, ErrTelemetryTimeout); recovery != "path_reset_acknowledged" || resets.Load() != 1 {
+	if recovery := controller.recoverStaleRouteTimeout(context.Background(), trackingKey, 1, zeroHopTimeout, ErrTelemetryTimeout); recovery != "path_reset_acknowledged" || resets.Load() != 1 {
 		t.Fatalf("first recovery=%q resets=%d", recovery, resets.Load())
 	}
 	controller.recordFailure(trackingKey, 1, zeroHopTimeout, ErrTelemetryTimeout)
 	status := controller.Status()
-	if status.ConsecutiveFailures != 1 || status.CurrentIntervalSeconds != 30 || status.RouteRecoveryState != "path_reset_acknowledged" || len(status.RecentPolls) != 1 || status.RecentPolls[0].RouteRecovery != "path_reset_acknowledged" {
+	if status.ConsecutiveFailures != 1 || status.CurrentIntervalSeconds != 30 || status.RouteRecoveryState != "recovery_active" || !status.RecoveryEpisodeActive || status.LastRouteRecoveryEvent != "path_reset_acknowledged" || len(status.RecentPolls) != 1 || status.RecentPolls[0].RouteRecovery != "path_reset_acknowledged" {
 		t.Fatalf("post-reset timeout status=%#v", status)
 	}
-	if recovery := controller.recoverZeroHopTimeout(context.Background(), trackingKey, 1, zeroHopTimeout, ErrTelemetryTimeout); recovery != "" || resets.Load() != 1 {
+	if recovery := controller.recoverStaleRouteTimeout(context.Background(), trackingKey, 1, zeroHopTimeout, ErrTelemetryTimeout); recovery != "" || resets.Load() != 1 {
 		t.Fatalf("repeated recovery=%q resets=%d", recovery, resets.Load())
 	}
 	controller.recordFailure(trackingKey, 1, zeroHopTimeout, ErrTelemetryTimeout)
@@ -206,11 +206,12 @@ func TestTrackingZeroHopTimeoutResetsPathOnceAndRetainsBackoff(t *testing.T) {
 
 func TestTrackingRouteRecoveryRecordsFloodThenExplicitPathAndPathUpdate(t *testing.T) {
 	controller := activeTrackingController()
-	controller.status.RouteRecoveryState = "path_reset_acknowledged"
+	controller.recoveryEpisodeActive = true
+	controller.status.RouteRecoveryState = "recovery_active"
 	flood := telemetryFix(52, 13, time.Date(2026, 9, 13, 10, 0, 0, 0, time.UTC))
 	flood.RouteAttempt = RouteEvidence{Mode: RouteModeFlood, Source: "contact_out_path+response_sent"}
 	controller.recordSuccess(trackingKey, 1, flood)
-	if status := controller.Status(); status.RouteRecoveryState != "flood_attempted" || status.RecentPolls[0].RouteAttempt.Mode != RouteModeFlood {
+	if status := controller.Status(); status.RouteRecoveryState != "recovery_complete" || status.RecoveryEpisodeActive || status.RecentPolls[0].RouteAttempt.Mode != RouteModeFlood || status.RecentPolls[0].RouteRecovery != "flood_attempted" {
 		t.Fatalf("flood attempt status=%#v", status)
 	}
 	updatedAt := time.Date(2026, 9, 13, 10, 1, 0, 0, time.UTC)
@@ -223,7 +224,7 @@ func TestTrackingRouteRecoveryRecordsFloodThenExplicitPathAndPathUpdate(t *testi
 	controller.recordSuccess(trackingKey, 1, explicit)
 	status := controller.Status()
 	last := status.RecentPolls[len(status.RecentPolls)-1]
-	if status.RouteRecoveryState != "explicit_path_observed" || last.RouteAttempt.Mode != RouteModeExplicitPath || !last.PathUpdateObserved || status.PathUpdatePending {
+	if last.RouteAttempt.Mode != RouteModeExplicitPath || !last.PathUpdateObserved || status.PathUpdatePending {
 		t.Fatalf("explicit path status=%#v last=%#v", status, last)
 	}
 }
@@ -232,19 +233,94 @@ func TestTrackingPathResetFailureAndStoppedControllerAreSafe(t *testing.T) {
 	controller := activeTrackingController()
 	controller.reset = func(context.Context, string) error { return ErrPathResetFirmware }
 	result := TelemetryResult{RouteAttempt: RouteEvidence{Mode: RouteModeZeroHop, Source: "contact_out_path"}}
-	if got := controller.recoverZeroHopTimeout(context.Background(), trackingKey, 1, result, ErrTelemetryTimeout); got != "path_reset_failed" {
+	if got := controller.recoverStaleRouteTimeout(context.Background(), trackingKey, 1, result, ErrTelemetryTimeout); got != "path_reset_failed" {
 		t.Fatalf("recovery=%q", got)
 	}
 	controller.recordFailure(trackingKey, 1, result, ErrTelemetryTimeout)
-	if status := controller.Status(); status.RouteRecoveryState != "path_reset_failed" || status.CurrentIntervalSeconds != 30 {
+	if status := controller.Status(); status.RouteRecoveryState != "recovery_active" || !status.RecoveryEpisodeActive || status.LastRouteRecoveryEvent != "path_reset_failed" || status.CurrentIntervalSeconds != 30 {
 		t.Fatalf("failed reset broke tracking: %#v", status)
 	}
 	var resets atomic.Int32
 	controller = activeTrackingController()
 	controller.reset = func(context.Context, string) error { resets.Add(1); return nil }
 	controller.Stop()
-	if got := controller.recoverZeroHopTimeout(context.Background(), trackingKey, 1, result, ErrTelemetryTimeout); got != "" || resets.Load() != 0 {
+	if got := controller.recoverStaleRouteTimeout(context.Background(), trackingKey, 1, result, ErrTelemetryTimeout); got != "" || resets.Load() != 0 {
 		t.Fatalf("stopped controller performed recovery=%q resets=%d", got, resets.Load())
+	}
+}
+
+func TestTrackingRouteRecoveryEpisodesAreRepeatableAndActual(t *testing.T) {
+	controller := activeTrackingController()
+	var resets atomic.Int32
+	controller.reset = func(context.Context, string) error { resets.Add(1); return nil }
+	at := time.Date(2026, 9, 14, 8, 0, 0, 0, time.UTC)
+	zero := func(at time.Time) TelemetryResult {
+		result := telemetryFix(52, 13, at)
+		result.RouteAttempt = RouteEvidence{Mode: RouteModeZeroHop, Source: "contact_out_path+response_sent"}
+		return result
+	}
+	flood := func(at time.Time) TelemetryResult {
+		result := telemetryFix(52.001, 13, at)
+		result.RouteAttempt = RouteEvidence{Mode: RouteModeFlood, Source: "contact_out_path+response_sent"}
+		return result
+	}
+
+	// Route generation 1 is known-good zero-hop. Its later timeout opens the
+	// first episode and resets exactly once.
+	controller.recordSuccess(trackingKey, 1, zero(at))
+	if controller.Status().RouteGeneration != 1 {
+		t.Fatalf("initial route generation=%d", controller.Status().RouteGeneration)
+	}
+	controller.recoverStaleRouteTimeout(context.Background(), trackingKey, 1, zero(at.Add(time.Minute)), ErrTelemetryTimeout)
+	controller.recordFailure(trackingKey, 1, zero(at.Add(time.Minute)), ErrTelemetryTimeout)
+	if status := controller.Status(); resets.Load() != 1 || !status.RecoveryEpisodeActive || status.RecentPolls[len(status.RecentPolls)-1].RouteRecovery != "path_reset_acknowledged" {
+		t.Fatalf("first episode resets=%d status=%#v", resets.Load(), status)
+	}
+
+	// A failing flood is visible as flood_attempted but cannot reset again.
+	controller.recordFailure(trackingKey, 1, flood(at.Add(2*time.Minute)), ErrTelemetryTimeout)
+	last := controller.Status().RecentPolls[len(controller.Status().RecentPolls)-1]
+	if last.RouteRecovery != "flood_attempted" || resets.Load() != 1 || !controller.Status().RecoveryEpisodeActive {
+		t.Fatalf("flood timeout history=%#v resets=%d status=%#v", last, resets.Load(), controller.Status())
+	}
+
+	// A successful flood closes the episode. A later learned zero-hop route is
+	// a new generation and can independently become stale.
+	controller.recordSuccess(trackingKey, 1, flood(at.Add(3*time.Minute)))
+	if status := controller.Status(); status.RecoveryEpisodeActive || status.RecentPolls[len(status.RecentPolls)-1].RouteRecovery != "flood_attempted" {
+		t.Fatalf("flood recovery did not close: %#v", status)
+	}
+	controller.recordSuccess(trackingKey, 1, zero(at.Add(4*time.Minute)))
+	controller.recoverStaleRouteTimeout(context.Background(), trackingKey, 1, zero(at.Add(5*time.Minute)), ErrTelemetryTimeout)
+	if resets.Load() != 2 || !controller.Status().RecoveryEpisodeActive {
+		t.Fatalf("later zero-hop did not open a new episode: resets=%d status=%#v", resets.Load(), controller.Status())
+	}
+}
+
+func TestTrackingRecoveryNeverLabelsFloodWithoutAnActualFloodPoll(t *testing.T) {
+	controller := activeTrackingController()
+	controller.recoveryEpisodeActive = true
+	controller.status.RouteRecoveryState = "recovery_active"
+	controller.pendingRecoveryEvent = "path_reset_acknowledged"
+	zero := telemetryFix(52, 13, time.Date(2026, 9, 14, 8, 0, 0, 0, time.UTC))
+	zero.RouteAttempt = RouteEvidence{Mode: RouteModeZeroHop, Source: "contact_out_path+response_sent"}
+	controller.recordSuccess(trackingKey, 1, zero)
+	poll := controller.Status().RecentPolls[0]
+	if poll.RouteRecovery == "flood_attempted" || poll.RouteRecovery != "path_reset_acknowledged" || poll.RouteAttempt.Mode != RouteModeZeroHop {
+		t.Fatalf("zero-hop poll falsely attributed flood: %#v", poll)
+	}
+}
+
+func TestTrackingExplicitPathCanStartLaterRecoveryEpisode(t *testing.T) {
+	controller := activeTrackingController()
+	var resets atomic.Int32
+	controller.reset = func(context.Context, string) error { resets.Add(1); return nil }
+	explicit := telemetryFix(52, 13, time.Date(2026, 9, 14, 8, 0, 0, 0, time.UTC))
+	explicit.RouteAttempt = RouteEvidence{Mode: RouteModeExplicitPath, Path: []string{"aa", "bb"}, PathLength: 2, Source: "contact_out_path+response_sent"}
+	controller.recordSuccess(trackingKey, 1, explicit)
+	controller.recoverStaleRouteTimeout(context.Background(), trackingKey, 1, explicit, ErrTelemetryTimeout)
+	if resets.Load() != 1 || !controller.Status().RecoveryEpisodeActive {
+		t.Fatalf("explicit route did not start recovery: resets=%d status=%#v", resets.Load(), controller.Status())
 	}
 }
 
