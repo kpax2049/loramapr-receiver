@@ -7,6 +7,7 @@
    ============================================================ */
 
 *, *::before, *::after { box-sizing: border-box; }
+[hidden] { display: none !important; }
 
 .lmr-app {
   min-height: 100vh;
@@ -74,6 +75,8 @@
 }
 .lmr-card__title { margin: 0; font-size: 16px; font-weight: 650; letter-spacing: -.01em; color: var(--lmr-ink); }
 .lmr-card__desc  { margin: 9px 0 0; font-size: 13.5px; line-height: 1.55; color: var(--lmr-ink-soft); }
+.lmr-sectionhead { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+.lmr-refresh-state { font: 500 11.5px/1.35 var(--lmr-mono); color: var(--lmr-ink-faint); text-align: right; white-space: nowrap; }
 .lmr-eyebrow {
   font: 700 11px/1.1 var(--lmr-sans); letter-spacing: .03em; text-transform: uppercase;
   color: var(--lmr-ink-faint); margin: 0 0 12px;
@@ -206,6 +209,10 @@
 .lmr-btn:hover  { background: var(--lmr-accent-strong); }
 .lmr-btn:active { transform: translateY(1px); }
 .lmr-btn--sm { padding: 8px 12px; font-size: 11.5px; border-radius: 6px; }
+.lmr-btn--warn { background: var(--lmr-warn-dot); color: oklch(0.23 0.03 70); }
+.lmr-btn--warn:hover { background: var(--lmr-warn-fg); color: #fff; }
+.lmr-btn:disabled { cursor: wait; opacity: .62; transform: none; }
+.lmr-actions { margin-top: 16px; display: flex; gap: 10px; align-items: center; }
 
 /* ---------- Toast ---------- */
 .lmr-toast {
@@ -231,4 +238,6 @@
   .lmr-kv__row, .lmr-kv--wide .lmr-kv__row { grid-template-columns: 1fr; gap: 4px; }
   .lmr-main { padding: 18px 14px 80px; }
   .lmr-card { padding: 18px 16px; }
+  .lmr-sectionhead { flex-direction: column; gap: 8px; }
+  .lmr-refresh-state { text-align: left; white-space: normal; }
 }

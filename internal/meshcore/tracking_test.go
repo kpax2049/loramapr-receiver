@@ -88,6 +88,25 @@ func TestTrackingStopPreventsFuturePollsWithoutCancelingInFlightResponse(t *test
 	}
 }
 
+func TestTrackingStatusRetainsLatestObservedTelemetryWithoutPositionTrust(t *testing.T) {
+	controller := NewTrackingController(func(context.Context, string) (TelemetryResult, error) { return TelemetryResult{}, nil }, DefaultTrackingPolicy(), nil)
+	controller.mu.Lock()
+	controller.status = TrackingStatus{Active: true, TargetPublicKey: trackingKey, MotionState: MotionUnknown, CurrentIntervalSeconds: 30}
+	controller.generation = 1
+	controller.mu.Unlock()
+	voltage, latitude, longitude := 3.71, 52.52, 13.405
+	observed := TelemetryResult{TargetPublicKey: trackingKey, SourcePrefix: "0123456789ab", ReceivedAt: time.Date(2026, 9, 14, 10, 0, 0, 0, time.UTC), Telemetry: Telemetry{Voltage: &voltage, Latitude: &latitude, Longitude: &longitude}}
+	controller.recordSuccess(trackingKey, 1, observed)
+	status := controller.Status()
+	if status.LatestTelemetry == nil || status.LatestTelemetry.Telemetry.Latitude == nil || *status.LatestTelemetry.Telemetry.Latitude != latitude {
+		t.Fatalf("latest telemetry missing: %#v", status.LatestTelemetry)
+	}
+	*status.LatestTelemetry.Telemetry.Latitude = 0
+	if got := controller.Status().LatestTelemetry.Telemetry.Latitude; got == nil || *got != latitude {
+		t.Fatalf("latest telemetry was not defensively copied: %#v", got)
+	}
+}
+
 func TestTrackingNewControllerDoesNotResume(t *testing.T) {
 	controller := NewTrackingController(func(context.Context, string) (TelemetryResult, error) {
 		t.Fatal("new controller polled without start")

@@ -1,0 +1,84 @@
+{{define "content"}}
+{{$meshcore := meshcoreView .MeshCoreAdapter}}
+{{$meshcoreError := meshcoreError .MeshCoreAdapter}}
+<section class="lmr-card">
+  <div class="lmr-sectionhead">
+    <div>
+      <div class="lmr-eyebrow">Local operator view</div>
+      <h2 class="lmr-card__title">Receiver / MeshCore</h2>
+      <p class="lmr-card__desc">Live receiver facts, BLE ownership, and temporary tracking observability. This page never treats telemetry GPS as a trusted signed position.</p>
+    </div>
+    <div id="meshcore-refresh-state" class="lmr-refresh-state" aria-live="polite">Refreshing status…</div>
+  </div>
+  <div class="lmr-tiles">
+    <div class="lmr-tile"><div class="lmr-tile__label">Receiver health</div><div class="lmr-tile__value"><span id="receiver-health" class="lmr-pill {{lmrBoolTone .Snapshot.Ready}}"><span class="lmr-pill__dot"></span>{{if .Snapshot.Ready}}Ready{{else}}Not ready{{end}}</span></div></div>
+    <div class="lmr-tile"><div class="lmr-tile__label">Service state</div><div class="lmr-tile__value"><span id="receiver-lifecycle" class="lmr-mono">{{.Snapshot.Lifecycle}}</span></div></div>
+    <div class="lmr-tile"><div class="lmr-tile__label">Cloud connectivity</div><div class="lmr-tile__value"><span id="receiver-cloud" class="lmr-mono">{{.Snapshot.CloudStatus}}</span></div></div>
+    <div class="lmr-tile"><div class="lmr-tile__label">Receiver version</div><div class="lmr-tile__value"><span class="lmr-mono">{{if .RuntimeVersion}}{{.RuntimeVersion}}{{else}}unknown{{end}}</span></div></div>
+    <div class="lmr-tile"><div class="lmr-tile__label">Uptime</div><div class="lmr-tile__value"><span id="receiver-uptime" class="lmr-mono">calculating…</span></div></div>
+  </div>
+</section>
+
+<section class="lmr-card">
+  <div class="lmr-sectionhead">
+    <div>
+      <div class="lmr-eyebrow">Bluetooth adapter</div>
+      <h2 class="lmr-card__title">MeshCore connection</h2>
+    </div>
+    <span id="meshcore-state" class="lmr-pill {{$meshcore.Tone}}"><span class="lmr-pill__dot"></span>{{$meshcore.Label}}</span>
+  </div>
+  <p id="meshcore-state-detail" class="lmr-card__desc">{{$meshcore.Detail}}</p>
+  <div class="lmr-tiles">
+    <div class="lmr-tile"><div class="lmr-tile__label">Configured device</div><div class="lmr-tile__value"><span id="meshcore-configured" class="lmr-mono">{{if and .MeshCoreAdapter .MeshCoreAdapter.ConfiguredDevice}}{{.MeshCoreAdapter.ConfiguredDevice}}{{else}}not configured{{end}}</span></div></div>
+    <div class="lmr-tile"><div class="lmr-tile__label">Connected device</div><div class="lmr-tile__value"><span id="meshcore-connected" class="lmr-mono">{{if and .MeshCoreAdapter .MeshCoreAdapter.ConnectedDevice}}{{.MeshCoreAdapter.ConnectedDevice}}{{else}}not connected{{end}}</span></div></div>
+    <div class="lmr-tile"><div class="lmr-tile__label">Receiver reconnect</div><div class="lmr-tile__value"><span id="meshcore-reconnect" class="lmr-mono">{{if $meshcore.Resume}}suppressed by release{{else}}enabled{{end}}</span></div></div>
+    <div class="lmr-tile"><div class="lmr-tile__label">Session handshake</div><div class="lmr-tile__value"><span id="meshcore-ready" class="lmr-mono">{{if and .MeshCoreAdapter .MeshCoreAdapter.Ready}}ready{{else}}not ready{{end}}</span></div></div>
+  </div>
+  {{if $meshcoreError}}<div id="meshcore-error" class="lmr-callout is-fail"><span class="lmr-callout__icon">x</span><div>Adapter error: {{$meshcoreError}}</div></div>{{end}}
+  <div id="meshcore-release-note" class="lmr-callout is-info"{{if not $meshcore.Resume}} hidden{{end}}><span class="lmr-callout__icon">!</span><div>The device is released for external use. The receiver will not reconnect until you resume its connection.</div></div>
+  <div class="lmr-actions">
+    <button id="meshcore-release" class="lmr-btn lmr-btn--warn" type="button"{{if not $meshcore.Release}} hidden{{end}}>Release device</button>
+    <button id="meshcore-resume" class="lmr-btn" type="button"{{if not $meshcore.Resume}} hidden{{end}}>Resume receiver connection</button>
+  </div>
+</section>
+
+<section class="lmr-card">
+  <div class="lmr-sectionhead">
+    <div>
+      <div class="lmr-eyebrow">Temporary engineering test surface</div>
+      <h2 class="lmr-card__title">Adaptive tracking</h2>
+      <p class="lmr-card__desc">This reports the existing receiver-local test harness; it is not final production Session control.</p>
+    </div>
+    <span id="tracking-active" class="lmr-pill {{if and .MeshCoreTrackingOK .MeshCoreTracking.Active}}is-ok{{else}}is-neutral{{end}}"><span class="lmr-pill__dot"></span>{{if not .MeshCoreTrackingOK}}Unavailable{{else if .MeshCoreTracking.Active}}Active{{else}}Inactive{{end}}</span>
+  </div>
+  <div class="lmr-tiles">
+    <div class="lmr-tile"><div class="lmr-tile__label">Target identity</div><div class="lmr-tile__value"><span id="tracking-target" class="lmr-mono">none</span></div></div>
+    <div class="lmr-tile"><div class="lmr-tile__label">Motion state</div><div class="lmr-tile__value"><span id="tracking-motion" class="lmr-mono">unknown</span></div></div>
+    <div class="lmr-tile"><div class="lmr-tile__label">Estimated speed</div><div class="lmr-tile__value"><span id="tracking-speed" class="lmr-mono">unknown</span></div></div>
+    <div class="lmr-tile"><div class="lmr-tile__label">Polling interval</div><div class="lmr-tile__value"><span id="tracking-interval" class="lmr-mono">unknown</span></div></div>
+    <div class="lmr-tile"><div class="lmr-tile__label">Consecutive failures</div><div class="lmr-tile__value"><span id="tracking-failures" class="lmr-mono">0</span></div></div>
+    <div class="lmr-tile"><div class="lmr-tile__label">Next request</div><div class="lmr-tile__value"><span id="tracking-next" class="lmr-mono">not scheduled</span></div></div>
+    <div class="lmr-tile"><div class="lmr-tile__label">Route recovery</div><div class="lmr-tile__value"><span id="tracking-recovery" class="lmr-mono">idle</span></div></div>
+    <div class="lmr-tile"><div class="lmr-tile__label">Last recovery event</div><div class="lmr-tile__value"><span id="tracking-recovery-event" class="lmr-mono">none</span></div></div>
+  </div>
+</section>
+
+<section class="lmr-card">
+  <div class="lmr-sectionhead"><div><div class="lmr-eyebrow">Prefix-correlated observation</div><h2 class="lmr-card__title">Latest telemetry</h2></div><span id="telemetry-status" class="lmr-pill is-neutral"><span class="lmr-pill__dot"></span>No observation</span></div>
+  <p class="lmr-card__desc">Observed telemetry is not a trusted signed current position and does not establish current-position eligibility.</p>
+  <div class="lmr-tiles">
+    <div class="lmr-tile"><div class="lmr-tile__label">Latitude / longitude</div><div class="lmr-tile__value"><span id="telemetry-location" class="lmr-mono">unavailable</span></div></div>
+    <div class="lmr-tile"><div class="lmr-tile__label">Altitude</div><div class="lmr-tile__value"><span id="telemetry-altitude" class="lmr-mono">unavailable</span></div></div>
+    <div class="lmr-tile"><div class="lmr-tile__label">Voltage</div><div class="lmr-tile__value"><span id="telemetry-voltage" class="lmr-mono">unavailable</span></div></div>
+    <div class="lmr-tile"><div class="lmr-tile__label">Temperature</div><div class="lmr-tile__value"><span id="telemetry-temperature" class="lmr-mono">unavailable</span></div></div>
+    <div class="lmr-tile"><div class="lmr-tile__label">Received time</div><div class="lmr-tile__value"><span id="telemetry-received" class="lmr-mono">unavailable</span></div></div>
+    <div class="lmr-tile"><div class="lmr-tile__label">Request correlation</div><div class="lmr-tile__value"><span id="telemetry-correlation" class="lmr-mono">unavailable</span></div></div>
+  </div>
+</section>
+
+<section class="lmr-card">
+  <div class="lmr-sectionhead"><div><div class="lmr-eyebrow">Receiver-local history</div><h2 class="lmr-card__title">Recent telemetry polls</h2></div></div>
+  <p class="lmr-card__desc">Request-side route evidence only. A response route is unknown unless the protocol supplies it; path values are raw route hashes, not repeater identities.</p>
+  <div class="lmr-tablewrap"><table class="lmr-table lmr-polls"><thead><tr><th>Time / outcome</th><th>Route attempt</th><th>Motion / speed</th><th>Interval</th><th>Recovery</th><th>Path update / failures</th></tr></thead><tbody id="tracking-polls"><tr><td colspan="6" class="lmr-cell-soft">No telemetry polls recorded.</td></tr></tbody></table></div>
+</section>
+{{end}}

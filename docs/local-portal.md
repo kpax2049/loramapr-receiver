@@ -26,6 +26,8 @@ Bind address is configured by `portal.bind_address`.
    policy visibility and local fallback config
 5. **Troubleshooting**: resolve common issues and run reset/re-pair when needed
 6. **Advanced**: build/install/identity metadata for support and diagnostics
+7. **MeshCore**: BLE connection ownership, temporary tracking observability,
+   and recent request-side route evidence for a configured MeshCore adapter
 
 Identity shown in portal includes:
 
@@ -49,6 +51,7 @@ UI routes:
 - `GET /troubleshooting`
 - `POST /reset`
 - `GET /advanced`
+- `GET /meshcore`
 
 API routes:
 

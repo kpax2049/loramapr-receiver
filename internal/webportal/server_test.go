@@ -6,6 +6,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"os/exec"
 	"strings"
 	"testing"
 	"time"
@@ -222,6 +224,195 @@ func TestMeshCoreBLELifecycleAPIsAreLocalAndIdempotent(t *testing.T) {
 	}
 	if submitter.resumeCalls != 2 {
 		t.Fatalf("resume calls=%d", submitter.resumeCalls)
+	}
+}
+
+func TestMeshCoreDashboardRendersOperatorSurfaces(t *testing.T) {
+	t.Parallel()
+	snap := sampleSnapshot()
+	snap.ReceiverVersion = "v3.4.0"
+	snap.Adapters = []status.AdapterStatus{{
+		Name: "meshcore-companion", Protocol: "meshcore", Lifecycle: "connected", ConnectionState: "connected",
+		Enabled: true, Configured: true, Ready: true, Transport: "ble", ConfiguredDevice: "AA:BB:CC:DD:EE:FF", ConnectedDevice: "AA:BB:CC:DD:EE:FF",
+	}}
+	tracking := &trackingSubmitter{recordingPairingSubmitter: &recordingPairingSubmitter{}, status: meshcore.TrackingStatus{
+		Active: true, TargetPublicKey: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", MotionState: meshcore.MotionSlow,
+		CurrentIntervalSeconds: 30, RecentPolls: []meshcore.TrackingPoll{{
+			Outcome: "success", MotionState: meshcore.MotionSlow, IntervalSeconds: 30,
+			RouteAttempt: meshcore.RouteEvidence{Mode: meshcore.RouteModeExplicitPath, Path: []string{"18"}, PathLength: 1}, ResponseRouteUnknown: true,
+		}},
+	}}
+	srv := New("127.0.0.1:0", staticStatusProvider{snapshot: snap}, tracking, nil)
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/meshcore", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	for _, expected := range []string{
+		"Receiver / MeshCore", "MeshCore connection", "Release device", "Resume receiver connection",
+		"Adaptive tracking", "Latest telemetry", "Recent telemetry polls", "not a trusted signed current position",
+		"not repeater identities", "meshcore-dashboard.js",
+	} {
+		if !strings.Contains(rec.Body.String(), expected) {
+			t.Fatalf("dashboard missing %q: %s", expected, rec.Body.String())
+		}
+	}
+
+	js := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(js, httptest.NewRequest(http.MethodGet, "/static/js/meshcore-dashboard.js", nil))
+	for _, expected := range []string{
+		"Connected", "Connecting / reconnecting", "Released for external use", "Bluetooth unavailable", "Direct / 0-hop", "Explicit path",
+		"Raw path hashes", "response route unknown", "setHidden(byID(\"meshcore-release-note\"), !released)", "updateError(actionableError(adapter && adapter.last_error)",
+	} {
+		if !strings.Contains(js.Body.String(), expected) {
+			t.Fatalf("dashboard script missing %q", expected)
+		}
+	}
+}
+
+func TestMeshCoreDashboardLifecycleFailureReturnsActionableError(t *testing.T) {
+	t.Parallel()
+	submitter := &lifecycleSubmitter{recordingPairingSubmitter: &recordingPairingSubmitter{}, err: context.DeadlineExceeded}
+	srv := New("127.0.0.1:0", staticStatusProvider{snapshot: sampleSnapshot()}, submitter, nil)
+	for _, action := range []string{"release", "resume"} {
+		rec := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/meshcore/adapter/"+action, nil))
+		if rec.Code != http.StatusServiceUnavailable || !strings.Contains(rec.Body.String(), `"error":"context deadline exceeded"`) {
+			t.Fatalf("action=%s status=%d body=%s", action, rec.Code, rec.Body.String())
+		}
+	}
+}
+
+func TestMeshCoreDashboardRendersConnectionAndTrackingStates(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name, label string
+		adapter     status.AdapterStatus
+	}{
+		{name: "connected", label: "Connected", adapter: status.AdapterStatus{Protocol: "meshcore", ConnectionState: "connected", Ready: true, Transport: "ble"}},
+		{name: "reconnecting", label: "Connecting / reconnecting", adapter: status.AdapterStatus{Protocol: "meshcore", ConnectionState: "connecting", Transport: "ble"}},
+		{name: "released", label: "Released for external use", adapter: status.AdapterStatus{Protocol: "meshcore", ConnectionState: "released", Transport: "ble", ReleasedByUser: true, ReconnectSuppressed: true}},
+		{name: "bluetooth unavailable", label: "Bluetooth unavailable", adapter: status.AdapterStatus{Protocol: "meshcore", Lifecycle: "not_present", ConnectionState: "disconnected", Transport: "ble"}},
+		{name: "error", label: "Error", adapter: status.AdapterStatus{Protocol: "meshcore", Lifecycle: "configuration_error", ConnectionState: "error", Transport: "ble", LastError: "BlueZ transport failed"}},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			snap := sampleSnapshot()
+			snap.Adapters = []status.AdapterStatus{test.adapter}
+			srv := New("127.0.0.1:0", staticStatusProvider{snapshot: snap}, &trackingSubmitter{recordingPairingSubmitter: &recordingPairingSubmitter{}}, nil)
+			rec := httptest.NewRecorder()
+			srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/meshcore", nil))
+			if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), test.label) {
+				t.Fatalf("label=%q status=%d body=%s", test.label, rec.Code, rec.Body.String())
+			}
+		})
+	}
+	for _, active := range []bool{true, false} {
+		t.Run("tracking_"+map[bool]string{true: "active", false: "inactive"}[active], func(t *testing.T) {
+			srv := New("127.0.0.1:0", staticStatusProvider{snapshot: sampleSnapshot()}, &trackingSubmitter{recordingPairingSubmitter: &recordingPairingSubmitter{}, status: meshcore.TrackingStatus{Active: active}}, nil)
+			rec := httptest.NewRecorder()
+			srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/meshcore", nil))
+			want := "Inactive"
+			if active {
+				want = "Active"
+			}
+			if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), want) {
+				t.Fatalf("active=%v status=%d body=%s", active, rec.Code, rec.Body.String())
+			}
+		})
+	}
+}
+
+func TestMeshCoreDashboardStateDependentAlertsAndActions(t *testing.T) {
+	newPage := func(adapter status.AdapterStatus) string {
+		t.Helper()
+		snap := sampleSnapshot()
+		snap.Adapters = []status.AdapterStatus{adapter}
+		srv := New("127.0.0.1:0", staticStatusProvider{snapshot: snap}, &trackingSubmitter{recordingPairingSubmitter: &recordingPairingSubmitter{}}, nil)
+		rec := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/meshcore", nil))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("dashboard status=%d body=%s", rec.Code, rec.Body.String())
+		}
+		return rec.Body.String()
+	}
+	const releaseButton = `id="meshcore-release" class="lmr-btn lmr-btn--warn" type="button"`
+	const resumeButton = `id="meshcore-resume" class="lmr-btn" type="button"`
+	const releasedNotice = `id="meshcore-release-note" class="lmr-callout is-info"`
+
+	t.Run("connected has no released or empty error alert", func(t *testing.T) {
+		body := newPage(status.AdapterStatus{Protocol: "meshcore", ConnectionState: "connected", Ready: true, Transport: "ble", ConfiguredDevice: "AA:BB", ConnectedDevice: "AA:BB", ReleasedByUser: true, ReconnectSuppressed: true})
+		if !strings.Contains(body, `>Connected</span>`) || !strings.Contains(body, releaseButton+`>Release device</button>`) {
+			t.Fatalf("connected action/state missing: %s", body)
+		}
+		if !strings.Contains(body, resumeButton+` hidden>`) || !strings.Contains(body, releasedNotice+` hidden>`) {
+			t.Fatalf("connected state did not hide released controls: %s", body)
+		}
+		if strings.Contains(body, `id="meshcore-error"`) {
+			t.Fatalf("connected state rendered an empty error alert: %s", body)
+		}
+		if !strings.Contains(body, `id="meshcore-reconnect" class="lmr-mono">enabled`) {
+			t.Fatalf("connected state did not retain enabled reconnect wording: %s", body)
+		}
+	})
+
+	t.Run("released shows notice and resume without error styling", func(t *testing.T) {
+		body := newPage(status.AdapterStatus{Protocol: "meshcore", ConnectionState: "released", Transport: "ble", ReleasedByUser: true, ReconnectSuppressed: true})
+		if !strings.Contains(body, `>Released for external use</span>`) || !strings.Contains(body, releasedNotice+`><span`) || !strings.Contains(body, resumeButton+`>Resume receiver connection</button>`) {
+			t.Fatalf("released state missing notice/resume: %s", body)
+		}
+		if !strings.Contains(body, releaseButton+` hidden>`) || strings.Contains(body, `id="meshcore-error"`) {
+			t.Fatalf("released state rendered release or error alert: %s", body)
+		}
+	})
+
+	t.Run("reconnecting does not render released messaging", func(t *testing.T) {
+		body := newPage(status.AdapterStatus{Protocol: "meshcore", ConnectionState: "connecting", Transport: "ble"})
+		if !strings.Contains(body, `>Connecting / reconnecting</span>`) || !strings.Contains(body, releasedNotice+` hidden>`) || !strings.Contains(body, releaseButton+` hidden>`) {
+			t.Fatalf("reconnecting state rendered invalid controls: %s", body)
+		}
+	})
+
+	t.Run("actionable error renders and cleared error is absent", func(t *testing.T) {
+		body := newPage(status.AdapterStatus{Protocol: "meshcore", Lifecycle: "configuration_error", ConnectionState: "error", Transport: "ble", LastError: "BlueZ connection failed"})
+		if !strings.Contains(body, `id="meshcore-error" class="lmr-callout is-fail"`) || !strings.Contains(body, `Adapter error: BlueZ connection failed`) {
+			t.Fatalf("actionable error was not rendered: %s", body)
+		}
+		cleared := newPage(status.AdapterStatus{Protocol: "meshcore", Lifecycle: "configuration_error", ConnectionState: "error", Transport: "ble", LastError: "   "})
+		if strings.Contains(cleared, `id="meshcore-error"`) {
+			t.Fatalf("cleared error left an alert behind: %s", cleared)
+		}
+	})
+}
+
+func TestPortalEmbeddedAssetsLoadFromUnrelatedWorkingDirectory(t *testing.T) {
+	if os.Getenv("LMR_PORTAL_EXTERNAL_CWD_HELPER") != "1" {
+		cmd := exec.Command(os.Args[0], "-test.run=^TestPortalEmbeddedAssetsLoadFromUnrelatedWorkingDirectory$")
+		cmd.Dir = t.TempDir()
+		cmd.Env = append(os.Environ(), "LMR_PORTAL_EXTERNAL_CWD_HELPER=1")
+		if output, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("portal failed outside the repository cwd: %v\n%s", err, output)
+		}
+		return
+	}
+
+	srv := New("127.0.0.1:0", staticStatusProvider{snapshot: sampleSnapshot()}, &recordingPairingSubmitter{}, nil)
+	page := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(page, httptest.NewRequest(http.MethodGet, "/meshcore", nil))
+	if page.Code != http.StatusOK || !strings.Contains(page.Body.String(), "Receiver / MeshCore") {
+		t.Fatalf("embedded dashboard did not render: status=%d body=%s", page.Code, page.Body.String())
+	}
+	for _, asset := range []string{"/static/css/tokens.css", "/static/css/portal.css", "/static/js/theme-toggle.js", "/static/js/meshcore-dashboard.js"} {
+		rec := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, asset, nil))
+		if rec.Code != http.StatusOK || rec.Body.Len() == 0 {
+			t.Fatalf("embedded asset %s failed outside repository cwd: status=%d", asset, rec.Code)
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	if err := srv.Run(ctx); err != nil {
+		t.Fatalf("portal startup failed outside repository cwd: %v", err)
 	}
 }
 

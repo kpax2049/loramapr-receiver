@@ -99,24 +99,28 @@ func (p TrackingPolicy) normalized() TrackingPolicy {
 // TrackingStatus is ephemeral operational state. The future Session lifecycle
 // owner can bind directly to Start and Stop; it must not be persisted.
 type TrackingStatus struct {
-	Active                 bool           `json:"active"`
-	TargetPublicKey        string         `json:"targetPublicKey,omitempty"`
-	MotionState            MotionState    `json:"motionState"`
-	EstimatedSpeedKmh      *float64       `json:"estimatedSpeedKmh"`
-	CurrentIntervalSeconds int64          `json:"currentIntervalSeconds"`
-	LastRequestAt          *time.Time     `json:"lastRequestAt"`
-	LastResponseAt         *time.Time     `json:"lastResponseAt"`
-	NextRequestAt          *time.Time     `json:"nextRequestAt"`
-	ConsecutiveFailures    int            `json:"consecutiveFailures"`
-	LastError              *string        `json:"lastError"`
-	RouteRecoveryState     string         `json:"routeRecoveryState"`
-	LastRouteRecoveryEvent string         `json:"lastRouteRecoveryEvent"`
-	RecoveryEpisodeActive  bool           `json:"recoveryEpisodeActive"`
-	RouteGeneration        uint64         `json:"routeGeneration"`
-	RouteFingerprint       string         `json:"routeFingerprint"`
-	LastPathUpdateAt       *time.Time     `json:"lastPathUpdateAt"`
-	PathUpdatePending      bool           `json:"pathUpdatePending"`
-	RecentPolls            []TrackingPoll `json:"recentPolls"`
+	Active                 bool        `json:"active"`
+	TargetPublicKey        string      `json:"targetPublicKey,omitempty"`
+	MotionState            MotionState `json:"motionState"`
+	EstimatedSpeedKmh      *float64    `json:"estimatedSpeedKmh"`
+	CurrentIntervalSeconds int64       `json:"currentIntervalSeconds"`
+	LastRequestAt          *time.Time  `json:"lastRequestAt"`
+	LastResponseAt         *time.Time  `json:"lastResponseAt"`
+	NextRequestAt          *time.Time  `json:"nextRequestAt"`
+	ConsecutiveFailures    int         `json:"consecutiveFailures"`
+	LastError              *string     `json:"lastError"`
+	RouteRecoveryState     string      `json:"routeRecoveryState"`
+	LastRouteRecoveryEvent string      `json:"lastRouteRecoveryEvent"`
+	RecoveryEpisodeActive  bool        `json:"recoveryEpisodeActive"`
+	RouteGeneration        uint64      `json:"routeGeneration"`
+	RouteFingerprint       string      `json:"routeFingerprint"`
+	LastPathUpdateAt       *time.Time  `json:"lastPathUpdateAt"`
+	PathUpdatePending      bool        `json:"pathUpdatePending"`
+	// LatestTelemetry is the latest prefix-correlated observation obtained by
+	// this temporary receiver-local tracking harness. It is intentionally not
+	// a signed current-position assertion.
+	LatestTelemetry *TelemetryResult `json:"latestTelemetry,omitempty"`
+	RecentPolls     []TrackingPoll   `json:"recentPolls"`
 }
 
 const recentPollLimit = 50
@@ -271,10 +275,30 @@ func (c *TrackingController) statusCopyLocked() TrackingStatus {
 		value := *c.status.LastError
 		result.LastError = &value
 	}
+	if c.status.LatestTelemetry != nil {
+		value := copyTelemetryResult(*c.status.LatestTelemetry)
+		result.LatestTelemetry = &value
+	}
 	result.RecentPolls = make([]TrackingPoll, len(c.status.RecentPolls))
 	for i, poll := range c.status.RecentPolls {
 		result.RecentPolls[i] = copyTrackingPoll(poll)
 	}
+	return result
+}
+
+func copyTelemetryResult(result TelemetryResult) TelemetryResult {
+	result.RawFrame = nil
+	result.Telemetry.UnsupportedTypes = append([]int(nil), result.Telemetry.UnsupportedTypes...)
+	result.Telemetry.Voltage = copyFloat64(result.Telemetry.Voltage)
+	result.Telemetry.Latitude = copyFloat64(result.Telemetry.Latitude)
+	result.Telemetry.Longitude = copyFloat64(result.Telemetry.Longitude)
+	result.Telemetry.AltitudeM = copyFloat64(result.Telemetry.AltitudeM)
+	result.Telemetry.TemperatureC = copyFloat64(result.Telemetry.TemperatureC)
+	if result.Telemetry.BatteryPercentage != nil {
+		value := *result.Telemetry.BatteryPercentage
+		result.Telemetry.BatteryPercentage = &value
+	}
+	result.RouteAttempt = result.RouteAttempt.copy()
 	return result
 }
 
@@ -395,6 +419,8 @@ func (c *TrackingController) recordSuccess(target string, generation uint64, res
 	wasUnavailable := c.status.LastError != nil && *c.status.LastError == ErrTelemetryAdapterDisconnected.Error()
 	previousInterval := c.status.CurrentIntervalSeconds
 	c.status.LastResponseAt = timePtr(result.ReceivedAt.UTC())
+	latest := copyTelemetryResult(result)
+	c.status.LatestTelemetry = &latest
 	c.status.ConsecutiveFailures, c.status.LastError = 0, nil
 	c.applyFixLocked(result)
 	c.status.CurrentIntervalSeconds = int64(c.intervalForLocked() / time.Second)

@@ -38,6 +38,7 @@
         <a class="lmr-nav__tab {{lmrActive .Title "Welcome"}}" href="/">Welcome</a>
         <a class="lmr-nav__tab {{lmrActive .Title "Pairing"}}" href="/pairing">Pairing</a>
         <a class="lmr-nav__tab {{lmrActive .Title "Progress"}}" href="/progress">Progress</a>
+        <a class="lmr-nav__tab {{lmrActive .Title "MeshCore"}}" href="/meshcore">MeshCore</a>
         <a class="lmr-nav__tab {{lmrActive .Title "Home Auto Session"}}" href="/home-auto-session">Home Auto Session</a>
         <a class="lmr-nav__tab {{lmrActive .Title "Troubleshooting"}}" href="/troubleshooting">Troubleshooting</a>
         <a class="lmr-nav__tab {{lmrActive .Title "Advanced"}}" href="/advanced">Advanced</a>
@@ -169,6 +170,7 @@
       });
     })();
   </script>
+  {{if eq .Title "MeshCore"}}<script src="/static/js/meshcore-dashboard.js"></script>{{end}}
   <script src="/static/js/theme-toggle.js"></script>
 </body>
 </html>
