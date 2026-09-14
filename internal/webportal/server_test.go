@@ -79,6 +79,10 @@ func (s *lifecycleSubmitter) ResumeMeshCoreBLE(context.Context) (meshcore.Adapte
 	return s.status, s.err
 }
 
+func (s *lifecycleSubmitter) MeshCoreAdapterStatus(context.Context) (meshcore.AdapterStatus, error) {
+	return s.status, s.err
+}
+
 func (s *telemetrySubmitter) RequestMeshCoreTelemetry(_ context.Context, key string) (meshcore.TelemetryResult, error) {
 	s.key = key
 	return s.result, s.err
@@ -227,6 +231,52 @@ func TestMeshCoreBLELifecycleAPIsAreLocalAndIdempotent(t *testing.T) {
 	}
 }
 
+func TestMeshCoreDashboardUsesLiveAdapterStatusDuringReconnect(t *testing.T) {
+	t.Parallel()
+	snap := sampleSnapshot()
+	snap.Adapters = []status.AdapterStatus{{Protocol: "meshcore", ConnectionState: "released", ReleasedByUser: true, ReconnectSuppressed: true, Transport: "ble"}}
+	submitter := &lifecycleSubmitter{recordingPairingSubmitter: &recordingPairingSubmitter{}, status: meshcore.AdapterStatus{
+		State: meshcore.StateConnecting, Transport: "ble", Configured: "AA:BB:CC:DD:EE:FF",
+	}}
+	srv := New("127.0.0.1:0", staticStatusProvider{snapshot: snap}, submitter, nil)
+
+	reconnecting := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(reconnecting, httptest.NewRequest(http.MethodGet, "/meshcore", nil))
+	if reconnecting.Code != http.StatusOK || !strings.Contains(reconnecting.Body.String(), "Connecting / reconnecting") || strings.Contains(reconnecting.Body.String(), "Released for external use") {
+		t.Fatalf("live reconnect status was not rendered: status=%d body=%s", reconnecting.Code, reconnecting.Body.String())
+	}
+
+	submitter.status = meshcore.AdapterStatus{
+		State: meshcore.StateConnected, Transport: "ble", Configured: "AA:BB:CC:DD:EE:FF", ConnectedDevice: "AA:BB:CC:DD:EE:FF",
+		Session: meshcore.Snapshot{State: meshcore.SessionReady},
+	}
+	connected := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(connected, httptest.NewRequest(http.MethodGet, "/api/status", nil))
+	if connected.Code != http.StatusOK || !strings.Contains(connected.Body.String(), `"connection_state":"connected"`) || !strings.Contains(connected.Body.String(), `"ready":true`) {
+		t.Fatalf("live connected status was not projected: status=%d body=%s", connected.Code, connected.Body.String())
+	}
+}
+
+func TestMeshCoreDashboardLifecycleTransitionFeedbackScript(t *testing.T) {
+	t.Parallel()
+	srv := New("127.0.0.1:0", staticStatusProvider{snapshot: sampleSnapshot()}, &trackingSubmitter{recordingPairingSubmitter: &recordingPairingSubmitter{}}, nil)
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/static/js/meshcore-dashboard.js", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("script status=%d", rec.Code)
+	}
+	script := rec.Body.String()
+	for _, expected := range []string{
+		"Releasing…", "Resuming…", "Releasing device…", "Connecting / reconnecting",
+		"transitionRefreshInterval", "scheduleRefresh(250)", "if (actionPending) return",
+		"pendingSettled", "actionPending.apiSucceeded", "Release failed: ", "Resume failed: ",
+	} {
+		if !strings.Contains(script, expected) {
+			t.Fatalf("transition feedback missing %q", expected)
+		}
+	}
+}
+
 func TestMeshCoreDashboardRendersOperatorSurfaces(t *testing.T) {
 	t.Parallel()
 	snap := sampleSnapshot()
@@ -250,7 +300,7 @@ func TestMeshCoreDashboardRendersOperatorSurfaces(t *testing.T) {
 	}
 	for _, expected := range []string{
 		"Receiver / MeshCore", "MeshCore connection", "Release device", "Resume receiver connection",
-		"Adaptive tracking", "Latest telemetry", "Recent telemetry polls", "not a trusted signed current position",
+		"Adaptive tracking", "Latest telemetry", "Recent telemetry polls", "meshcore-transition", "not a trusted signed current position",
 		"not repeater identities", "meshcore-dashboard.js",
 	} {
 		if !strings.Contains(rec.Body.String(), expected) {
@@ -383,6 +433,108 @@ func TestMeshCoreDashboardStateDependentAlertsAndActions(t *testing.T) {
 			t.Fatalf("cleared error left an alert behind: %s", cleared)
 		}
 	})
+}
+
+func TestMeshCoreDashboardTopSummaries(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		name       string
+		snap       status.Snapshot
+		want       string
+		wantDetail string
+	}{
+		{name: "healthy receiver", snap: status.Snapshot{Lifecycle: status.LifecycleRunning, Ready: true}, want: "Online"},
+		{name: "degraded receiver", snap: status.Snapshot{Lifecycle: status.LifecycleRunning, Ready: false}, want: "Degraded"},
+		{name: "current receiver fault", snap: status.Snapshot{Lifecycle: status.LifecycleRunning, Ready: true, FailureCode: "receiver_auth_invalid", FailureSummary: "Receiver credentials were rejected by cloud"}, want: "Problem", wantDetail: "Receiver credentials were rejected by cloud"},
+		{name: "actionable receiver condition", snap: status.Snapshot{Lifecycle: status.LifecycleRunning, Ready: true, FailureCode: "cloud_unreachable", FailureSummary: "Cloud endpoint is currently unreachable"}, want: "Degraded", wantDetail: "Cloud endpoint is currently unreachable"},
+		{name: "recovered transient error is diagnostic history", snap: status.Snapshot{Lifecycle: status.LifecycleRunning, Ready: true, LastError: "temporary MeshCore BLE reconnect failure", Adapters: []status.AdapterStatus{{Protocol: "meshcore", ConnectionState: "connected", Ready: true}}}, want: "Online"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got := receiverSummary(test.snap)
+			if got.Label != test.want {
+				t.Fatalf("receiver summary=%q want %q", got.Label, test.want)
+			}
+			if test.wantDetail != "" && got.Detail != test.wantDetail {
+				t.Fatalf("receiver detail=%q want %q", got.Detail, test.wantDetail)
+			}
+		})
+	}
+	for _, test := range []struct {
+		name string
+		snap status.Snapshot
+		want string
+	}{
+		{name: "cloud reachable", snap: status.Snapshot{CloudStatus: "reachable", CloudReachable: true}, want: "Cloud connected"},
+		{name: "cloud unreachable", snap: status.Snapshot{CloudStatus: "unreachable"}, want: "Cloud unreachable"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := cloudSummary(test.snap).Label; got != test.want {
+				t.Fatalf("cloud summary=%q want %q", got, test.want)
+			}
+		})
+	}
+
+	t.Run("recovered MeshCore state renders online despite retained diagnostic context", func(t *testing.T) {
+		snap := sampleSnapshot()
+		snap.Lifecycle = status.LifecycleRunning
+		snap.Ready = true
+		snap.CloudStatus = "reachable"
+		snap.CloudReachable = true
+		snap.LastError = "temporary MeshCore BLE reconnect failure"
+		snap.Adapters = []status.AdapterStatus{{Protocol: "meshcore", ConnectionState: "connected", Ready: true, Transport: "ble"}}
+		srv := New("127.0.0.1:0", staticStatusProvider{snapshot: snap}, &trackingSubmitter{recordingPairingSubmitter: &recordingPairingSubmitter{}}, nil)
+		rec := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/meshcore", nil))
+		body := rec.Body.String()
+		if rec.Code != http.StatusOK || !strings.Contains(body, `id="receiver-overall-label" class="lmr-overall__label">Online`) || strings.Contains(body, `id="receiver-overall-label" class="lmr-overall__label">Problem`) {
+			t.Fatalf("recovered state did not render online summary: status=%d body=%s", rec.Code, body)
+		}
+
+		js := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(js, httptest.NewRequest(http.MethodGet, "/static/js/meshcore-dashboard.js", nil))
+		script := js.Body.String()
+		start := strings.Index(script, "function receiverSummary(snapshot)")
+		end := strings.Index(script, "function cloudSummary(snapshot)")
+		if start < 0 || end < 0 || end <= start {
+			t.Fatalf("receiver refresh mapper is missing from dashboard script")
+		}
+		mapper := script[start:end]
+		if strings.Contains(mapper, "snapshot.last_error") || !strings.Contains(mapper, "snapshot.failure_code") || !strings.Contains(mapper, "action_required") {
+			t.Fatalf("live receiver mapper does not use current fault semantics: %s", mapper)
+		}
+	})
+}
+
+func TestMeshCoreSummaryAgreesWithDetailedState(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name, detailed, summary string
+		adapter                 status.AdapterStatus
+	}{
+		{name: "connected", detailed: "Connected", summary: "MeshCore connected", adapter: status.AdapterStatus{Protocol: "meshcore", ConnectionState: "connected", Ready: true}},
+		{name: "reconnecting", detailed: "Connecting / reconnecting", summary: "MeshCore reconnecting", adapter: status.AdapterStatus{Protocol: "meshcore", ConnectionState: "reconnecting"}},
+		{name: "released", detailed: "Released for external use", summary: "MeshCore released", adapter: status.AdapterStatus{Protocol: "meshcore", ConnectionState: "released", ReleasedByUser: true, ReconnectSuppressed: true}},
+		{name: "error", detailed: "Error", summary: "MeshCore error", adapter: status.AdapterStatus{Protocol: "meshcore", ConnectionState: "error", LastError: "Companion rejected connection"}},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			if got := meshcoreView(&test.adapter).Label; got != test.detailed {
+				t.Fatalf("detail=%q want %q", got, test.detailed)
+			}
+			if got := meshcoreSummary(&test.adapter).Label; got != test.summary {
+				t.Fatalf("summary=%q want %q", got, test.summary)
+			}
+			snap := sampleSnapshot()
+			snap.Adapters = []status.AdapterStatus{test.adapter}
+			srv := New("127.0.0.1:0", staticStatusProvider{snapshot: snap}, &trackingSubmitter{recordingPairingSubmitter: &recordingPairingSubmitter{}}, nil)
+			rec := httptest.NewRecorder()
+			srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/meshcore", nil))
+			body := rec.Body.String()
+			if rec.Code != http.StatusOK || !strings.Contains(body, test.summary) || !strings.Contains(body, `id="meshcore-state"`) || !strings.Contains(body, test.detailed) {
+				t.Fatalf("summary/detail mismatch: status=%d body=%s", rec.Code, body)
+			}
+		})
+	}
 }
 
 func TestPortalEmbeddedAssetsLoadFromUnrelatedWorkingDirectory(t *testing.T) {

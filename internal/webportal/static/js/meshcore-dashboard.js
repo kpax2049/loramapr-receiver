@@ -4,7 +4,12 @@
   const refreshState = document.getElementById("meshcore-refresh-state");
   const releaseButton = document.getElementById("meshcore-release");
   const resumeButton = document.getElementById("meshcore-resume");
-  let actionPending = false;
+  const normalRefreshInterval = 15000;
+  const transitionRefreshInterval = 2000;
+  let actionPending = null;
+  let latestAdapter = null;
+  let refreshTimer = null;
+  let refreshInFlight = false;
 
   function byID(id) { return document.getElementById(id); }
   function text(id, value) { const node = byID(id); if (node) node.textContent = value || "unknown"; }
@@ -57,8 +62,42 @@
   function meshcoreAdapter(snapshot) {
     return (snapshot.adapters || []).find(function (adapter) { return String(adapter.protocol || "").toLowerCase() === "meshcore"; });
   }
+  function receiverSummary(snapshot) {
+    const lifecycle = optional(snapshot.lifecycle, "").toLowerCase();
+    const attention = optional(snapshot.attention_state, "").toLowerCase();
+    const detail = optional(snapshot.attention_summary, optional(snapshot.failure_summary, "Receiver needs attention"));
+    if (lifecycle === "failed") return { label: "Problem", detail: "Receiver service has failed", icon: "✕", tone: "is-fail" };
+    if (attention === "urgent") return { label: "Problem", detail: detail, icon: "✕", tone: "is-fail" };
+    if (attention === "action_required" || actionableError(snapshot.failure_code)) return { label: "Degraded", detail: detail, icon: "!", tone: "is-warn" };
+    if (lifecycle === "stopped" || lifecycle === "stopping" || !lifecycle) return { label: "Offline", detail: "Receiver service is unavailable", icon: "○", tone: "is-neutral" };
+    if (lifecycle === "running" && snapshot.ready) return { label: "Online", detail: "Receiver service is ready", icon: "✓", tone: "is-ok" };
+    return { label: "Degraded", detail: "Receiver service is not ready", icon: "!", tone: "is-warn" };
+  }
+  function cloudSummary(snapshot) {
+    const state = optional(snapshot.cloud_status, "").toLowerCase();
+    if (snapshot.cloud_reachable === true || state === "reachable") return { label: "Cloud connected", detail: "Cloud is reachable", icon: "✓", tone: "is-ok" };
+    if (state === "unreachable" || state === "lifecycle_blocked") return { label: "Cloud unreachable", detail: "Cloud connection needs attention", icon: "!", tone: "is-warn" };
+    return { label: "Cloud unavailable", detail: "Cloud status is not available", icon: "○", tone: "is-neutral" };
+  }
+  function meshcoreSummary(adapter) {
+    const view = meshcoreState(adapter);
+    if (view.label === "Connected") return { label: "MeshCore connected", detail: "Companion handshake ready", icon: "✓", tone: "is-ok" };
+    if (view.label === "Connecting / reconnecting") return { label: "MeshCore reconnecting", detail: "Restoring receiver connection", icon: "!", tone: "is-warn" };
+    if (view.label === "Released for external use") return { label: "MeshCore released", detail: "Available to another client", icon: "○", tone: "is-neutral" };
+    if (view.label === "Error") return { label: "MeshCore error", detail: view.detail, icon: "✕", tone: "is-fail" };
+    return { label: "MeshCore unavailable", detail: view.detail, icon: "○", tone: "is-neutral" };
+  }
+  function setSummary(containerID, iconID, labelID, detailID, summary) {
+    const container = byID(containerID);
+    if (container) container.className = container.className.replace(/\bis-(ok|warn|fail|neutral)\b/g, "").trim() + " " + summary.tone;
+    text(iconID, summary.icon);
+    text(labelID, summary.label);
+    text(detailID, summary.detail);
+  }
   function renderReceiver(snapshot) {
-    setPill("receiver-health", snapshot.ready ? "Ready" : "Not ready", snapshot.ready ? "is-ok" : "is-warn");
+    const receiver = receiverSummary(snapshot);
+    setSummary("receiver-overall", "receiver-overall-icon", "receiver-overall-label", "receiver-overall-detail", receiver);
+    setSummary("cloud-summary", "cloud-summary-icon", "cloud-summary-label", "cloud-summary-detail", cloudSummary(snapshot));
     text("receiver-lifecycle", optional(snapshot.lifecycle, "unknown"));
     text("receiver-cloud", optional(snapshot.cloud_status, "unknown"));
     const started = snapshot.started_at ? new Date(snapshot.started_at) : null;
@@ -71,8 +110,73 @@
     const minutes = Math.floor((seconds % 3600) / 60);
     return (days ? days + "d " : "") + hours + "h " + minutes + "m";
   }
+  function transitionText(action) {
+    return action === "release" ? "Releasing device…" : "Reconnecting to MeshCore…";
+  }
+  function setTransition(action) {
+    const transition = byID("meshcore-transition");
+    if (!action) {
+      setHidden(transition, true);
+      return;
+    }
+    text("meshcore-transition-text", transitionText(action));
+    setHidden(transition, false);
+  }
+  function setLifecycleButtons(action) {
+    const pending = actionPending && actionPending.action;
+    if (!pending) {
+      releaseButton.disabled = false;
+      resumeButton.disabled = false;
+      releaseButton.textContent = "Release device";
+      resumeButton.textContent = "Resume receiver connection";
+      return;
+    }
+    releaseButton.disabled = true;
+    resumeButton.disabled = true;
+    releaseButton.textContent = pending === "release" ? "Releasing…" : "Release device";
+    resumeButton.textContent = pending === "resume" ? "Resuming…" : "Resume receiver connection";
+  }
+  function pendingSettled(view) {
+    if (!actionPending || !actionPending.apiSucceeded) return false;
+    return actionPending.action === "release" ? view.label === "Released for external use" : view.label === "Connected";
+  }
+  function renderPendingAdapter(adapter, view) {
+    const releasing = actionPending.action === "release";
+    const label = releasing ? "Releasing device…" : "Connecting / reconnecting";
+    const detail = releasing ? "Disconnecting the receiver from this MeshCore device." : "Receiver is attempting to reconnect; waiting for the Companion handshake.";
+    setPill("meshcore-state", label, "is-warn");
+    text("meshcore-state-detail", detail);
+    setSummary("meshcore-summary", "meshcore-summary-icon", "meshcore-summary-label", "meshcore-summary-detail", {
+      label: releasing ? "MeshCore releasing" : "MeshCore reconnecting", detail: detail, icon: "!", tone: "is-warn"
+    });
+    text("meshcore-configured", optional(adapter && adapter.configured_device, "not configured"));
+    text("meshcore-connected", optional(adapter && adapter.connected_device, "not connected"));
+    text("meshcore-reconnect", releasing ? "release in progress" : "reconnecting");
+    text("meshcore-ready", "not ready");
+    setHidden(byID("meshcore-release-note"), true);
+    setHidden(releaseButton, !releasing);
+    setHidden(resumeButton, releasing);
+    setLifecycleButtons(actionPending.action);
+    setTransition(actionPending.action);
+  }
+  function finishTransition() {
+    actionPending = null;
+    setTransition(null);
+    scheduleRefresh(normalRefreshInterval);
+  }
   function renderAdapter(adapter) {
     const view = meshcoreState(adapter);
+    latestAdapter = adapter;
+    updateError(actionableError(adapter && adapter.last_error), "Adapter error: ");
+    if (actionPending) {
+      if (pendingSettled(view)) {
+        finishTransition();
+      } else {
+        renderPendingAdapter(adapter, view);
+        return;
+      }
+    }
+    setSummary("meshcore-summary", "meshcore-summary-icon", "meshcore-summary-label", "meshcore-summary-detail", meshcoreSummary(adapter));
     setPill("meshcore-state", view.label, toneForState(view.label));
     text("meshcore-state-detail", view.detail);
     text("meshcore-configured", optional(adapter && adapter.configured_device, "not configured"));
@@ -80,10 +184,11 @@
     const released = view.label === "Released for external use";
     text("meshcore-reconnect", released ? "suppressed by release" : "enabled");
     text("meshcore-ready", adapter && adapter.ready ? "ready" : "not ready");
-    updateError(actionableError(adapter && adapter.last_error), "Adapter error: ");
     setHidden(byID("meshcore-release-note"), !released);
     setHidden(releaseButton, !(adapter && view.label === "Connected"));
     setHidden(resumeButton, !released);
+    setLifecycleButtons(null);
+    setTransition(null);
   }
   function errorPanel() {
     let panel = byID("meshcore-error");
@@ -186,40 +291,47 @@
     return payload;
   }
   async function refresh() {
+    if (refreshInFlight) return;
+    refreshInFlight = true;
     try {
       const results = await Promise.all([json("/api/status"), json("/api/meshcore/tracking/status").catch(function () { return null; })]);
       renderReceiver(results[0]);
       renderAdapter(meshcoreAdapter(results[0]));
       renderTracking(results[1]);
-      refreshState.textContent = "Updated " + new Date().toLocaleTimeString();
+      refreshState.textContent = actionPending ? transitionText(actionPending.action) : "Updated " + new Date().toLocaleTimeString();
     } catch (error) {
       refreshState.textContent = "Status refresh failed: " + error.message;
+    } finally {
+      refreshInFlight = false;
     }
+  }
+  function scheduleRefresh(delay) {
+    if (refreshTimer) window.clearTimeout(refreshTimer);
+    refreshTimer = window.setTimeout(function () {
+      refresh().finally(function () { scheduleRefresh(actionPending ? transitionRefreshInterval : normalRefreshInterval); });
+    }, delay);
   }
   async function lifecycle(action) {
     if (actionPending) return;
-    actionPending = true;
-    const button = action === "release" ? releaseButton : resumeButton;
-    const original = button.textContent;
-    releaseButton.disabled = true; resumeButton.disabled = true;
-    button.textContent = action === "release" ? "Releasing device…" : "Resuming connection…";
+    actionPending = { action: action, apiSucceeded: false };
+    renderPendingAdapter(latestAdapter, meshcoreState(latestAdapter));
     updateError("");
-    refreshState.textContent = button.textContent;
+    refreshState.textContent = transitionText(action);
+    scheduleRefresh(250);
     try {
       await json("/api/meshcore/adapter/" + action, { method: "POST" });
-      refreshState.textContent = action === "release" ? "Device released. Refreshing status…" : "Receiver connection resumed. Refreshing status…";
+      actionPending.apiSucceeded = true;
+      refreshState.textContent = action === "release" ? "Release accepted; waiting for receiver status…" : "Reconnect requested; waiting for Companion handshake…";
       await refresh();
     } catch (error) {
+      finishTransition();
+      renderAdapter(latestAdapter);
       updateError(error && error.message, action === "release" ? "Release failed: " : "Resume failed: ");
       refreshState.textContent = "Action failed";
-    } finally {
-      button.textContent = original;
-      releaseButton.disabled = false; resumeButton.disabled = false;
-      actionPending = false;
     }
   }
-  releaseButton.addEventListener("click", function () { lifecycle("release"); });
-  resumeButton.addEventListener("click", function () { lifecycle("resume"); });
+  if (releaseButton) releaseButton.addEventListener("click", function () { lifecycle("release"); });
+  if (resumeButton) resumeButton.addEventListener("click", function () { lifecycle("resume"); });
   refresh();
-  window.setInterval(refresh, 15000);
+  scheduleRefresh(normalRefreshInterval);
 }());

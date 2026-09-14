@@ -349,7 +349,10 @@ func (a *Adapter) Resume() error {
 	}
 	a.status.ReconnectSuppressed = false
 	a.status.ReleasedByUser = false
-	a.status.State = StateNotPresent
+	// Resume is an affirmative request to reconnect. Keep that authoritative
+	// transitional state visible even before the worker has opened BlueZ, so a
+	// portal reload cannot make an in-progress reconnect look idle.
+	a.status.State = StateConnecting
 	a.status.LastError = ""
 	a.status.UpdatedAt = time.Now().UTC()
 	a.mu.Unlock()

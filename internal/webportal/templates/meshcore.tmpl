@@ -1,6 +1,9 @@
 {{define "content"}}
 {{$meshcore := meshcoreView .MeshCoreAdapter}}
 {{$meshcoreError := meshcoreError .MeshCoreAdapter}}
+{{$receiver := receiverSummary .Snapshot}}
+{{$cloud := cloudSummary .Snapshot}}
+{{$meshcoreSummary := meshcoreSummary .MeshCoreAdapter}}
 <section class="lmr-card">
   <div class="lmr-sectionhead">
     <div>
@@ -10,12 +13,21 @@
     </div>
     <div id="meshcore-refresh-state" class="lmr-refresh-state" aria-live="polite">Refreshing status…</div>
   </div>
-  <div class="lmr-tiles">
-    <div class="lmr-tile"><div class="lmr-tile__label">Receiver health</div><div class="lmr-tile__value"><span id="receiver-health" class="lmr-pill {{lmrBoolTone .Snapshot.Ready}}"><span class="lmr-pill__dot"></span>{{if .Snapshot.Ready}}Ready{{else}}Not ready{{end}}</span></div></div>
-    <div class="lmr-tile"><div class="lmr-tile__label">Service state</div><div class="lmr-tile__value"><span id="receiver-lifecycle" class="lmr-mono">{{.Snapshot.Lifecycle}}</span></div></div>
-    <div class="lmr-tile"><div class="lmr-tile__label">Cloud connectivity</div><div class="lmr-tile__value"><span id="receiver-cloud" class="lmr-mono">{{.Snapshot.CloudStatus}}</span></div></div>
-    <div class="lmr-tile"><div class="lmr-tile__label">Receiver version</div><div class="lmr-tile__value"><span class="lmr-mono">{{if .RuntimeVersion}}{{.RuntimeVersion}}{{else}}unknown{{end}}</span></div></div>
-    <div class="lmr-tile"><div class="lmr-tile__label">Uptime</div><div class="lmr-tile__value"><span id="receiver-uptime" class="lmr-mono">calculating…</span></div></div>
+  <div class="lmr-overview">
+    <div id="receiver-overall" class="lmr-overall {{$receiver.Tone}}">
+      <span id="receiver-overall-icon" class="lmr-status-icon" aria-hidden="true">{{$receiver.Icon}}</span>
+      <div><div class="lmr-eyebrow">Receiver</div><div id="receiver-overall-label" class="lmr-overall__label">{{$receiver.Label}}</div><div id="receiver-overall-detail" class="lmr-overall__detail">{{$receiver.Detail}}</div></div>
+    </div>
+    <div class="lmr-connection-summaries" aria-label="Receiver connectivity">
+      <div id="cloud-summary" class="lmr-connection-summary {{$cloud.Tone}}"><span id="cloud-summary-icon" class="lmr-status-icon" aria-hidden="true">{{$cloud.Icon}}</span><div><div id="cloud-summary-label" class="lmr-connection-summary__label">{{$cloud.Label}}</div><div id="cloud-summary-detail" class="lmr-connection-summary__detail">{{$cloud.Detail}}</div></div></div>
+      <div id="meshcore-summary" class="lmr-connection-summary {{$meshcoreSummary.Tone}}"><span id="meshcore-summary-icon" class="lmr-status-icon" aria-hidden="true">{{$meshcoreSummary.Icon}}</span><div><div id="meshcore-summary-label" class="lmr-connection-summary__label">{{$meshcoreSummary.Label}}</div><div id="meshcore-summary-detail" class="lmr-connection-summary__detail">{{$meshcoreSummary.Detail}}</div></div></div>
+    </div>
+  </div>
+  <div class="lmr-meta-strip">
+    <span>Service <b id="receiver-lifecycle">{{.Snapshot.Lifecycle}}</b></span>
+    <span>Cloud state <b id="receiver-cloud">{{.Snapshot.CloudStatus}}</b></span>
+    <span>Version <b>{{if .RuntimeVersion}}{{.RuntimeVersion}}{{else}}unknown{{end}}</b></span>
+    <span>Uptime <b id="receiver-uptime">calculating…</b></span>
   </div>
 </section>
 
@@ -39,6 +51,7 @@
   <div class="lmr-actions">
     <button id="meshcore-release" class="lmr-btn lmr-btn--warn" type="button"{{if not $meshcore.Release}} hidden{{end}}>Release device</button>
     <button id="meshcore-resume" class="lmr-btn" type="button"{{if not $meshcore.Resume}} hidden{{end}}>Resume receiver connection</button>
+    <span id="meshcore-transition" class="lmr-transition" role="status" aria-live="polite" hidden><span class="lmr-spinner" aria-hidden="true"></span><span id="meshcore-transition-text"></span></span>
   </div>
 </section>
 

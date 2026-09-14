@@ -12,6 +12,7 @@ import (
 
 	"github.com/loramapr/loramapr-receiver/internal/cloudclient"
 	"github.com/loramapr/loramapr-receiver/internal/config"
+	"github.com/loramapr/loramapr-receiver/internal/diagnostics"
 	"github.com/loramapr/loramapr-receiver/internal/homeautosession"
 	"github.com/loramapr/loramapr-receiver/internal/meshcore"
 	"github.com/loramapr/loramapr-receiver/internal/meshtastic"
@@ -75,11 +76,72 @@ func TestReleaseMeshCoreBLEStopsTrackingAndBlocksNewTrackingUntilResume(t *testi
 		t.Fatalf("repeated release: %v", err)
 	}
 	resumed, err := svc.ResumeMeshCoreBLE(context.Background())
-	if err != nil || resumed.ReconnectSuppressed || resumed.ReleasedByUser {
+	if err != nil || resumed.ReconnectSuppressed || resumed.ReleasedByUser || resumed.State != meshcore.StateConnecting {
 		t.Fatalf("resume result=%#v err=%v", resumed, err)
 	}
 	if _, err := svc.ResumeMeshCoreBLE(context.Background()); err != nil {
 		t.Fatalf("repeated resume: %v", err)
+	}
+}
+
+func TestUpdateFailureStateRecoversMeshCoreOnlyReceiverAfterBLEReconnect(t *testing.T) {
+	t.Parallel()
+
+	cfg := config.Default()
+	cfg.Meshtastic.Transport = "disabled"
+	statusModel := status.New()
+	statusModel.SetLifecycle(status.LifecycleRunning)
+	statusModel.SetReady(true, "service mode active")
+	statusModel.SetCloudReachable(true)
+	statusModel.SetCloud("https://api.example.com", "reachable")
+	now := time.Now().UTC()
+	statusModel.SetPacketTelemetry(&now, &now, &now, 0)
+	statusModel.SetUpdateStatus("current", "", "", "", "", "", nil)
+	statusModel.SetFailure("no_serial_device_detected", "No Meshtastic serial device detected", "Check USB cable")
+	statusModel.SetAdapters([]status.AdapterStatus{{
+		Name: "meshcore-companion", Protocol: "meshcore", Lifecycle: "degraded", ConnectionState: "reconnecting", Transport: "ble",
+	}})
+
+	svc := &Service{
+		container: &Container{Config: cfg, Status: statusModel},
+		steady:    steadyState{cloudReachable: true},
+	}
+	stateSnapshot := state.Data{
+		Pairing: state.PairingState{Phase: state.PairingSteadyState},
+		Cloud:   state.CloudState{IngestAPIKey: "fixture-key"},
+	}
+
+	// The Companion reconnects and its ready handshake supersedes the earlier
+	// transient adapter state. A disabled legacy Meshtastic transport is not a
+	// missing required radio.
+	statusModel.SetAdapters([]status.AdapterStatus{{
+		Name: "meshcore-companion", Protocol: "meshcore", Lifecycle: "connected", ConnectionState: "connected", Ready: true, Transport: "ble",
+	}})
+	meshSnapshot := meshtastic.Snapshot{State: meshtastic.StateNotPresent, Transport: "disabled"}
+	if healthState := meshtasticHealthState(meshSnapshot); healthState != "disabled" {
+		t.Fatalf("Meshtastic disabled health state=%q", healthState)
+	}
+	svc.updateFailureState(stateSnapshot, meshSnapshot, diagnostics.NetworkProbe{})
+
+	got := statusModel.Snapshot()
+	if got.FailureCode != "" || got.FailureSummary != "" {
+		t.Fatalf("recovered MeshCore-only receiver retained current failure: %#v", got)
+	}
+	if len(got.RecentFailures) != 1 || got.RecentFailures[0].Code != "no_serial_device_detected" {
+		t.Fatalf("transient failure history was lost: %#v", got.RecentFailures)
+	}
+	if component := got.Components["attention"]; component.State == "urgent" || component.State == "action_required" {
+		t.Fatalf("recovered receiver retained actionable attention: %#v", component)
+	}
+}
+
+func TestMeshtasticDisabledProjectsDisabledAdapterHealth(t *testing.T) {
+	t.Parallel()
+
+	adapter := newMeshtasticRadioAdapter(meshtastic.NewAdapter(config.MeshtasticConfig{Transport: "disabled"}, nil))
+	snapshot := adapter.Snapshot()
+	if snapshot.State != "disabled" || snapshot.ConnectionState != "disabled" || snapshot.Enabled || snapshot.Configured {
+		t.Fatalf("disabled Meshtastic adapter projected as %#v", snapshot)
 	}
 }
 

@@ -524,6 +524,16 @@ func (s *Service) ResumeMeshCoreBLE(_ context.Context) (meshcore.AdapterStatus, 
 	return s.container.MeshCore.DetailedSnapshot(), err
 }
 
+// MeshCoreAdapterStatus returns the adapter's current in-memory lifecycle
+// facts. The portal uses this for short-lived lifecycle polling because the
+// normal receiver status tick follows the heartbeat interval.
+func (s *Service) MeshCoreAdapterStatus(_ context.Context) (meshcore.AdapterStatus, error) {
+	if s.container == nil || s.container.MeshCore == nil {
+		return meshcore.AdapterStatus{}, meshcore.ErrBLEUnsupported
+	}
+	return s.container.MeshCore.DetailedSnapshot(), nil
+}
+
 // RequestMeshCoreTelemetry sends one manual request and durably stages a
 // normalized observation only after its response is correlated to the full
 // requested public key. It never creates local position, track, or session
@@ -675,7 +685,7 @@ func (s *Service) tick(ctx context.Context) {
 	)
 	c.Status.SetPairingPhase(string(snap.Pairing.Phase))
 	c.Status.SetCloud(c.Config.Cloud.BaseURL, pairingCloudStatus(snap.Pairing))
-	c.Status.SetComponent("meshtastic", string(meshSnap.State), meshtasticStatusMessage(meshSnap))
+	c.Status.SetComponent("meshtastic", meshtasticHealthState(meshSnap), meshtasticStatusMessage(meshSnap))
 	c.Status.SetMeshtasticConfig(mapMeshtasticConfigStatus(meshSnap))
 	for _, adapterSnapshot := range c.Adapters.Snapshots() {
 		if adapterSnapshot.Name == meshtasticAdapterName {
@@ -2463,7 +2473,7 @@ func (s *Service) updateFailureState(snapshot state.Data, meshSnap meshtastic.Sn
 		NetworkAvailable:      networkAvailable,
 		NetworkAvailableKnown: networkKnown,
 		CloudReachable:        s.steady.cloudReachable,
-		MeshtasticState:       string(meshSnap.State),
+		MeshtasticState:       meshtasticHealthState(meshSnap),
 		UpdateStatus:          current.UpdateStatus,
 		IngestQueueDepth:      len(s.steady.ingestQueue),
 		LastPacketQueued:      s.steady.lastPacketQueued,
@@ -2500,7 +2510,7 @@ func (s *Service) deriveOperational(current status.Snapshot, snapshot state.Data
 		HasIngestCredential: credentialsReady(snapshot),
 		CloudReachable:      s.steady.cloudReachable,
 		CloudProbeStatus:    current.CloudStatus,
-		MeshtasticState:     string(meshSnap.State),
+		MeshtasticState:     meshtasticHealthState(meshSnap),
 		IngestQueueDepth:    len(s.steady.ingestQueue),
 		LastPacketQueued:    s.steady.lastPacketQueued,
 		LastPacketAck:       s.steady.lastPacketAck,

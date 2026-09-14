@@ -86,6 +86,12 @@ type MeshCoreBLELifecycle interface {
 	ResumeMeshCoreBLE(context.Context) (meshcore.AdapterStatus, error)
 }
 
+// MeshCoreAdapterStatusProvider supplies a direct, current adapter snapshot
+// for the portal while a BLE lifecycle transition is in flight.
+type MeshCoreAdapterStatusProvider interface {
+	MeshCoreAdapterStatus(context.Context) (meshcore.AdapterStatus, error)
+}
+
 type Server struct {
 	addr              string
 	status            StatusProvider
@@ -96,6 +102,7 @@ type Server struct {
 	meshcoreTelemetry MeshCoreTelemetryRequester
 	meshcoreTracking  MeshCoreTrackingController
 	meshcoreLifecycle MeshCoreBLELifecycle
+	meshcoreStatus    MeshCoreAdapterStatusProvider
 	logger            *slog.Logger
 	templates         map[string]*template.Template
 	httpSrv           *http.Server
@@ -172,6 +179,10 @@ func New(addr string, statusProvider StatusProvider, pairing PairingCodeSubmitte
 	if lifecycle, ok := pairing.(MeshCoreBLELifecycle); ok {
 		meshcoreLifecycle = lifecycle
 	}
+	var meshcoreStatus MeshCoreAdapterStatusProvider
+	if provider, ok := pairing.(MeshCoreAdapterStatusProvider); ok {
+		meshcoreStatus = provider
+	}
 
 	s := &Server{
 		addr:              addr,
@@ -183,6 +194,7 @@ func New(addr string, statusProvider StatusProvider, pairing PairingCodeSubmitte
 		meshcoreTelemetry: meshcoreTelemetry,
 		meshcoreTracking:  meshcoreTracking,
 		meshcoreLifecycle: meshcoreLifecycle,
+		meshcoreStatus:    meshcoreStatus,
 		logger:            logger.With("component", "webportal"),
 		templates:         templates,
 	}
@@ -309,7 +321,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, _ *http.Request) {
 		http.Error(w, "status unavailable", http.StatusServiceUnavailable)
 		return
 	}
-	payload, err := json.Marshal(s.status.CurrentStatus())
+	payload, err := json.Marshal(s.currentSnapshot())
 	if err != nil {
 		s.logger.Error("status encoding failed", "err", err)
 		http.Error(w, "status encoding failed", http.StatusInternalServerError)
@@ -353,7 +365,7 @@ func (s *Server) handleStatusEvents(w http.ResponseWriter, r *http.Request) {
 		return true
 	}
 
-	initial := s.status.CurrentStatus()
+	initial := s.currentSnapshot()
 	lastUpdated := initial.UpdatedAt.UTC().Format(time.RFC3339Nano)
 	if !send(initial) {
 		return
@@ -369,7 +381,7 @@ func (s *Server) handleStatusEvents(w http.ResponseWriter, r *http.Request) {
 		case <-r.Context().Done():
 			return
 		case <-updateTicker.C:
-			snap := s.status.CurrentStatus()
+			snap := s.currentSnapshot()
 			nextUpdated := snap.UpdatedAt.UTC().Format(time.RFC3339Nano)
 			if nextUpdated == lastUpdated {
 				continue
@@ -954,7 +966,53 @@ func (s *Server) currentSnapshot() status.Snapshot {
 	if s.status == nil {
 		return status.Snapshot{}
 	}
-	return s.status.CurrentStatus()
+	snap := s.status.CurrentStatus()
+	if s.meshcoreStatus == nil {
+		return snap
+	}
+	adapter, err := s.meshcoreStatus.MeshCoreAdapterStatus(context.Background())
+	if err != nil {
+		return snap
+	}
+	return withLiveMeshCoreAdapter(snap, adapter)
+}
+
+func withLiveMeshCoreAdapter(snap status.Snapshot, adapter meshcore.AdapterStatus) status.Snapshot {
+	connectionState := "disconnected"
+	switch adapter.State {
+	case meshcore.StateDisabled:
+		connectionState = "disabled"
+	case meshcore.StateOpening, meshcore.StateHandshaking, meshcore.StateConnecting:
+		connectionState = "connecting"
+	case meshcore.StateConnected:
+		connectionState = "connected"
+	case meshcore.StateReleased:
+		connectionState = "released"
+	case meshcore.StateDegraded:
+		connectionState = "reconnecting"
+	case meshcore.StateConfigurationError, meshcore.StateIncompatible:
+		connectionState = "error"
+	}
+	replacement := status.AdapterStatus{
+		Name: meshcore.AdapterName, Protocol: "meshcore", Lifecycle: string(adapter.State), ConnectionState: connectionState,
+		Enabled: adapter.Transport != "disabled", Configured: (adapter.Transport == "physical_serial" || adapter.Transport == "ble") && strings.TrimSpace(adapter.Configured) != "",
+		Ready:     adapter.State == meshcore.StateConnected && adapter.Session.State == meshcore.SessionReady,
+		Transport: adapter.Transport, ConfiguredDevice: adapter.Configured, ConnectedDevice: adapter.ConnectedDevice, Device: adapter.Device,
+		ReconnectSuppressed: adapter.ReconnectSuppressed, ReleasedByUser: adapter.ReleasedByUser,
+		LastError: strings.TrimSpace(adapter.LastError), UpdatedAt: adapter.UpdatedAt,
+	}
+	if replacement.UpdatedAt.IsZero() {
+		replacement.UpdatedAt = time.Now().UTC()
+	}
+	for i := range snap.Adapters {
+		if strings.EqualFold(snap.Adapters[i].Protocol, "meshcore") {
+			replacement.Delivery = snap.Adapters[i].Delivery
+			snap.Adapters[i] = replacement
+			return snap
+		}
+	}
+	snap.Adapters = append(snap.Adapters, replacement)
+	return snap
 }
 
 func (s *Server) basePageData(title string, snap status.Snapshot) pageData {
@@ -1028,8 +1086,11 @@ func loadTemplates() (map[string]*template.Template, error) {
 			"lmrBoolTone":      lmrBoolTone,
 			"lmrCalloutClass":  lmrCalloutClass,
 			"lmrLevelTone":     lmrLevelTone,
+			"cloudSummary":     cloudSummary,
 			"meshcoreError":    meshcoreError,
+			"meshcoreSummary":  meshcoreSummary,
 			"meshcoreView":     meshcoreView,
+			"receiverSummary":  receiverSummary,
 			"lmrTone":          lmrTone,
 		}).ParseFS(
 			portalTemplateFiles,
@@ -1050,6 +1111,77 @@ type meshcoreDashboardView struct {
 	Tone    string
 	Release bool
 	Resume  bool
+}
+
+type portalStatusSummary struct {
+	Label  string
+	Detail string
+	Icon   string
+	Tone   string
+}
+
+func receiverSummary(snap status.Snapshot) portalStatusSummary {
+	lifecycle := strings.ToLower(strings.TrimSpace(string(snap.Lifecycle)))
+	if lifecycle == string(status.LifecycleFailed) {
+		return portalStatusSummary{Label: "Problem", Detail: "Receiver service has failed", Icon: "✕", Tone: "is-fail"}
+	}
+	attention := diagnostics.Attention{
+		State:   diagnostics.AttentionState(strings.TrimSpace(snap.AttentionState)),
+		Summary: strings.TrimSpace(snap.AttentionSummary),
+	}
+	if strings.TrimSpace(snap.FailureCode) != "" && (attention.State == "" || attention.State == diagnostics.AttentionNone) {
+		attention = deriveAttentionFromSnapshot(snap)
+	}
+	detail := strings.TrimSpace(attention.Summary)
+	if detail == "" {
+		detail = strings.TrimSpace(snap.FailureSummary)
+	}
+	if attention.State == diagnostics.AttentionUrgent {
+		if detail == "" {
+			detail = "Receiver needs attention"
+		}
+		return portalStatusSummary{Label: "Problem", Detail: detail, Icon: "✕", Tone: "is-fail"}
+	}
+	if attention.State == diagnostics.AttentionActionRequired || strings.TrimSpace(snap.FailureCode) != "" {
+		if detail == "" {
+			detail = "Receiver needs attention"
+		}
+		return portalStatusSummary{Label: "Degraded", Detail: detail, Icon: "!", Tone: "is-warn"}
+	}
+	if lifecycle == string(status.LifecycleStopped) || lifecycle == string(status.LifecycleStopping) || lifecycle == "" {
+		return portalStatusSummary{Label: "Offline", Detail: "Receiver service is unavailable", Icon: "○", Tone: "is-neutral"}
+	}
+	if lifecycle == string(status.LifecycleRunning) && snap.Ready {
+		return portalStatusSummary{Label: "Online", Detail: "Receiver service is ready", Icon: "✓", Tone: "is-ok"}
+	}
+	return portalStatusSummary{Label: "Degraded", Detail: "Receiver service is not ready", Icon: "!", Tone: "is-warn"}
+}
+
+func cloudSummary(snap status.Snapshot) portalStatusSummary {
+	state := strings.ToLower(strings.TrimSpace(snap.CloudStatus))
+	if snap.CloudReachable || state == "reachable" {
+		return portalStatusSummary{Label: "Cloud connected", Detail: "Cloud is reachable", Icon: "✓", Tone: "is-ok"}
+	}
+	if state == "unreachable" || state == "lifecycle_blocked" {
+		return portalStatusSummary{Label: "Cloud unreachable", Detail: "Cloud connection needs attention", Icon: "!", Tone: "is-warn"}
+	}
+	return portalStatusSummary{Label: "Cloud unavailable", Detail: "Cloud status is not available", Icon: "○", Tone: "is-neutral"}
+}
+
+func meshcoreSummary(adapter *status.AdapterStatus) portalStatusSummary {
+	view := meshcoreView(adapter)
+	switch view.Label {
+	case "Connected":
+		return portalStatusSummary{Label: "MeshCore connected", Detail: "Companion handshake ready", Icon: "✓", Tone: "is-ok"}
+	case "Connecting / reconnecting":
+		return portalStatusSummary{Label: "MeshCore reconnecting", Detail: "Restoring receiver connection", Icon: "!", Tone: "is-warn"}
+	case "Released for external use":
+		return portalStatusSummary{Label: "MeshCore released", Detail: "Available to another client", Icon: "○", Tone: "is-neutral"}
+	case "Error":
+		return portalStatusSummary{Label: "MeshCore error", Detail: view.Detail, Icon: "✕", Tone: "is-fail"}
+	default:
+		return portalStatusSummary{Label: "MeshCore unavailable", Detail: view.Detail, Icon: "○", Tone: "is-neutral"}
+	}
 }
 
 func meshcoreView(adapter *status.AdapterStatus) meshcoreDashboardView {

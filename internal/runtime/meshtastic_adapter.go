@@ -54,6 +54,13 @@ func (a *meshtasticRadioAdapter) Snapshot() protocoladapter.AdapterSnapshot {
 	if updatedAt.IsZero() {
 		updatedAt = time.Now().UTC()
 	}
+	if strings.EqualFold(strings.TrimSpace(snapshot.Transport), "disabled") {
+		return protocoladapter.AdapterSnapshot{
+			Name: meshtasticAdapterName, Protocol: "meshtastic", State: "disabled", ConnectionState: "disabled",
+			Enabled: false, Configured: false, Ready: false, Transport: "disabled",
+			Summary: "Meshtastic transport disabled by configuration", UpdatedAt: updatedAt,
+		}
+	}
 	return protocoladapter.AdapterSnapshot{
 		Name: meshtasticAdapterName, Protocol: "meshtastic", State: string(snapshot.State),
 		ConnectionState: meshtasticConnectionState(snapshot.State),
@@ -62,6 +69,13 @@ func (a *meshtasticRadioAdapter) Snapshot() protocoladapter.AdapterSnapshot {
 		ConfiguredDevice: strings.TrimSpace(snapshot.Device), Device: strings.TrimSpace(snapshot.DetectedDevice),
 		Summary: meshtasticStatusMessage(snapshot), LastError: strings.TrimSpace(snapshot.LastError), UpdatedAt: updatedAt,
 	}
+}
+
+func meshtasticHealthState(snapshot meshtastic.Snapshot) string {
+	if strings.EqualFold(strings.TrimSpace(snapshot.Transport), "disabled") {
+		return "disabled"
+	}
+	return string(snapshot.State)
 }
 
 func meshtasticConnectionState(state meshtastic.ConnectionState) string {
