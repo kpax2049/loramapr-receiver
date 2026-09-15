@@ -229,6 +229,56 @@ func TestNormalizeTelemetryResultPreservesCorrelationWithoutPositionTrust(t *tes
 	}
 }
 
+func TestNormalizeTelemetryResultPreservesRawRequestRouteEvidence(t *testing.T) {
+	t.Parallel()
+	key := "5bed5393ba6f5bba71ed2f4df6ed54048467dbb728de5fa3acd10c8a04dd0c2b"
+	voltage := 4.04
+	for _, test := range []struct {
+		name  string
+		route RouteEvidence
+		want  []string
+	}{
+		{name: "zero hop", route: RouteEvidence{Mode: RouteModeZeroHop, PathLength: 0, Source: "contact_out_path+response_sent"}},
+		{name: "flood", route: RouteEvidence{Mode: RouteModeFlood, PathLength: 0, Source: "response_sent"}},
+		{name: "explicit multi-width", route: RouteEvidence{Mode: RouteModeExplicitPath, Path: []string{"18", "186d", "186d73"}, PathLength: 3, Source: "contact_out_path+response_sent"}, want: []string{"18", "186d", "186d73"}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			normalized, err := NormalizeTelemetryResult(TelemetryResult{
+				TargetPublicKey:    key,
+				SourcePrefix:       key[:12],
+				ReceivedAt:         time.Date(2026, 9, 12, 19, 1, 5, 0, time.UTC),
+				RawFrame:           []byte{PushTelemetryResponse, 0, 0x5b, 0xed, 0x53, 0x93, 0xba, 0x6f, 1, 116, 0x01, 0x94},
+				Telemetry:          Telemetry{Voltage: &voltage},
+				RouteAttempt:       test.route,
+				RouteRecovery:      "path_reset_acknowledged",
+				PathUpdateObserved: true,
+			}, ReceiverBinding{InstallationID: "00112233445566778899aabbccddeeff", AdapterVersion: "test"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			route := normalized["requestRoute"].(map[string]any)
+			if route["mode"] != test.route.Mode || route["pathLength"] != test.route.PathLength || route["source"] != test.route.Source || route["recoveryEvent"] != "path_reset_acknowledged" || route["pathUpdateObserved"] != true {
+				t.Fatalf("request route evidence was not retained: %#v", route)
+			}
+			if len(test.want) > 0 {
+				path := route["path"].([]string)
+				if len(path) != len(test.want) {
+					t.Fatalf("path length=%d, want %d", len(path), len(test.want))
+				}
+				for index := range path {
+					if path[index] != test.want[index] {
+						t.Fatalf("path[%d]=%q, want %q", index, path[index], test.want[index])
+					}
+				}
+			}
+			response := normalized["responseRoute"].(map[string]any)
+			if response["known"] != false {
+				t.Fatalf("response route must remain unknown: %#v", response)
+			}
+		})
+	}
+}
+
 func TestAdapterTelemetryRequestFailsClosedOnMismatchedPrefix(t *testing.T) {
 	key := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 	link := &telemetryTestLink{writes: make(chan []byte, 1)}

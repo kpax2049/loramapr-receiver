@@ -55,7 +55,12 @@ type TelemetryResult struct {
 	Telemetry            Telemetry     `json:"telemetry"`
 	RouteAttempt         RouteEvidence `json:"routeAttempt"`
 	ResponseRouteUnknown bool          `json:"responseRouteUnknown"`
-	RawFrame             []byte        `json:"-"`
+	// RouteRecovery and PathUpdateObserved are request-side tracking evidence,
+	// added before a successful tracking result enters the durable outbox.
+	// They say nothing about the response route.
+	RouteRecovery      string `json:"routeRecovery,omitempty"`
+	PathUpdateObserved bool   `json:"pathUpdateObserved"`
+	RawFrame           []byte `json:"-"`
 }
 
 type telemetryCompletion struct {

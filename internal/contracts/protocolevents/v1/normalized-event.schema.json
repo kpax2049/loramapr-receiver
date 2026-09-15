@@ -293,6 +293,23 @@
               { "required": ["altitudeM"], "properties": { "altitudeM": {} } },
               { "required": ["temperatureC"], "properties": { "temperatureC": {} } }
             ]
+          },
+          "requestRoute": {
+            "type": "object",
+            "required": ["mode", "pathLength", "source"],
+            "properties": {
+              "mode": { "enum": ["zero_hop", "flood", "explicit_path", "unknown"] },
+              "path": { "type": "array", "items": { "type": "string", "pattern": "^[0-9a-f]+$" } },
+              "pathLength": { "type": "integer", "minimum": 0 },
+              "source": { "type": "string", "minLength": 1, "maxLength": 120 },
+              "recoveryEvent": { "type": "string", "minLength": 1, "maxLength": 120 },
+              "pathUpdateObserved": { "type": "boolean" }
+            }
+          },
+          "responseRoute": {
+            "type": "object",
+            "required": ["known"],
+            "properties": { "known": { "type": "boolean" } }
           }
         },
         "not": { "required": ["position"], "properties": { "position": {} } }

@@ -363,12 +363,13 @@ func New(cfg config.Config, logger *slog.Logger) (*Service, error) {
 		cloud,
 	)
 	svc.applyHomeAutoLocalFallbackConfig(homeAutoConfigApplyLocalStartup, "")
-	// M7A is intentionally wired through this service seam: the controller
-	// invokes the same request-and-stage path as manual telemetry. A future
-	// cloud Session lifecycle can own Start/Stop without changing radio or
-	// normalized-event semantics.
+	// Controller-owned polls stage through the same durable outbox as manual
+	// telemetry, but only after the controller snapshots recovery/path-update
+	// evidence for the successful request.
 	if meshCoreEnabled {
-		svc.container.MeshCoreTracking = meshcore.NewTrackingControllerWithRouteRecovery(svc.RequestMeshCoreTelemetry, meshCoreAdapter.ResetPath, meshcore.DefaultTrackingPolicy(), logger)
+		tracking := meshcore.NewTrackingControllerWithRouteRecovery(meshCoreAdapter.RequestTelemetry, meshCoreAdapter.ResetPath, meshcore.DefaultTrackingPolicy(), logger)
+		tracking.SetSuccessfulTelemetryStager(svc.stageMeshCoreTelemetry)
+		svc.container.MeshCoreTracking = tracking
 	}
 	svc.container.Portal = webportal.New(cfg.Portal.BindAddress, svc, svc, logger.With("component", "webportal"))
 	svc.configureInitialReadiness(current.Pairing.Phase)

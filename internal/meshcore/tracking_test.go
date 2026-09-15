@@ -264,6 +264,9 @@ func TestTrackingRouteRecoveryRecordsFloodThenExplicitPathAndPathUpdate(t *testi
 	controller.status.RouteRecoveryState = "recovery_active"
 	flood := telemetryFix(52, 13, time.Date(2026, 9, 13, 10, 0, 0, 0, time.UTC))
 	flood.RouteAttempt = RouteEvidence{Mode: RouteModeFlood, Source: "contact_out_path+response_sent"}
+	if staged := controller.withSuccessfulRouteEvidence(trackingKey, 1, flood); staged.RouteRecovery != "flood_attempted" || staged.PathUpdateObserved {
+		t.Fatalf("flood staging evidence=%#v", staged)
+	}
 	controller.recordSuccess(trackingKey, 1, flood)
 	if status := controller.Status(); status.RouteRecoveryState != "recovery_complete" || status.RecoveryEpisodeActive || status.RecentPolls[0].RouteAttempt.Mode != RouteModeFlood || status.RecentPolls[0].RouteRecovery != "flood_attempted" {
 		t.Fatalf("flood attempt status=%#v", status)
@@ -275,6 +278,9 @@ func TestTrackingRouteRecoveryRecordsFloodThenExplicitPathAndPathUpdate(t *testi
 	}
 	explicit := telemetryFix(52.001, 13, updatedAt.Add(time.Minute))
 	explicit.RouteAttempt = RouteEvidence{Mode: RouteModeExplicitPath, Path: []string{"aa", "bb"}, PathLength: 2, Source: "contact_out_path+response_sent"}
+	if staged := controller.withSuccessfulRouteEvidence(trackingKey, 1, explicit); !staged.PathUpdateObserved {
+		t.Fatalf("explicit-path staging evidence=%#v", staged)
+	}
 	controller.recordSuccess(trackingKey, 1, explicit)
 	status := controller.Status()
 	last := status.RecentPolls[len(status.RecentPolls)-1]

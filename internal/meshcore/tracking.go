@@ -164,11 +164,12 @@ type trackingFix struct {
 // existing request path. It intentionally owns no radio transport or durable
 // state, which keeps it ready to be lifecycle-owned by a cloud Session.
 type TrackingController struct {
-	request telemetryRequester
-	reset   pathResetter
-	policy  TrackingPolicy
-	logger  *slog.Logger
-	now     func() time.Time
+	request                  telemetryRequester
+	reset                    pathResetter
+	stageSuccessfulTelemetry func(TelemetryResult) error
+	policy                   TrackingPolicy
+	logger                   *slog.Logger
+	now                      func() time.Time
 
 	mu                    sync.RWMutex
 	status                TrackingStatus
@@ -181,6 +182,19 @@ type TrackingController struct {
 	routeGeneration       uint64
 	recoveryEpisodeActive bool
 	pendingRecoveryEvent  string
+}
+
+// SetSuccessfulTelemetryStager installs the receiver outbox seam for
+// controller-owned polls. It is deliberately called before Start, so a
+// correlated response is annotated with the current recovery facts before it
+// becomes a durable normalized event.
+func (c *TrackingController) SetSuccessfulTelemetryStager(stage func(TelemetryResult) error) {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	c.stageSuccessfulTelemetry = stage
+	c.mu.Unlock()
 }
 
 func NewTrackingController(request func(context.Context, string) (TelemetryResult, error), policy TrackingPolicy, logger *slog.Logger) *TrackingController {
@@ -374,7 +388,42 @@ func (c *TrackingController) poll(ctx context.Context, target string, generation
 		c.recordFailure(target, generation, result, err, requestAt)
 		return
 	}
+	result = c.withSuccessfulRouteEvidence(target, generation, result)
+	c.mu.RLock()
+	stage := c.stageSuccessfulTelemetry
+	c.mu.RUnlock()
+	if stage != nil {
+		if err := stage(result); err != nil {
+			c.recordFailure(target, generation, result, err, requestAt)
+			return
+		}
+	}
 	c.recordSuccess(target, generation, result, requestAt)
+}
+
+// withSuccessfulRouteEvidence snapshots only the request-side tracking facts
+// relevant to this response. recordSuccess consumes the same pending state
+// after staging; this preview must not mutate controller state.
+func (c *TrackingController) withSuccessfulRouteEvidence(target string, generation uint64, result TelemetryResult) TelemetryResult {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if !c.currentLocked(target, generation) {
+		return result
+	}
+	if c.pendingRecoveryEvent != "" {
+		result.RouteRecovery = c.pendingRecoveryEvent
+	} else if c.recoveryEpisodeActive {
+		switch result.RouteAttempt.Mode {
+		case RouteModeFlood:
+			result.RouteRecovery = "flood_attempted"
+		case RouteModeExplicitPath:
+			result.RouteRecovery = "explicit_path_observed"
+		case RouteModeZeroHop:
+			result.RouteRecovery = "zero_hop_observed"
+		}
+	}
+	result.PathUpdateObserved = c.status.PathUpdatePending
+	return result
 }
 
 func (c *TrackingController) recoverStaleRouteTimeout(ctx context.Context, target string, generation uint64, result TelemetryResult, err error) string {

@@ -2,8 +2,8 @@
   "contract": "normalized-receiver-event",
   "major": 1,
   "bundleAlgorithm": "sha256(sorted(relativePath + NUL + fileSha256 + LF))",
-  "schemaSha256": "469db4653e0465f855694871b2399e1aaa6e349ceed4d030d02c8231cef70926",
-  "bundleSha256": "77e9b5eed6920c20d9f351db02ef9bed53c932f2e0f1ebe40f4370359146e1c7",
+  "schemaSha256": "d209af69ad77e2c8b93cf0706f26625aecfe29d6b2718994ad55857e1e8bdcc8",
+  "bundleSha256": "5d6280aca9c1edfc53f511ad2b42a89b0ef439c94378864021b715464d4f3a80",
   "files": {
     "golden/invalid/invalid-envelope.json": "42fd3f705f63c250f6539c65e7d455e8ddc2a7f9b5bc1cd709fba85a788418d6",
     "golden/invalid/invalid-meshcore-radio-source.json": "ba34a9f8a7c74077a95e7b013bb54a5fc75bed35480025970f15bcd63bb0ea32",
@@ -14,6 +14,6 @@
     "golden/valid/meshcore-synchronized-clock.json": "3e83a69122a4190786347946cfa972a839e92f755dc2c7ccc1a20273b1602b43",
     "golden/valid/meshtastic-position.json": "9d55b44fbffb7f58a1c21bed85a6bddc05e803ce8a856e565d0def6de9ebc628",
     "golden/valid/unknown-minor-event.json": "b2e21e31c2ff1f899e05e6747cd81a1db616b0e94388e6fa733e2b821d8f5353",
-    "normalized-event.schema.json": "469db4653e0465f855694871b2399e1aaa6e349ceed4d030d02c8231cef70926"
+    "normalized-event.schema.json": "d209af69ad77e2c8b93cf0706f26625aecfe29d6b2718994ad55857e1e8bdcc8"
   }
 }

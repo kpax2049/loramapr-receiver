@@ -1,7 +1,7 @@
 {
   "sourceRepository": "loramapr-cloud",
   "sourcePath": "contracts/protocol-events/v1",
-  "cloudRevision": "8ee3c0a859140d01805265da6dbf91b944b253d3",
-  "schemaSha256": "469db4653e0465f855694871b2399e1aaa6e349ceed4d030d02c8231cef70926",
-  "bundleSha256": "77e9b5eed6920c20d9f351db02ef9bed53c932f2e0f1ebe40f4370359146e1c7"
+  "cloudRevision": "148834457fdacc5978f83dc051968b4e902fb741",
+  "schemaSha256": "d209af69ad77e2c8b93cf0706f26625aecfe29d6b2718994ad55857e1e8bdcc8",
+  "bundleSha256": "5d6280aca9c1edfc53f511ad2b42a89b0ef439c94378864021b715464d4f3a80"
 }

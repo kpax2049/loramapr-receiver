@@ -70,6 +70,27 @@ func NormalizeTelemetryResult(result TelemetryResult, binding ReceiverBinding) (
 		telemetry["temperatureC"] = *result.Telemetry.TemperatureC
 	}
 	base["solicitedTelemetry"] = telemetry
+	routeAttempt := result.RouteAttempt.copy()
+	if routeAttempt.Mode == "" || routeAttempt.Source == "" {
+		routeAttempt = unknownRouteEvidence("request_route_unavailable")
+	}
+	requestRoute := map[string]any{
+		"mode":       routeAttempt.Mode,
+		"pathLength": routeAttempt.PathLength,
+		"source":     routeAttempt.Source,
+	}
+	if len(routeAttempt.Path) > 0 {
+		// Each element is one raw hex-encoded path hash. Do not concatenate
+		// them: a future 2- or 3-byte hash must remain distinguishable.
+		requestRoute["path"] = append([]string(nil), routeAttempt.Path...)
+	}
+	if result.RouteRecovery != "" {
+		requestRoute["recoveryEvent"] = result.RouteRecovery
+	}
+	requestRoute["pathUpdateObserved"] = result.PathUpdateObserved
+	base["requestRoute"] = requestRoute
+	// PUSH_CODE_TELEMETRY_RESPONSE carries no return-path proof.
+	base["responseRoute"] = map[string]any{"known": false}
 	source := base["source"].(map[string]any)
 	source["raw"] = base64.StdEncoding.EncodeToString(result.RawFrame)
 	source["rawSha256"] = sha256Hex(result.RawFrame)
