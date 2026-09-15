@@ -581,6 +581,7 @@ func (s *Service) StartMeshCoreTracking(_ context.Context, publicKey string) (me
 	if s.meshcoreSessionManaged() {
 		return s.meshcoreTrackingStatus(), meshcore.ErrTrackingSessionManaged
 	}
+	s.container.MeshCoreTracking.SetSessionManaged(false)
 	status, err := s.container.MeshCoreTracking.Start(publicKey)
 	if err == nil || errors.Is(err, meshcore.ErrTrackingAlreadyActive) {
 		s.meshcoreControl.mu.Lock()
@@ -599,6 +600,7 @@ func (s *Service) StopMeshCoreTracking(_ context.Context) (meshcore.TrackingStat
 		return s.meshcoreTrackingStatus(), meshcore.ErrTrackingSessionManaged
 	}
 	status := s.container.MeshCoreTracking.Stop()
+	s.container.MeshCoreTracking.SetSessionManaged(false)
 	s.meshcoreControl.mu.Lock()
 	s.meshcoreControl.source, s.meshcoreControl.desired = "", false
 	s.meshcoreControl.mu.Unlock()
@@ -1687,6 +1689,7 @@ func (s *Service) applyMeshCoreSessionIntent(intent *cloudclient.MeshCoreTrackin
 	if intent == nil {
 		if s.meshcoreSessionManaged() {
 			s.container.MeshCoreTracking.Stop()
+			s.container.MeshCoreTracking.SetSessionManaged(false)
 			setState("", false, "", "", "", "", "")
 		}
 		return
@@ -1694,6 +1697,7 @@ func (s *Service) applyMeshCoreSessionIntent(intent *cloudclient.MeshCoreTrackin
 	if intent.Protocol != "meshcore" || strings.TrimSpace(intent.SessionID) == "" || strings.TrimSpace(intent.DeviceID) == "" || strings.TrimSpace(intent.Version) == "" || intent.ReceiverAgentID != ack.ReceiverAgentID || intent.InstallationID != snapshot.Installation.ID {
 		if s.meshcoreSessionManaged() {
 			s.container.MeshCoreTracking.Stop()
+			s.container.MeshCoreTracking.SetSessionManaged(false)
 			setState("", false, "", "", "", "", "invalid MeshCore Session intent")
 		} else {
 			s.meshcoreControl.mu.Lock()
@@ -1708,6 +1712,10 @@ func (s *Service) applyMeshCoreSessionIntent(intent *cloudclient.MeshCoreTrackin
 		return
 	}
 
+	// Set policy ownership before inspecting/reusing an active controller. If
+	// this Session takes over a same-target manual run, it wakes any pending
+	// manual failure delay and restores the motion-derived discovery cadence.
+	s.container.MeshCoreTracking.SetSessionManaged(true)
 	current := s.container.MeshCoreTracking.Status()
 	if current.Active && current.TargetPublicKey != intent.PublicKey {
 		s.container.MeshCoreTracking.Stop()

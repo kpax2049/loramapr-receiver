@@ -171,13 +171,18 @@ type TrackingController struct {
 	logger                   *slog.Logger
 	now                      func() time.Time
 
-	mu                    sync.RWMutex
-	status                TrackingStatus
-	fix                   *trackingFix
-	pending               MotionState
-	pendingCount          int
-	cancel                context.CancelFunc
-	generation            uint64
+	mu           sync.RWMutex
+	status       TrackingStatus
+	fix          *trackingFix
+	pending      MotionState
+	pendingCount int
+	cancel       context.CancelFunc
+	generation   uint64
+	// sessionManaged selects the explicit active-Session recovery policy. It
+	// belongs here, rather than in runtime status decoration, because the poll
+	// scheduler must choose its next delay before runtime exposes status.
+	sessionManaged        bool
+	scheduleChanged       chan struct{}
 	routeFingerprint      string
 	routeGeneration       uint64
 	recoveryEpisodeActive bool
@@ -209,7 +214,46 @@ func NewTrackingControllerWithRouteRecovery(request func(context.Context, string
 		logger = slog.Default()
 	}
 	p := policy.normalized()
-	return &TrackingController{request: request, reset: reset, policy: p, logger: logger.With("component", "meshcore_tracking"), now: func() time.Time { return time.Now().UTC() }, status: TrackingStatus{MotionState: MotionUnknown, CurrentIntervalSeconds: int64(p.UnknownInterval / time.Second), RecentPolls: []TrackingPoll{}}}
+	return &TrackingController{request: request, reset: reset, policy: p, logger: logger.With("component", "meshcore_tracking"), now: func() time.Time { return time.Now().UTC() }, scheduleChanged: make(chan struct{}, 1), status: TrackingStatus{MotionState: MotionUnknown, CurrentIntervalSeconds: int64(p.UnknownInterval / time.Second), RecentPolls: []TrackingPoll{}}}
+}
+
+// SetSessionManaged selects the recovery cadence for an explicitly active
+// LoRaMapr Session. It is deliberately separate from status.ControlSource,
+// which runtime adds only after the controller has scheduled its next poll.
+// A Session takeover also wakes an already-running manual controller so a
+// stale manual backoff cannot postpone coverage discovery.
+func (c *TrackingController) SetSessionManaged(managed bool) {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.sessionManaged == managed {
+		return
+	}
+	c.sessionManaged = managed
+	if !managed || !c.status.Active || (c.status.LastError != nil && *c.status.LastError == ErrTelemetryAdapterDisconnected.Error()) {
+		return
+	}
+	c.status.CurrentIntervalSeconds = int64(c.intervalForLocked() / time.Second)
+	c.signalScheduleChangedLocked()
+}
+
+func (c *TrackingController) signalScheduleChangedLocked() {
+	select {
+	case c.scheduleChanged <- struct{}{}:
+	default:
+	}
+}
+
+func (c *TrackingController) clearScheduleChangedLocked() {
+	for {
+		select {
+		case <-c.scheduleChanged:
+		default:
+			return
+		}
+	}
 }
 
 func (c *TrackingController) Start(publicKey string) (TrackingStatus, error) {
@@ -233,6 +277,7 @@ func (c *TrackingController) Start(publicKey string) (TrackingStatus, error) {
 	generation := c.generation
 	c.fix, c.pending, c.pendingCount = nil, MotionUnknown, 0
 	c.routeFingerprint, c.routeGeneration, c.recoveryEpisodeActive, c.pendingRecoveryEvent = "", 0, false, ""
+	c.clearScheduleChangedLocked()
 	c.status = TrackingStatus{Active: true, TargetPublicKey: publicKey, MotionState: MotionUnknown, CurrentIntervalSeconds: int64(c.policy.UnknownInterval / time.Second), RouteRecoveryState: "idle", RecentPolls: []TrackingPoll{}}
 	now := c.now().UTC()
 	c.status.NextRequestAt = timePtr(now)
@@ -269,6 +314,7 @@ func (c *TrackingController) Stop() TrackingStatus {
 	c.status.RouteFingerprint = ""
 	c.status.LastPathUpdateAt = nil
 	c.status.PathUpdatePending = false
+	c.clearScheduleChangedLocked()
 	c.mu.Unlock()
 	if wasActive {
 		c.logger.Info("MeshCore tracking stopped", "target_public_key", target)
@@ -363,6 +409,14 @@ func (c *TrackingController) run(ctx context.Context, target string, generation 
 		case <-ctx.Done():
 			timer.Stop()
 			return
+		case <-c.scheduleChanged:
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			continue
 		case <-timer.C:
 		}
 	}
@@ -518,17 +572,8 @@ func (c *TrackingController) recordFailure(target string, generation uint64, res
 	c.status.ConsecutiveFailures++
 	message := err.Error()
 	c.status.LastError = &message
-	previous := time.Duration(c.status.CurrentIntervalSeconds) * time.Second
-	if c.status.ConsecutiveFailures == 1 {
-		previous = maxDuration(c.policy.UnknownInterval, previous)
-	} else {
-		previous *= 2
-	}
-	if previous > c.policy.MaximumBackoff {
-		previous = c.policy.MaximumBackoff
-	}
-	previous = maxDuration(previous, c.policy.MinimumInterval)
-	c.status.CurrentIntervalSeconds = int64(previous / time.Second)
+	next, scheduleSource := c.failureIntervalLocked(err)
+	c.status.CurrentIntervalSeconds = int64(next / time.Second)
 	recovery := c.routeRecoveryForPollLocked(result.RouteAttempt)
 	pathUpdateObserved := c.status.PathUpdatePending
 	c.status.PathUpdatePending = false
@@ -541,11 +586,35 @@ func (c *TrackingController) recordFailure(target string, generation uint64, res
 	c.logger.Warn("MeshCore tracking poll timed out", "target_public_key", target, "err", err,
 		"route_mode", routeEvidenceOrUnknown(result.RouteAttempt).Mode, "path_length", routeEvidenceOrUnknown(result.RouteAttempt).PathLength,
 		"route_source", routeEvidenceOrUnknown(result.RouteAttempt).Source, "consecutive_failures", c.status.ConsecutiveFailures,
-		"next_backoff", previous.String())
-	c.logger.Info("MeshCore tracking backoff changed", "target_public_key", target, "interval", previous.String())
+		"next_interval", next.String(), "schedule_source", scheduleSource)
+	c.logger.Info("MeshCore tracking failure schedule changed", "target_public_key", target, "interval", next.String(), "schedule_source", scheduleSource)
 	if errors.Is(err, ErrTelemetryAdapterDisconnected) && !wasUnavailable {
 		c.logger.Warn("MeshCore tracking adapter unavailable", "target_public_key", target)
 	}
+}
+
+// failureIntervalLocked distinguishes a remote-contact failure from local
+// transport loss. An explicitly started Session keeps searching for RF
+// coverage at its last valid motion cadence; the BLE adapter's own bounded
+// reconnect behavior is protected by the existing exponential backoff.
+func (c *TrackingController) failureIntervalLocked(err error) (time.Duration, string) {
+	if c.sessionManaged && !errors.Is(err, ErrTelemetryAdapterDisconnected) {
+		return c.intervalForLocked(), "motion"
+	}
+	next := time.Duration(c.status.CurrentIntervalSeconds) * time.Second
+	if c.status.ConsecutiveFailures == 1 {
+		next = maxDuration(c.policy.UnknownInterval, next)
+	} else {
+		next *= 2
+	}
+	if next > c.policy.MaximumBackoff {
+		next = c.policy.MaximumBackoff
+	}
+	next = maxDuration(next, c.policy.MinimumInterval)
+	if errors.Is(err, ErrTelemetryAdapterDisconnected) {
+		return next, "adapter_recovery"
+	}
+	return next, "manual_backoff"
 }
 
 func recoverableRoute(evidence RouteEvidence) bool {

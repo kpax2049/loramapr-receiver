@@ -215,7 +215,7 @@ func TestTrackingIgnoresMissingInvalidAndAbsurdGPS(t *testing.T) {
 	}
 }
 
-func TestTrackingFailureBackoffCapsAndSuccessfulResponseResets(t *testing.T) {
+func TestManualTrackingFailureBackoffCapsAndSuccessfulResponseResets(t *testing.T) {
 	controller := activeTrackingController()
 	controller.recordFailure(trackingKey, 1, TelemetryResult{}, ErrTelemetryTimeout)
 	if status := controller.Status(); status.ConsecutiveFailures != 1 || status.CurrentIntervalSeconds != 30 {
@@ -230,6 +230,85 @@ func TestTrackingFailureBackoffCapsAndSuccessfulResponseResets(t *testing.T) {
 	controller.recordSuccess(trackingKey, 1, telemetryFix(52, 13, time.Date(2026, 9, 13, 10, 0, 0, 0, time.UTC)))
 	if status := controller.Status(); status.ConsecutiveFailures != 0 || status.CurrentIntervalSeconds != 30 || status.LastError != nil {
 		t.Fatalf("success did not reset=%#v", status)
+	}
+}
+
+func TestSessionTrackingRemoteFailuresKeepMotionDiscoveryCadence(t *testing.T) {
+	tests := []struct {
+		name     string
+		motion   MotionState
+		interval int64
+	}{
+		{name: "unknown", motion: MotionUnknown, interval: 30},
+		{name: "fast", motion: MotionFast, interval: 15},
+		{name: "slow", motion: MotionSlow, interval: 30},
+		{name: "stationary", motion: MotionStationary, interval: 45},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			controller := sessionTrackingController(test.motion)
+			for attempt := 1; attempt <= 8; attempt++ {
+				controller.recordFailure(trackingKey, 1, TelemetryResult{}, ErrTelemetryTimeout)
+				status := controller.Status()
+				if status.ConsecutiveFailures != attempt || status.CurrentIntervalSeconds != test.interval || status.MotionState != test.motion {
+					t.Fatalf("attempt %d status=%#v", attempt, status)
+				}
+				last := status.RecentPolls[len(status.RecentPolls)-1]
+				if last.IntervalSeconds != test.interval || last.MotionState != test.motion || last.ConsecutiveFailures != attempt {
+					t.Fatalf("attempt %d poll=%#v", attempt, last)
+				}
+			}
+		})
+	}
+}
+
+func TestSessionTrackingRetainsLastKnownFastMotionAndResetsOnRecovery(t *testing.T) {
+	controller := sessionTrackingController(MotionUnknown)
+	at := time.Date(2026, 9, 15, 10, 0, 0, 0, time.UTC)
+	controller.recordSuccess(trackingKey, 1, telemetryFix(52, 13, at))
+	controller.recordSuccess(trackingKey, 1, telemetryFix(52.009, 13, at.Add(time.Minute)))
+	if status := controller.Status(); status.MotionState != MotionFast || status.CurrentIntervalSeconds != 15 {
+		t.Fatalf("fast motion was not established: %#v", status)
+	}
+	for attempt := 0; attempt < 5; attempt++ {
+		controller.recordFailure(trackingKey, 1, TelemetryResult{}, ErrTelemetryTimeout)
+	}
+	if status := controller.Status(); status.MotionState != MotionFast || status.CurrentIntervalSeconds != 15 || status.ConsecutiveFailures != 5 {
+		t.Fatalf("telemetry loss changed last-known motion: %#v", status)
+	}
+	controller.recordSuccess(trackingKey, 1, telemetryFix(52.010, 13, at.Add(2*time.Minute)))
+	if status := controller.Status(); status.ConsecutiveFailures != 0 || status.CurrentIntervalSeconds != 15 || status.LastError != nil {
+		t.Fatalf("recovery did not resume motion scheduling: %#v", status)
+	}
+}
+
+func TestSessionTrackingRouteRecoveryResetsOnceAndContinuesFloodDiscovery(t *testing.T) {
+	controller := sessionTrackingController(MotionFast)
+	var resets atomic.Int32
+	controller.reset = func(context.Context, string) error { resets.Add(1); return nil }
+	zeroHopTimeout := TelemetryResult{RouteAttempt: RouteEvidence{Mode: RouteModeZeroHop, Source: "contact_out_path+response_sent"}}
+	if recovery := controller.recoverStaleRouteTimeout(context.Background(), trackingKey, 1, zeroHopTimeout, ErrTelemetryTimeout); recovery != "path_reset_acknowledged" {
+		t.Fatalf("first recovery=%q", recovery)
+	}
+	controller.recordFailure(trackingKey, 1, zeroHopTimeout, ErrTelemetryTimeout)
+	controller.recoverStaleRouteTimeout(context.Background(), trackingKey, 1, zeroHopTimeout, ErrTelemetryTimeout)
+	controller.recordFailure(trackingKey, 1, zeroHopTimeout, ErrTelemetryTimeout)
+	floodTimeout := TelemetryResult{RouteAttempt: RouteEvidence{Mode: RouteModeFlood, Source: "contact_out_path+response_sent"}}
+	controller.recordFailure(trackingKey, 1, floodTimeout, ErrTelemetryTimeout)
+	status := controller.Status()
+	last := status.RecentPolls[len(status.RecentPolls)-1]
+	if resets.Load() != 1 || status.CurrentIntervalSeconds != 15 || !status.RecoveryEpisodeActive || last.RouteRecovery != "flood_attempted" || last.IntervalSeconds != 15 {
+		t.Fatalf("Session route recovery stopped discovery: resets=%d status=%#v last=%#v", resets.Load(), status, last)
+	}
+}
+
+func TestSessionTrackingAdapterDisconnectRetainsBoundedBackoff(t *testing.T) {
+	controller := sessionTrackingController(MotionFast)
+	for attempt, wantInterval := range []int64{30, 60, 120} {
+		controller.recordFailure(trackingKey, 1, TelemetryResult{}, ErrTelemetryAdapterDisconnected)
+		if status := controller.Status(); status.CurrentIntervalSeconds != wantInterval || status.ConsecutiveFailures != attempt+1 {
+			t.Fatalf("adapter failure %d status=%#v", attempt+1, status)
+		}
 	}
 }
 
@@ -388,6 +467,16 @@ func activeTrackingController() *TrackingController {
 	controller := NewTrackingController(func(context.Context, string) (TelemetryResult, error) { return TelemetryResult{}, nil }, DefaultTrackingPolicy(), nil)
 	controller.generation = 1
 	controller.status = TrackingStatus{Active: true, TargetPublicKey: trackingKey, MotionState: MotionUnknown, CurrentIntervalSeconds: 30}
+	return controller
+}
+
+func sessionTrackingController(motion MotionState) *TrackingController {
+	controller := activeTrackingController()
+	controller.SetSessionManaged(true)
+	controller.mu.Lock()
+	controller.status.MotionState = motion
+	controller.status.CurrentIntervalSeconds = int64(controller.intervalForLocked() / time.Second)
+	controller.mu.Unlock()
 	return controller
 }
 

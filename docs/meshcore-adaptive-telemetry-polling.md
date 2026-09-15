@@ -57,12 +57,13 @@ does not create track points, coverage, or cloud projections.
 
 ## Safety, failure, and reconnect behavior
 
-There is one request path and one adapter-level request in flight. The
-controller never makes tight retries. The first failure waits at least the
-unknown interval; repeated failures double the interval and cap at five
-minutes. A successful correlated response resets the failure count. Adapter or
-BLE disconnect is treated as a failed poll and therefore suspends pressure via
-that backoff. A later successful request after deliberate adapter reconnect
+There is one request path and one adapter-level request in flight. Manual and
+diagnostic tracking never makes tight retries: the first failure waits at least
+the unknown interval, repeated failures double the interval, and the delay is
+capped at five minutes. A successful correlated response resets the failure
+count. Adapter or BLE disconnect uses that bounded local-transport backoff for
+both ownership modes, so a disconnected Companion cannot create a CPU/BLE
+reconnect loop. A later successful request after deliberate adapter reconnect
 logs recovery and resets normal scheduling.
 
 Stopping cancels scheduled future polls but does not cancel an already-issued
@@ -142,7 +143,7 @@ path-reset request:
 ```text
 stale zero-hop or explicit-path telemetry timeout
   -> CMD_RESET_PATH for that contact
-  -> existing backoff remains in force
+  -> Session ownership retains its motion cadence; manual ownership retains its backoff
   -> next normal telemetry poll re-queries the contact
   -> Companion may send flood and later learn a usable route
 ```
@@ -160,8 +161,10 @@ sequence; hashes are not repeater identities. A successful usable route closes
 the episode and updates its route generation. That makes a later stale
 generation eligible for one new reset. Until such a success, the episode stays
 active: continuous zero-hop failures, a failing flood, a firmware reset error,
-or a disconnect cannot generate reset loops. The existing 30s/60s/... capped
-backoff is unchanged, so a reset never creates a tight flood or retry loop.
+or a disconnect cannot generate reset loops. Manual tracking retains its
+existing 30s/60s/... capped backoff. An explicitly active Session instead
+continues normal motion-cadenced discovery after remote RF failures, but still
+makes no extra reset requests.
 
 `routeRecovery` in a history record is evidence for that particular poll. It
 is `flood_attempted` only when that request actually used `flood`; it is never
@@ -189,7 +192,8 @@ response routing remains unknown.
    `flood_attempted`, a flood failure does not reset again, and a successful
    flood or learned route completes the episode. Return to direct range and
    confirm a zero-hop success; then make the route stale again and verify one
-   new reset for that later episode, with the existing backoff preserved.
+   new reset for that later episode, with Session failures continuing at the
+   current motion cadence.
 # Session-managed operation
 
 The adaptive poller can be owned by an active LoRaMapr Session. The receiver
@@ -208,3 +212,42 @@ The local tracking start/stop API remains a diagnostic surface. An active
 Session-managed intent takes precedence and manual start/stop returns a
 conflict. Solicited telemetry continues through the normalized durable event
 path; it is operational request-correlated data, not signed position evidence.
+
+### Session recovery cadence (M7A.4)
+
+An explicitly active Session is a coverage-discovery operation. A remote
+telemetry timeout or unavailable contact route therefore does not replace the
+motion-derived cadence with exponential delay:
+
+| Last valid motion state | Session recovery cadence |
+| --- | ---: |
+| fast | 15 seconds |
+| slow | 30 seconds |
+| stationary | 45 seconds |
+| unknown / no usable telemetry yet | 30 seconds |
+
+`unknown` deliberately remains the existing conservative 30-second startup
+cadence. The receiver does not infer a speed from missing telemetry. Once a
+valid motion state exists, a timeout does not downgrade it: that last-known
+state remains the scheduling input until a later valid telemetry response
+changes it through the normal hysteresis rules.
+
+This applies only to remote RF/path failures while `controlSource=session`.
+The recovery episode still permits only one `CMD_RESET_PATH`; subsequent polls
+can be ordinary firmware-selected flood/discovery attempts at the table's
+cadence, and a successful response closes the episode. Manual/diagnostic
+tracking keeps its exponential backoff. Local adapter-disconnected failures
+also retain bounded adapter-recovery backoff regardless of ownership, distinct
+from remote coverage discovery.
+
+The fast cadence is intentionally not reduced below 15 seconds. Each attempt
+is the existing correlated telemetry request plus its existing pre-poll contact
+snapshot; M7A.4 adds no new radio frame type or retry burst. At bicycle speeds
+of roughly 20–25 km/h, 15 seconds corresponds to about 83–104 metres travelled,
+which is the chosen coverage-discovery tradeoff for an explicitly started
+Session. The cadence begins after the single in-flight request completes. The
+Companion can supply a shorter estimated response timeout, but the unchanged
+fallback watchdog is 45 seconds; a completely silent link can therefore make
+wall-clock request starts longer than the recorded cadence. M7A.4 removes the
+additional 30/60/120/240/300-second scheduler backoff; it does not alter that
+single-flight telemetry timeout in this slice.
