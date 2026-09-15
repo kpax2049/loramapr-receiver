@@ -15,6 +15,7 @@ import (
 	goruntime "runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/loramapr/loramapr-receiver/internal/buildinfo"
@@ -85,14 +86,27 @@ type CloudClient interface {
 }
 
 type Service struct {
-	container      *Container
-	mode           config.RunMode
-	steady         steadyState
-	build          buildinfo.Info
-	updater        *update.Checker
-	ingestWake     chan struct{}
-	normalizedWake chan struct{}
-	ingestTrace    bool
+	container       *Container
+	mode            config.RunMode
+	steady          steadyState
+	build           buildinfo.Info
+	updater         *update.Checker
+	ingestWake      chan struct{}
+	normalizedWake  chan struct{}
+	ingestTrace     bool
+	meshcoreControl meshcoreTrackingControl
+}
+
+type meshcoreTrackingControl struct {
+	mu                sync.RWMutex
+	source            string
+	desired           bool
+	sessionID         string
+	deviceID          string
+	publicKey         string
+	intentVersion     string
+	lastReconciledAt  *time.Time
+	reconciliationErr string
 }
 
 type Container struct {
@@ -563,21 +577,38 @@ func (s *Service) StartMeshCoreTracking(_ context.Context, publicKey string) (me
 	if s.container.MeshCore != nil && s.container.MeshCore.ReconnectSuppressed() {
 		return s.container.MeshCoreTracking.Status(), meshcore.ErrTrackingUnavailable
 	}
-	return s.container.MeshCoreTracking.Start(publicKey)
+	if s.meshcoreSessionManaged() {
+		return s.meshcoreTrackingStatus(), meshcore.ErrTrackingSessionManaged
+	}
+	status, err := s.container.MeshCoreTracking.Start(publicKey)
+	if err == nil || errors.Is(err, meshcore.ErrTrackingAlreadyActive) {
+		s.meshcoreControl.mu.Lock()
+		s.meshcoreControl.source, s.meshcoreControl.desired = "manual", true
+		s.meshcoreControl.reconciliationErr = ""
+		s.meshcoreControl.mu.Unlock()
+	}
+	return s.meshcoreTrackingStatusFrom(status), err
 }
 
 func (s *Service) StopMeshCoreTracking(_ context.Context) (meshcore.TrackingStatus, error) {
 	if s.container == nil || s.container.MeshCoreTracking == nil {
 		return meshcore.TrackingStatus{}, meshcore.ErrTrackingUnavailable
 	}
-	return s.container.MeshCoreTracking.Stop(), nil
+	if s.meshcoreSessionManaged() {
+		return s.meshcoreTrackingStatus(), meshcore.ErrTrackingSessionManaged
+	}
+	status := s.container.MeshCoreTracking.Stop()
+	s.meshcoreControl.mu.Lock()
+	s.meshcoreControl.source, s.meshcoreControl.desired = "", false
+	s.meshcoreControl.mu.Unlock()
+	return s.meshcoreTrackingStatusFrom(status), nil
 }
 
 func (s *Service) MeshCoreTrackingStatus(_ context.Context) (meshcore.TrackingStatus, error) {
 	if s.container == nil || s.container.MeshCoreTracking == nil {
 		return meshcore.TrackingStatus{}, meshcore.ErrTrackingUnavailable
 	}
-	return s.container.MeshCoreTracking.Status(), nil
+	return s.meshcoreTrackingStatus(), nil
 }
 
 func (s *Service) ResolveNormalizedDeliveryCollision(_ context.Context, deliveryID string) error {
@@ -1576,6 +1607,7 @@ func (s *Service) sendHeartbeat(ctx context.Context, snapshot state.Data, meshSn
 		latest.Cloud.GroupLabel,
 	)
 	s.applyHomeAutoCloudConfigFromAck(ack)
+	s.applyMeshCoreSessionIntent(ack.MeshCoreTrackingIntent, latest, ack)
 	s.steady.cloudReachable = true
 	s.container.Logger.Info(
 		"cloud outbound call succeeded",
@@ -1598,6 +1630,95 @@ func (s *Service) sendHeartbeat(ctx context.Context, snapshot state.Data, meshSn
 		strings.TrimSpace(ack.ConfigVersion),
 	)
 	return nil
+}
+
+func (s *Service) meshcoreSessionManaged() bool {
+	s.meshcoreControl.mu.RLock()
+	defer s.meshcoreControl.mu.RUnlock()
+	return s.meshcoreControl.source == "session" && s.meshcoreControl.desired
+}
+
+func (s *Service) meshcoreTrackingStatus() meshcore.TrackingStatus {
+	if s == nil || s.container == nil || s.container.MeshCoreTracking == nil {
+		return meshcore.TrackingStatus{MotionState: meshcore.MotionUnknown}
+	}
+	return s.meshcoreTrackingStatusFrom(s.container.MeshCoreTracking.Status())
+}
+
+func (s *Service) meshcoreTrackingStatusFrom(status meshcore.TrackingStatus) meshcore.TrackingStatus {
+	s.meshcoreControl.mu.RLock()
+	defer s.meshcoreControl.mu.RUnlock()
+	status.ControlSource = s.meshcoreControl.source
+	status.SessionID = s.meshcoreControl.sessionID
+	status.DeviceID = s.meshcoreControl.deviceID
+	status.Desired = s.meshcoreControl.desired
+	status.IntentVersion = s.meshcoreControl.intentVersion
+	status.LastReconciledAt = s.meshcoreControl.lastReconciledAt
+	if s.meshcoreControl.reconciliationErr != "" {
+		value := s.meshcoreControl.reconciliationErr
+		status.ReconciliationError = &value
+	}
+	return status
+}
+
+// applyMeshCoreSessionIntent reconciles the ephemeral controller from an
+// authenticated cloud snapshot. It never restores a remembered target after
+// restart or BLE Resume: another heartbeat must affirm that the Session is
+// still open.
+func (s *Service) applyMeshCoreSessionIntent(intent *cloudclient.MeshCoreTrackingIntent, snapshot state.Data, ack cloudclient.ReceiverHeartbeatAck) {
+	if s == nil || s.container == nil || s.container.MeshCoreTracking == nil {
+		return
+	}
+	now := time.Now().UTC()
+	setState := func(source string, desired bool, sessionID, deviceID, publicKey, version, reconciliationErr string) {
+		s.meshcoreControl.mu.Lock()
+		s.meshcoreControl.source = source
+		s.meshcoreControl.desired = desired
+		s.meshcoreControl.sessionID = sessionID
+		s.meshcoreControl.deviceID = deviceID
+		s.meshcoreControl.publicKey = publicKey
+		s.meshcoreControl.intentVersion = version
+		s.meshcoreControl.lastReconciledAt = &now
+		s.meshcoreControl.reconciliationErr = reconciliationErr
+		s.meshcoreControl.mu.Unlock()
+	}
+
+	if intent == nil {
+		if s.meshcoreSessionManaged() {
+			s.container.MeshCoreTracking.Stop()
+			setState("", false, "", "", "", "", "")
+		}
+		return
+	}
+	if intent.Protocol != "meshcore" || strings.TrimSpace(intent.SessionID) == "" || strings.TrimSpace(intent.DeviceID) == "" || strings.TrimSpace(intent.Version) == "" || intent.ReceiverAgentID != ack.ReceiverAgentID || intent.InstallationID != snapshot.Installation.ID {
+		if s.meshcoreSessionManaged() {
+			s.container.MeshCoreTracking.Stop()
+			setState("", false, "", "", "", "", "invalid MeshCore Session intent")
+		} else {
+			s.meshcoreControl.mu.Lock()
+			s.meshcoreControl.lastReconciledAt = &now
+			s.meshcoreControl.reconciliationErr = "invalid MeshCore Session intent"
+			s.meshcoreControl.mu.Unlock()
+		}
+		return
+	}
+	if s.container.MeshCore != nil && s.container.MeshCore.ReconnectSuppressed() {
+		setState("session", true, intent.SessionID, intent.DeviceID, intent.PublicKey, intent.Version, "MeshCore BLE is released")
+		return
+	}
+
+	current := s.container.MeshCoreTracking.Status()
+	if current.Active && current.TargetPublicKey != intent.PublicKey {
+		s.container.MeshCoreTracking.Stop()
+		current = s.container.MeshCoreTracking.Status()
+	}
+	if !current.Active {
+		if _, err := s.container.MeshCoreTracking.Start(intent.PublicKey); err != nil && !errors.Is(err, meshcore.ErrTrackingAlreadyActive) {
+			setState("session", true, intent.SessionID, intent.DeviceID, intent.PublicKey, intent.Version, err.Error())
+			return
+		}
+	}
+	setState("session", true, intent.SessionID, intent.DeviceID, intent.PublicKey, intent.Version, "")
 }
 
 func (s *Service) applyHomeAutoCloudConfigFromAck(ack cloudclient.ReceiverHeartbeatAck) {

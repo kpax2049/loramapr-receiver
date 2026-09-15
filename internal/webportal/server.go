@@ -603,6 +603,10 @@ func (s *Server) handleMeshCoreTrackingStart(w http.ResponseWriter, r *http.Requ
 		writeJSON(w, http.StatusConflict, map[string]any{"outcome": "tracking_active", "tracking": tracking, "error": err.Error()})
 		return
 	}
+	if errors.Is(err, meshcore.ErrTrackingSessionManaged) {
+		writeJSON(w, http.StatusConflict, map[string]any{"outcome": "session_managed", "tracking": tracking, "error": err.Error()})
+		return
+	}
 	writeJSON(w, http.StatusServiceUnavailable, map[string]string{"outcome": "tracking_unavailable", "error": err.Error()})
 }
 
@@ -617,6 +621,10 @@ func (s *Server) handleMeshCoreTrackingStop(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	tracking, err := s.meshcoreTracking.StopMeshCoreTracking(r.Context())
+	if errors.Is(err, meshcore.ErrTrackingSessionManaged) {
+		writeJSON(w, http.StatusConflict, map[string]any{"outcome": "session_managed", "tracking": tracking, "error": err.Error()})
+		return
+	}
 	if err != nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"outcome": "tracking_unavailable", "error": err.Error()})
 		return

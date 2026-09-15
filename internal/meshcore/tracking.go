@@ -25,6 +25,7 @@ var (
 	ErrTrackingAlreadyActive   = errors.New("MeshCore tracking is already active")
 	ErrTrackingDifferentTarget = errors.New("MeshCore tracking is active for a different target")
 	ErrTrackingUnavailable     = errors.New("MeshCore tracking controller is unavailable")
+	ErrTrackingSessionManaged  = errors.New("MeshCore tracking is managed by an active LoRaMapr Session")
 )
 
 // TrackingPolicy centralizes the deliberately conservative M7A airtime policy.
@@ -119,8 +120,15 @@ type TrackingStatus struct {
 	// LatestTelemetry is the latest prefix-correlated observation obtained by
 	// this temporary receiver-local tracking harness. It is intentionally not
 	// a signed current-position assertion.
-	LatestTelemetry *TelemetryResult `json:"latestTelemetry,omitempty"`
-	RecentPolls     []TrackingPoll   `json:"recentPolls"`
+	LatestTelemetry     *TelemetryResult `json:"latestTelemetry,omitempty"`
+	RecentPolls         []TrackingPoll   `json:"recentPolls"`
+	ControlSource       string           `json:"controlSource,omitempty"`
+	SessionID           string           `json:"sessionId,omitempty"`
+	DeviceID            string           `json:"deviceId,omitempty"`
+	Desired             bool             `json:"desired"`
+	IntentVersion       string           `json:"intentVersion,omitempty"`
+	LastReconciledAt    *time.Time       `json:"lastReconciledAt,omitempty"`
+	ReconciliationError *string          `json:"reconciliationError,omitempty"`
 }
 
 const recentPollLimit = 50

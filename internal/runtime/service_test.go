@@ -406,11 +406,12 @@ type mockCloudClient struct {
 	lastPayload  map[string]any
 	lastEventKey string
 
-	heartbeatErr   error
-	heartbeatCalls int
-	lastHeartbeat  cloudclient.ReceiverHeartbeat
-	ackConfigVer   string
-	ackHomeAutoCfg *cloudclient.HomeAutoSessionManagedConfig
+	heartbeatErr      error
+	heartbeatCalls    int
+	lastHeartbeat     cloudclient.ReceiverHeartbeat
+	ackConfigVer      string
+	ackHomeAutoCfg    *cloudclient.HomeAutoSessionManagedConfig
+	ackMeshCoreIntent *cloudclient.MeshCoreTrackingIntent
 
 	startHomeAutoCalls int
 	stopHomeAutoCalls  int
@@ -520,13 +521,46 @@ func (m *mockCloudClient) SendReceiverHeartbeat(
 		return cloudclient.ReceiverHeartbeatAck{}, m.heartbeatErr
 	}
 	return cloudclient.ReceiverHeartbeatAck{
-		ReceiverAgentID:       "agent-1",
-		OwnerID:               "owner-1",
-		ConfigVersion:         m.ackConfigVer,
-		LastHeartbeatAt:       time.Now().UTC(),
-		NodeCount:             len(heartbeat.ObservedNodeIDs),
-		HomeAutoSessionConfig: m.ackHomeAutoCfg,
+		ReceiverAgentID:        "agent-1",
+		OwnerID:                "owner-1",
+		ConfigVersion:          m.ackConfigVer,
+		LastHeartbeatAt:        time.Now().UTC(),
+		NodeCount:              len(heartbeat.ObservedNodeIDs),
+		HomeAutoSessionConfig:  m.ackHomeAutoCfg,
+		MeshCoreTrackingIntent: m.ackMeshCoreIntent,
 	}, nil
+}
+
+func TestMeshCoreSessionIntentReconcilesAndBlocksManualControl(t *testing.T) {
+	t.Parallel()
+	key := strings.Repeat("a", 64)
+	tracking := meshcore.NewTrackingController(func(ctx context.Context, _ string) (meshcore.TelemetryResult, error) {
+		return meshcore.TelemetryResult{}, ctx.Err()
+	}, meshcore.DefaultTrackingPolicy(), nil)
+	svc := &Service{container: &Container{MeshCoreTracking: tracking}}
+	snapshot := state.Data{Installation: state.InstallationState{ID: "installation-1"}}
+	ack := cloudclient.ReceiverHeartbeatAck{ReceiverAgentID: "agent-1"}
+	intent := &cloudclient.MeshCoreTrackingIntent{
+		Version: "session:one:1", SessionID: "session-1", DeviceID: "device-1", Protocol: "meshcore",
+		PublicKey: key, ReceiverAgentID: "agent-1", InstallationID: "installation-1",
+	}
+	svc.applyMeshCoreSessionIntent(intent, snapshot, ack)
+	status := svc.meshcoreTrackingStatus()
+	if !status.Active || status.ControlSource != "session" || status.SessionID != "session-1" || !status.Desired {
+		t.Fatalf("expected active session-managed tracking, got %#v", status)
+	}
+	if _, err := svc.StartMeshCoreTracking(context.Background(), key); !errors.Is(err, meshcore.ErrTrackingSessionManaged) {
+		t.Fatalf("manual start error=%v, want session managed conflict", err)
+	}
+	// Replaying the same authoritative snapshot must retain the one controller.
+	svc.applyMeshCoreSessionIntent(intent, snapshot, ack)
+	if status = svc.meshcoreTrackingStatus(); !status.Active || status.TargetPublicKey != key {
+		t.Fatalf("duplicate intent changed tracking state: %#v", status)
+	}
+	svc.applyMeshCoreSessionIntent(nil, snapshot, ack)
+	if status = svc.meshcoreTrackingStatus(); status.Active || status.Desired || status.ControlSource != "" {
+		t.Fatalf("missing intent did not stop session tracking: %#v", status)
+	}
 }
 
 func (m *mockCloudClient) StartHomeAutoSession(

@@ -121,16 +121,30 @@ type HomeAutoSessionManagedConfig struct {
 }
 
 type ReceiverHeartbeatAck struct {
-	ReceiverAgentID       string
-	OwnerID               string
-	ReceiverLabel         string
-	SiteLabel             string
-	GroupLabel            string
-	ConfigVersion         string
-	LastHeartbeatAt       time.Time
-	NodeCount             int
-	HomeAutoSessionConfig *HomeAutoSessionManagedConfig
-	ClockAttestation      *clockattestation.Candidate
+	ReceiverAgentID        string
+	OwnerID                string
+	ReceiverLabel          string
+	SiteLabel              string
+	GroupLabel             string
+	ConfigVersion          string
+	LastHeartbeatAt        time.Time
+	NodeCount              int
+	HomeAutoSessionConfig  *HomeAutoSessionManagedConfig
+	MeshCoreTrackingIntent *MeshCoreTrackingIntent
+	ClockAttestation       *clockattestation.Candidate
+}
+
+// MeshCoreTrackingIntent is a cloud-authoritative snapshot. It is not a
+// command queue: absence means no Session-managed automatic polling.
+type MeshCoreTrackingIntent struct {
+	Version         string `json:"version"`
+	SessionID       string `json:"sessionId"`
+	DeviceID        string `json:"deviceId"`
+	Protocol        string `json:"protocol"`
+	PublicKey       string `json:"publicKey"`
+	ReceiverAgentID string `json:"receiverAgentId"`
+	InstallationID  string `json:"installationId"`
+	UpdatedAt       string `json:"updatedAt"`
 }
 
 type HomeAutoSessionStartRequest struct {
@@ -555,16 +569,17 @@ func (c *HTTPClient) SendReceiverHeartbeat(
 	}
 
 	var response struct {
-		ReceiverAgentID       string                        `json:"receiverAgentId"`
-		OwnerID               string                        `json:"ownerId"`
-		ReceiverLabel         string                        `json:"receiverLabel"`
-		SiteLabel             string                        `json:"siteLabel"`
-		GroupLabel            string                        `json:"groupLabel"`
-		ConfigVersion         string                        `json:"configVersion"`
-		LastHeartbeatAt       string                        `json:"lastHeartbeatAt"`
-		NodeCount             int                           `json:"nodeCount"`
-		HomeAutoSessionConfig *HomeAutoSessionManagedConfig `json:"homeAutoSessionConfig"`
-		ClockAttestation      json.RawMessage               `json:"clockAttestation"`
+		ReceiverAgentID        string                        `json:"receiverAgentId"`
+		OwnerID                string                        `json:"ownerId"`
+		ReceiverLabel          string                        `json:"receiverLabel"`
+		SiteLabel              string                        `json:"siteLabel"`
+		GroupLabel             string                        `json:"groupLabel"`
+		ConfigVersion          string                        `json:"configVersion"`
+		LastHeartbeatAt        string                        `json:"lastHeartbeatAt"`
+		NodeCount              int                           `json:"nodeCount"`
+		HomeAutoSessionConfig  *HomeAutoSessionManagedConfig `json:"homeAutoSessionConfig"`
+		MeshCoreTrackingIntent *MeshCoreTrackingIntent       `json:"meshcoreTrackingIntent"`
+		ClockAttestation       json.RawMessage               `json:"clockAttestation"`
 	}
 	meta, err := c.postJSONWithMeta(ctx, heartbeatEndpoint, request, map[string]string{
 		"x-api-key": trimmedKey,
@@ -579,16 +594,17 @@ func (c *HTTPClient) SendReceiverHeartbeat(
 	}
 
 	return ReceiverHeartbeatAck{
-		ReceiverAgentID:       response.ReceiverAgentID,
-		OwnerID:               response.OwnerID,
-		ReceiverLabel:         strings.TrimSpace(response.ReceiverLabel),
-		SiteLabel:             strings.TrimSpace(response.SiteLabel),
-		GroupLabel:            strings.TrimSpace(response.GroupLabel),
-		ConfigVersion:         strings.TrimSpace(response.ConfigVersion),
-		LastHeartbeatAt:       lastHeartbeatAt,
-		NodeCount:             response.NodeCount,
-		HomeAutoSessionConfig: response.HomeAutoSessionConfig,
-		ClockAttestation:      c.parseClockAttestation(decodeClockWire(response.ClockAttestation), meta.ReceivedAt, meta.Request, meta.Response),
+		ReceiverAgentID:        response.ReceiverAgentID,
+		OwnerID:                response.OwnerID,
+		ReceiverLabel:          strings.TrimSpace(response.ReceiverLabel),
+		SiteLabel:              strings.TrimSpace(response.SiteLabel),
+		GroupLabel:             strings.TrimSpace(response.GroupLabel),
+		ConfigVersion:          strings.TrimSpace(response.ConfigVersion),
+		LastHeartbeatAt:        lastHeartbeatAt,
+		NodeCount:              response.NodeCount,
+		HomeAutoSessionConfig:  response.HomeAutoSessionConfig,
+		MeshCoreTrackingIntent: response.MeshCoreTrackingIntent,
+		ClockAttestation:       c.parseClockAttestation(decodeClockWire(response.ClockAttestation), meta.ReceivedAt, meta.Request, meta.Response),
 	}, nil
 }
 

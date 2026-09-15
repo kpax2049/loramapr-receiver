@@ -190,3 +190,21 @@ response routing remains unknown.
    flood or learned route completes the episode. Return to direct range and
    confirm a zero-hop success; then make the route stale again and verify one
    new reset for that later episode, with the existing backoff preserved.
+# Session-managed operation
+
+The adaptive poller can be owned by an active LoRaMapr Session. The receiver
+gets an authenticated, authoritative MeshCore tracking snapshot on its normal
+cloud heartbeat response and reconciles it with the existing controller. An
+empty snapshot stops Session-managed polling. This survives receiver restart
+and cloud reconnect without a separate command channel or persisted local
+Session state.
+
+The snapshot carries the full MeshCore Ed25519 public key, Session/device IDs,
+receiver installation binding, and version. It is accepted only by the bound
+installation. BLE Release stops the poller; Resume waits for another cloud
+heartbeat rather than blindly restoring a remembered target.
+
+The local tracking start/stop API remains a diagnostic surface. An active
+Session-managed intent takes precedence and manual start/stop returns a
+conflict. Solicited telemetry continues through the normalized durable event
+path; it is operational request-correlated data, not signed position evidence.
