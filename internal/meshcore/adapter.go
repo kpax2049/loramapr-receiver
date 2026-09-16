@@ -86,6 +86,11 @@ type Adapter struct {
 	telemetryMu sync.Mutex
 	telemetry   *telemetryRequest
 	pathReset   *pathResetRequest
+	// binaryTelemetryCapability is learned from the stock command response:
+	// unknown probes CMD_SEND_BINARY_REQ once, supported uses it, unsupported
+	// remains on the deprecated request for this connected Companion session.
+	binaryTelemetryCapability telemetryBinaryCapability
+	expiredTelemetryTags      map[uint32]time.Time
 
 	detectFn         func(Config) (detectionResult, error)
 	openFn           func(string) (io.ReadWriteCloser, error)
@@ -126,6 +131,7 @@ func NewAdapter(cfg Config, logger *slog.Logger, leases *protocoladapter.SerialL
 		},
 		detectionDelay: 3 * time.Second, reconnectDelay: 2 * time.Second, handshakeTimeout: 15 * time.Second,
 		shutdownTimeout: 3 * time.Second, reconnectWake: make(chan struct{}, 1),
+		expiredTelemetryTags: make(map[uint32]time.Time),
 	}
 }
 
@@ -411,6 +417,10 @@ func (a *Adapter) clearAttemptCancel(cancel context.CancelFunc) {
 }
 
 func (a *Adapter) consume(ctx context.Context, link CompanionLink, device string, sink protocoladapter.AdapterSink) error {
+	a.telemetryMu.Lock()
+	a.binaryTelemetryCapability = telemetryBinaryUnknown
+	a.expiredTelemetryTags = make(map[uint32]time.Time)
+	a.telemetryMu.Unlock()
 	session := NewCompanionSessionForTransport("loramapr-receiver", link.Metadata())
 	a.setStatus(func(status *AdapterStatus) {
 		status.State = StateHandshaking
@@ -480,6 +490,10 @@ func (a *Adapter) consume(ctx context.Context, link CompanionLink, device string
 		observedAt := time.Now().UTC()
 		if result.Push.Opcode == PushTelemetryResponse {
 			a.handleTelemetryResponse(result.Push.Payload, observedAt)
+			continue
+		}
+		if result.Push.Opcode == PushBinaryResponse {
+			a.handleBinaryTelemetryResponse(result.Push.Payload, observedAt)
 			continue
 		}
 		event := AdapterEvent{

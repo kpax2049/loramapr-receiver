@@ -28,6 +28,15 @@ func TestBuildTelemetryRequestRequiresCanonicalFullKey(t *testing.T) {
 	}
 }
 
+func TestBuildBinaryTelemetryRequestUsesStockTaggedContract(t *testing.T) {
+	t.Parallel()
+	target := mustTelemetryTarget(t, trackingKey)
+	frame := BuildBinaryTelemetryRequest(target)
+	if len(frame) != 34 || frame[0] != CommandSendBinaryRequest || !bytes.Equal(frame[1:33], target[:]) || frame[33] != 0x03 {
+		t.Fatalf("binary telemetry request = %x", frame)
+	}
+}
+
 func TestAdapterTelemetryRequestFailsClosedWhenReleased(t *testing.T) {
 	adapter := NewAdapter(Config{Transport: "ble", BLE: BLEConfig{PeerAddress: "AA:BB:CC:DD:EE:FF"}}, nil, nil)
 	adapter.disconnectBLE = func(context.Context, BLEConfig) error { return nil }
@@ -148,6 +157,85 @@ func TestCompanionSessionRecognizesTelemetryResponseAndSent(t *testing.T) {
 	if err != nil || result.Response == nil || result.Response.Code != ResponseContact {
 		t.Fatalf("unexpected contact response handling: result=%#v err=%v", result, err)
 	}
+	binaryResponse := []byte{PushBinaryResponse, 0, 0x44, 0x33, 0x22, 0x11, 1, 120, 90}
+	result, err = session.Handle(binaryResponse)
+	if err != nil || result.Push == nil || result.Push.Opcode != PushBinaryResponse {
+		t.Fatalf("unexpected binary telemetry handling: result=%#v err=%v", result, err)
+	}
+}
+
+func TestTaggedTelemetryDiscardsExpiredResponseBeforeSameTargetReplacement(t *testing.T) {
+	key := trackingKey
+	link := &telemetryTestLink{writes: make(chan []byte, 8)}
+	adapter := NewAdapter(Config{Transport: "ble", BLE: BLEConfig{Adapter: "hci0", PeerAddress: "AA:BB:CC:DD:EE:FF"}}, nil, nil)
+	adapter.setLink(link)
+	adapter.setStatus(func(status *AdapterStatus) { status.State, status.Session.State = StateConnected, SessionReady })
+
+	start := func(pathEncoding byte, path []byte) chan telemetryCompletion {
+		done := make(chan telemetryCompletion, 1)
+		go func() {
+			result, err := adapter.RequestTelemetry(context.Background(), key)
+			done <- telemetryCompletion{result: result, err: err}
+		}()
+		<-link.writes // contact lookup
+		adapter.handleTelemetryContactResponse(telemetryContactFrame(t, key, pathEncoding, path))
+		frame := <-link.writes
+		if frame[0] != CommandSendBinaryRequest {
+			t.Fatalf("request command = 0x%02x, want binary", frame[0])
+		}
+		return done
+	}
+
+	first := start(2, []byte{0xaa, 0xbb})
+	adapter.handleTelemetryCommandResponse(ResponseFrame{Code: ResponseSent, Payload: []byte{ResponseSent, 0, 1, 0, 0, 0, 0xe8, 3, 0, 0}})
+	adapter.finishCurrentTelemetry(TelemetryResult{}, ErrTelemetryTimeout)
+	if completion := <-first; !errors.Is(completion.err, ErrTelemetryTimeout) || !completion.result.Tagged || completion.result.RequestTag == nil || *completion.result.RequestTag != 1 {
+		t.Fatalf("first completion = %#v", completion)
+	}
+
+	second := start(0, nil)
+	adapter.handleTelemetryCommandResponse(ResponseFrame{Code: ResponseSent, Payload: []byte{ResponseSent, 0, 2, 0, 0, 0, 0xe8, 3, 0, 0}})
+	// This is a valid-looking response for the expired request A. It must not
+	// update B's request route, telemetry, motion evidence, or completion.
+	adapter.handleBinaryTelemetryResponse([]byte{PushBinaryResponse, 0, 1, 0, 0, 0, 1, 116, 0x01, 0x99}, time.Now())
+	select {
+	case completion := <-second:
+		t.Fatalf("late A completed B: %#v", completion)
+	default:
+	}
+	adapter.handleBinaryTelemetryResponse([]byte{PushBinaryResponse, 0, 2, 0, 0, 0, 1, 116, 0x01, 0x99}, time.Now())
+	completion := <-second
+	if completion.err != nil || completion.result.RequestTag == nil || *completion.result.RequestTag != 2 || completion.result.RouteAttempt.Mode != RouteModeZeroHop || completion.result.RouteAttempt.PathLength != 0 {
+		t.Fatalf("B correlation or route evidence was contaminated: %#v err=%v", completion.result, completion.err)
+	}
+}
+
+func TestBinaryTelemetryUnsupportedFallsBackToLegacy(t *testing.T) {
+	key := trackingKey
+	link := &telemetryTestLink{writes: make(chan []byte, 4)}
+	adapter := NewAdapter(Config{Transport: "physical_serial", Device: "/dev/null"}, nil, nil)
+	adapter.setLink(link)
+	adapter.setStatus(func(status *AdapterStatus) { status.State, status.Session.State = StateConnected, SessionReady })
+	done := make(chan telemetryCompletion, 1)
+	go func() {
+		result, err := adapter.RequestTelemetry(context.Background(), key)
+		done <- telemetryCompletion{result: result, err: err}
+	}()
+	<-link.writes // contact lookup
+	adapter.handleTelemetryContactResponse(telemetryContactFrame(t, key, 0, nil))
+	if frame := <-link.writes; frame[0] != CommandSendBinaryRequest {
+		t.Fatalf("first request command = 0x%02x, want binary", frame[0])
+	}
+	adapter.handleTelemetryCommandResponse(ResponseFrame{Code: ResponseError, Payload: []byte{ResponseError, 1}})
+	if frame := <-link.writes; frame[0] != CommandSendTelemetryRequest {
+		t.Fatalf("fallback request command = 0x%02x, want legacy", frame[0])
+	}
+	adapter.handleTelemetryCommandResponse(ResponseFrame{Code: ResponseSent, Payload: []byte{ResponseSent, 0, 0, 0, 0, 0, 0, 0, 0, 0}})
+	adapter.handleTelemetryResponse([]byte{PushTelemetryResponse, 0, 0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 1, 120, 90}, time.Now())
+	completion := <-done
+	if completion.err != nil || completion.result.Tagged || adapter.binaryTelemetryCapability != telemetryBinaryUnsupported {
+		t.Fatalf("legacy fallback = %#v capability=%v", completion, adapter.binaryTelemetryCapability)
+	}
 }
 
 func TestAdapterTelemetryRequestCorrelatesOnlyInFlightFullTarget(t *testing.T) {
@@ -177,21 +265,21 @@ func TestAdapterTelemetryRequestCorrelatesOnlyInFlightFullTarget(t *testing.T) {
 	select {
 	case frame := <-link.writes:
 		target := mustTelemetryTarget(t, key)
-		if len(frame) != 36 || !bytes.Equal(frame[4:], target[:]) {
+		if len(frame) != 34 || frame[0] != CommandSendBinaryRequest || !bytes.Equal(frame[1:33], target[:]) || frame[33] != 0x03 {
 			t.Fatalf("unexpected telemetry request: %x", frame)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("telemetry request was not written")
 	}
-	adapter.handleTelemetryCommandResponse(ResponseFrame{Code: ResponseSent, Payload: []byte{ResponseSent, 0, 0, 0, 0, 0, 0, 0, 0, 0}})
+	adapter.handleTelemetryCommandResponse(ResponseFrame{Code: ResponseSent, Payload: []byte{ResponseSent, 0, 0x33, 0x44, 0x55, 0x66, 0, 0, 0, 0}})
 	if _, err := adapter.RequestTelemetry(context.Background(), key); !errors.Is(err, ErrTelemetryRequestInFlight) {
 		t.Fatalf("second request error=%v, want in-flight", err)
 	}
-	frame := []byte{PushTelemetryResponse, 0, 0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 1, 116, 0x01, 0x99}
-	adapter.handleTelemetryResponse(frame, time.Date(2026, 9, 12, 10, 0, 0, 0, time.UTC))
+	frame := []byte{PushBinaryResponse, 0, 0x33, 0x44, 0x55, 0x66, 1, 116, 0x01, 0x99}
+	adapter.handleBinaryTelemetryResponse(frame, time.Date(2026, 9, 12, 10, 0, 0, 0, time.UTC))
 	select {
 	case completion := <-resultCh:
-		if completion.err != nil || completion.result.TargetPublicKey != key || completion.result.SourcePrefix != key[:12] || completion.result.Telemetry.Voltage == nil || *completion.result.Telemetry.Voltage != 4.09 || completion.result.RouteAttempt.Mode != RouteModeExplicitPath || completion.result.RouteAttempt.Source != "contact_out_path+response_sent" || !completion.result.ResponseRouteUnknown || !bytes.Equal(completion.result.RawFrame, frame) {
+		if completion.err != nil || !completion.result.Tagged || completion.result.RequestTag == nil || *completion.result.RequestTag != 0x66554433 || completion.result.TargetPublicKey != key || completion.result.SourcePrefix != key[:12] || completion.result.Telemetry.Voltage == nil || *completion.result.Telemetry.Voltage != 4.09 || completion.result.RouteAttempt.Mode != RouteModeExplicitPath || completion.result.RouteAttempt.Source != "contact_out_path+response_sent" || !completion.result.ResponseRouteUnknown || !bytes.Equal(completion.result.RawFrame, frame) {
 			t.Fatalf("unexpected completion: %#v err=%v", completion.result, completion.err)
 		}
 	case <-time.After(time.Second):
@@ -226,6 +314,29 @@ func TestNormalizeTelemetryResultPreservesCorrelationWithoutPositionTrust(t *tes
 	evidence := normalized["solicitedTelemetry"].(map[string]any)
 	if evidence["sourcePrefix"] != key[:12] || evidence["correlation"] != "request_correlated" || evidence["authenticity"] != "not_independently_signed" {
 		t.Fatalf("telemetry provenance was not retained: %#v", evidence)
+	}
+}
+
+func TestNormalizeTaggedBinaryTelemetryPreservesTagAndRawOpcode(t *testing.T) {
+	t.Parallel()
+	key := trackingKey
+	tag := uint32(0x66554433)
+	voltage := 4.09
+	normalized, err := NormalizeTelemetryResult(TelemetryResult{
+		TargetPublicKey: key, SourcePrefix: key[:12], RequestTag: &tag, Tagged: true,
+		ResponseOpcode: PushBinaryResponse, ReceivedAt: time.Date(2026, 9, 16, 10, 0, 0, 0, time.UTC),
+		RawFrame: []byte{PushBinaryResponse, 0, 0x33, 0x44, 0x55, 0x66, 1, 116, 1, 0x99}, Telemetry: Telemetry{Voltage: &voltage},
+	}, ReceiverBinding{InstallationID: "00112233445566778899aabbccddeeff", AdapterVersion: "test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := normalized["source"].(map[string]any)
+	if source["nativeOpcodeName"] != "BINARY_RESPONSE" {
+		t.Fatalf("raw opcode was rewritten: %#v", source)
+	}
+	telemetry := normalized["solicitedTelemetry"].(map[string]any)
+	if telemetry["requestTag"] != tag {
+		t.Fatalf("request tag was not normalized: %#v", telemetry)
 	}
 }
 
@@ -283,6 +394,7 @@ func TestAdapterTelemetryRequestFailsClosedOnMismatchedPrefix(t *testing.T) {
 	key := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 	link := &telemetryTestLink{writes: make(chan []byte, 1)}
 	adapter := NewAdapter(Config{Transport: "physical_serial", Device: "/dev/null"}, nil, nil)
+	adapter.binaryTelemetryCapability = telemetryBinaryUnsupported
 	adapter.setLink(link)
 	adapter.setStatus(func(status *AdapterStatus) { status.State, status.Session.State = StateConnected, SessionReady })
 	resultCh := make(chan error, 1)

@@ -581,7 +581,7 @@ func (s *Service) StartMeshCoreTracking(_ context.Context, publicKey string) (me
 	if s.meshcoreSessionManaged() {
 		return s.meshcoreTrackingStatus(), meshcore.ErrTrackingSessionManaged
 	}
-	s.container.MeshCoreTracking.SetSessionManaged(false)
+	s.container.MeshCoreTracking.SetControlSource("manual")
 	status, err := s.container.MeshCoreTracking.Start(publicKey)
 	if err == nil || errors.Is(err, meshcore.ErrTrackingAlreadyActive) {
 		s.meshcoreControl.mu.Lock()
@@ -600,7 +600,7 @@ func (s *Service) StopMeshCoreTracking(_ context.Context) (meshcore.TrackingStat
 		return s.meshcoreTrackingStatus(), meshcore.ErrTrackingSessionManaged
 	}
 	status := s.container.MeshCoreTracking.Stop()
-	s.container.MeshCoreTracking.SetSessionManaged(false)
+	s.container.MeshCoreTracking.SetControlSource("")
 	s.meshcoreControl.mu.Lock()
 	s.meshcoreControl.source, s.meshcoreControl.desired = "", false
 	s.meshcoreControl.mu.Unlock()
@@ -1636,9 +1636,7 @@ func (s *Service) sendHeartbeat(ctx context.Context, snapshot state.Data, meshSn
 }
 
 func (s *Service) meshcoreSessionManaged() bool {
-	s.meshcoreControl.mu.RLock()
-	defer s.meshcoreControl.mu.RUnlock()
-	return s.meshcoreControl.source == "session" && s.meshcoreControl.desired
+	return s != nil && s.container != nil && s.container.MeshCoreTracking != nil && s.container.MeshCoreTracking.ControlSource() == "session"
 }
 
 func (s *Service) meshcoreTrackingStatus() meshcore.TrackingStatus {
@@ -1651,7 +1649,6 @@ func (s *Service) meshcoreTrackingStatus() meshcore.TrackingStatus {
 func (s *Service) meshcoreTrackingStatusFrom(status meshcore.TrackingStatus) meshcore.TrackingStatus {
 	s.meshcoreControl.mu.RLock()
 	defer s.meshcoreControl.mu.RUnlock()
-	status.ControlSource = s.meshcoreControl.source
 	status.SessionID = s.meshcoreControl.sessionID
 	status.DeviceID = s.meshcoreControl.deviceID
 	status.Desired = s.meshcoreControl.desired
@@ -1674,6 +1671,10 @@ func (s *Service) applyMeshCoreSessionIntent(intent *cloudclient.MeshCoreTrackin
 	}
 	now := time.Now().UTC()
 	setState := func(source string, desired bool, sessionID, deviceID, publicKey, version, reconciliationErr string) {
+		// The controller owns the source that selects its scheduler policy and
+		// exports it directly in TrackingStatus. Keep runtime metadata aligned,
+		// but never decorate status with a second source of truth.
+		s.container.MeshCoreTracking.SetControlSource(source)
 		s.meshcoreControl.mu.Lock()
 		s.meshcoreControl.source = source
 		s.meshcoreControl.desired = desired
@@ -1689,7 +1690,6 @@ func (s *Service) applyMeshCoreSessionIntent(intent *cloudclient.MeshCoreTrackin
 	if intent == nil {
 		if s.meshcoreSessionManaged() {
 			s.container.MeshCoreTracking.Stop()
-			s.container.MeshCoreTracking.SetSessionManaged(false)
 			setState("", false, "", "", "", "", "")
 		}
 		return
@@ -1697,7 +1697,6 @@ func (s *Service) applyMeshCoreSessionIntent(intent *cloudclient.MeshCoreTrackin
 	if intent.Protocol != "meshcore" || strings.TrimSpace(intent.SessionID) == "" || strings.TrimSpace(intent.DeviceID) == "" || strings.TrimSpace(intent.Version) == "" || intent.ReceiverAgentID != ack.ReceiverAgentID || intent.InstallationID != snapshot.Installation.ID {
 		if s.meshcoreSessionManaged() {
 			s.container.MeshCoreTracking.Stop()
-			s.container.MeshCoreTracking.SetSessionManaged(false)
 			setState("", false, "", "", "", "", "invalid MeshCore Session intent")
 		} else {
 			s.meshcoreControl.mu.Lock()
@@ -1715,7 +1714,9 @@ func (s *Service) applyMeshCoreSessionIntent(intent *cloudclient.MeshCoreTrackin
 	// Set policy ownership before inspecting/reusing an active controller. If
 	// this Session takes over a same-target manual run, it wakes any pending
 	// manual failure delay and restores the motion-derived discovery cadence.
-	s.container.MeshCoreTracking.SetSessionManaged(true)
+	// Set controller ownership before Start: Start immediately issues a request
+	// and a short tagged timeout must already use Session motion cadence.
+	s.container.MeshCoreTracking.SetControlSource("session")
 	current := s.container.MeshCoreTracking.Status()
 	if current.Active && current.TargetPublicKey != intent.PublicKey {
 		s.container.MeshCoreTracking.Stop()

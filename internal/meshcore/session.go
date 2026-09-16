@@ -16,6 +16,7 @@ const (
 	CommandDeviceQuery          = byte(0x16)
 	CommandGetContactByKey      = byte(0x1e)
 	CommandSendTelemetryRequest = byte(0x27)
+	CommandSendBinaryRequest    = byte(0x32)
 
 	ResponseOK         = byte(0x00)
 	ResponseError      = byte(0x01)
@@ -29,6 +30,7 @@ const (
 	PushLogRXData         = byte(0x88)
 	PushNewAdvert         = byte(0x8A)
 	PushTelemetryResponse = byte(0x8B)
+	PushBinaryResponse    = byte(0x8C)
 	PushControlData       = byte(0x8E)
 
 	deviceInfoLength  = 82
@@ -283,6 +285,11 @@ func (s *CompanionSession) Handle(payload []byte) (HandleResult, error) {
 				return HandleResult{}, err
 			}
 		}
+		if payload[0] == PushBinaryResponse {
+			if err := validateBinaryResponse(payload); err != nil {
+				return HandleResult{}, err
+			}
+		}
 		copied := append([]byte(nil), payload...)
 		return HandleResult{Ready: true, Push: &PushFrame{Opcode: copied[0], Payload: copied}}, nil
 
@@ -314,6 +321,14 @@ func validateTelemetryResponse(payload []byte) error {
 	// [code][reserved][source public-key prefix x6][CayenneLPP payload...]
 	if len(payload) < 8 {
 		return fmt.Errorf("%w: TELEMETRY_RESPONSE got %d bytes, need at least 8", ErrInvalidPush, len(payload))
+	}
+	return nil
+}
+
+func validateBinaryResponse(payload []byte) error {
+	// [code][reserved][request tag uint32 LE][response data...]
+	if len(payload) < 6 {
+		return fmt.Errorf("%w: BINARY_RESPONSE got %d bytes, need at least 6", ErrInvalidPush, len(payload))
 	}
 	return nil
 }

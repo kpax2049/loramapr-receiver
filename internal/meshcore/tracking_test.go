@@ -18,6 +18,33 @@ func TestDefaultTrackingPolicyIntervals(t *testing.T) {
 	}
 }
 
+func TestSessionTaggedSchedulingAnchorsToActualRequestStart(t *testing.T) {
+	now := time.Date(2026, 9, 16, 10, 0, 4, 0, time.UTC)
+	started := now.Add(-4 * time.Second)
+	policy := DefaultTrackingPolicy()
+	for _, test := range []struct {
+		name     string
+		interval time.Duration
+		want     time.Duration
+	}{
+		{name: "fast", interval: policy.FastInterval, want: 11 * time.Second},
+		{name: "slow", interval: policy.SlowInterval, want: 26 * time.Second},
+		{name: "stationary", interval: policy.StationaryInterval, want: 41 * time.Second},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := nextTrackingRequestAt(now, started, test.interval, true, true); got.Sub(now) != test.want {
+				t.Fatalf("next tagged Session start = %s, want %s", got.Sub(now), test.want)
+			}
+		})
+	}
+	if got := nextTrackingRequestAt(now, started, policy.FastInterval, true, false); got.Sub(now) != policy.FastInterval {
+		t.Fatalf("legacy request scheduled from completion = %s, want %s", got.Sub(now), policy.FastInterval)
+	}
+	if got := nextTrackingRequestAt(now, started, policy.FastInterval, true, true); got.Before(now) {
+		t.Fatalf("tagged schedule is in the past: %s", got)
+	}
+}
+
 func TestTrackingStartValidatesTargetAndIssuesFirstRequest(t *testing.T) {
 	requested := make(chan string, 1)
 	release := make(chan struct{})
@@ -104,6 +131,31 @@ func TestTrackingStatusRetainsLatestObservedTelemetryWithoutPositionTrust(t *tes
 	*status.LatestTelemetry.Telemetry.Latitude = 0
 	if got := controller.Status().LatestTelemetry.Telemetry.Latitude; got == nil || *got != latitude {
 		t.Fatalf("latest telemetry was not defensively copied: %#v", got)
+	}
+}
+
+func TestTrackingStatusExposesTaggedTelemetryValidationDiagnostics(t *testing.T) {
+	controller := activeTrackingController()
+	requestTag, responseTag := uint32(0x11223344), uint32(0x11223344)
+	result := TelemetryResult{
+		ReceivedAt: time.Date(2026, 9, 16, 10, 0, 0, 0, time.UTC), Tagged: true,
+		Transport: "tagged_binary", Capability: "tagged_binary_supported", RequestTag: &requestTag, ResponseTag: &responseTag,
+	}
+	controller.recordSuccess(trackingKey, 1, result)
+	status := controller.Status()
+	if status.TelemetryTransport != "tagged_binary" || status.TelemetryCapability != "tagged_binary_supported" || status.LastTelemetryRequestTag == nil || *status.LastTelemetryRequestTag != requestTag || status.LastTelemetryResponseTag == nil || *status.LastTelemetryResponseTag != responseTag {
+		t.Fatalf("tagged diagnostics = %#v", status)
+	}
+	controller.recordFailure(trackingKey, 1, result, ErrTelemetryTimeout)
+	status = controller.Status()
+	if status.LastTelemetryExpiredTag == nil || *status.LastTelemetryExpiredTag != requestTag || status.RecentPolls[len(status.RecentPolls)-1].RequestTag == nil || *status.RecentPolls[len(status.RecentPolls)-1].RequestTag != requestTag {
+		t.Fatalf("timeout diagnostics = %#v", status)
+	}
+
+	controller.recordSuccess(trackingKey, 1, TelemetryResult{ReceivedAt: time.Now().UTC(), Transport: "legacy", Capability: "legacy_fallback", FallbackReason: "unsupported_command"})
+	status = controller.Status()
+	if status.TelemetryTransport != "legacy" || status.TelemetryCapability != "legacy_fallback" || status.LastTelemetryFallbackReason != "unsupported_command" {
+		t.Fatalf("fallback diagnostics = %#v", status)
 	}
 }
 
@@ -218,7 +270,7 @@ func TestTrackingIgnoresMissingInvalidAndAbsurdGPS(t *testing.T) {
 func TestManualTrackingFailureBackoffCapsAndSuccessfulResponseResets(t *testing.T) {
 	controller := activeTrackingController()
 	controller.recordFailure(trackingKey, 1, TelemetryResult{}, ErrTelemetryTimeout)
-	if status := controller.Status(); status.ConsecutiveFailures != 1 || status.CurrentIntervalSeconds != 30 {
+	if status := controller.Status(); status.ControlSource != "" || status.ConsecutiveFailures != 1 || status.CurrentIntervalSeconds != 30 || status.LastFailureScheduleSource != "manual_backoff" {
 		t.Fatalf("first failure=%#v", status)
 	}
 	for i := 0; i < 8; i++ {
@@ -250,13 +302,62 @@ func TestSessionTrackingRemoteFailuresKeepMotionDiscoveryCadence(t *testing.T) {
 			for attempt := 1; attempt <= 8; attempt++ {
 				controller.recordFailure(trackingKey, 1, TelemetryResult{}, ErrTelemetryTimeout)
 				status := controller.Status()
-				if status.ConsecutiveFailures != attempt || status.CurrentIntervalSeconds != test.interval || status.MotionState != test.motion {
+				if status.ControlSource != "session" || status.ConsecutiveFailures != attempt || status.CurrentIntervalSeconds != test.interval || status.MotionState != test.motion || status.LastFailureScheduleSource != "motion" {
 					t.Fatalf("attempt %d status=%#v", attempt, status)
 				}
 				last := status.RecentPolls[len(status.RecentPolls)-1]
-				if last.IntervalSeconds != test.interval || last.MotionState != test.motion || last.ConsecutiveFailures != attempt {
+				if last.IntervalSeconds != test.interval || last.MotionState != test.motion || last.ConsecutiveFailures != attempt || last.ScheduleSource != "motion" {
 					t.Fatalf("attempt %d poll=%#v", attempt, last)
 				}
+			}
+		})
+	}
+}
+
+func TestSessionTaggedTimeoutsKeepRequestStartCadence(t *testing.T) {
+	policy := DefaultTrackingPolicy()
+	for _, test := range []struct {
+		name     string
+		motion   MotionState
+		interval time.Duration
+	}{
+		{name: "stationary", motion: MotionStationary, interval: policy.StationaryInterval},
+		{name: "slow", motion: MotionSlow, interval: policy.SlowInterval},
+		{name: "fast", motion: MotionFast, interval: policy.FastInterval},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			controller := sessionTrackingController(test.motion)
+			started := time.Date(2026, 9, 16, 11, 43, 57, 0, time.UTC)
+			for attempt := 1; attempt <= 4; attempt++ {
+				tag := uint32(attempt)
+				// Model the physical tagged expiry occurring seven seconds after
+				// start. The planner must retain the prior start as its anchor.
+				controller.recordFailure(trackingKey, 1, TelemetryResult{Tagged: true, RequestTag: &tag, RequestedAt: started}, ErrTelemetryTimeout, started)
+				status := controller.Status()
+				if status.LastFailureScheduleSource != "motion" || status.CurrentIntervalSeconds != int64(test.interval/time.Second) || status.LastTelemetryExpiredTag == nil || *status.LastTelemetryExpiredTag != tag {
+					t.Fatalf("attempt %d failure scheduling=%#v", attempt, status)
+				}
+				timedOutAt := started.Add(7 * time.Second)
+				next := nextTrackingRequestAt(timedOutAt, started, test.interval, status.ControlSource == "session", true)
+				if got := next.Sub(started); got != test.interval {
+					t.Fatalf("attempt %d next start spacing=%s, want %s", attempt, got, test.interval)
+				}
+				started = next
+			}
+			responseTag := uint32(99)
+			latitude, longitude := 52.0, 13.0
+			controller.recordSuccess(trackingKey, 1, TelemetryResult{
+				Tagged:      true,
+				Transport:   "tagged_binary",
+				Capability:  "tagged_binary_supported",
+				RequestTag:  &responseTag,
+				ResponseTag: &responseTag,
+				ReceivedAt:  started,
+				Telemetry:   Telemetry{Latitude: &latitude, Longitude: &longitude},
+			})
+			status := controller.Status()
+			if status.ConsecutiveFailures != 0 || status.LastError != nil || status.LastTelemetryResponseTag == nil || *status.LastTelemetryResponseTag != responseTag {
+				t.Fatalf("tagged recovery did not clear failure state: %#v", status)
 			}
 		})
 	}
@@ -306,7 +407,7 @@ func TestSessionTrackingAdapterDisconnectRetainsBoundedBackoff(t *testing.T) {
 	controller := sessionTrackingController(MotionFast)
 	for attempt, wantInterval := range []int64{30, 60, 120} {
 		controller.recordFailure(trackingKey, 1, TelemetryResult{}, ErrTelemetryAdapterDisconnected)
-		if status := controller.Status(); status.CurrentIntervalSeconds != wantInterval || status.ConsecutiveFailures != attempt+1 {
+		if status := controller.Status(); status.CurrentIntervalSeconds != wantInterval || status.ConsecutiveFailures != attempt+1 || status.LastFailureScheduleSource != "adapter_recovery" {
 			t.Fatalf("adapter failure %d status=%#v", attempt+1, status)
 		}
 	}

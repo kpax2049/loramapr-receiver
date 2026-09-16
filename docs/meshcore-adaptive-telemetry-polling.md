@@ -245,9 +245,53 @@ is the existing correlated telemetry request plus its existing pre-poll contact
 snapshot; M7A.4 adds no new radio frame type or retry burst. At bicycle speeds
 of roughly 20–25 km/h, 15 seconds corresponds to about 83–104 metres travelled,
 which is the chosen coverage-discovery tradeoff for an explicitly started
-Session. The cadence begins after the single in-flight request completes. The
-Companion can supply a shorter estimated response timeout, but the unchanged
-fallback watchdog is 45 seconds; a completely silent link can therefore make
-wall-clock request starts longer than the recorded cadence. M7A.4 removes the
-additional 30/60/120/240/300-second scheduler backoff; it does not alter that
+Session. M7A.5 refines the tagged-binary Session path so its cadence is
+anchored to the prior request start, not timeout completion. If an attempt
+consumes more than the target cadence, the next request starts as soon as the
+single-flight arbiter permits it; requests never overlap. Legacy telemetry
+retains its conservative completion-based scheduling. M7A.4 removes the
+additional 30/60/120/240/300-second scheduler backoff; it does not alter the
 single-flight telemetry timeout in this slice.
+
+### Tagged binary transport and field diagnostics (M7A.5)
+
+The receiver first uses stock Companion tagged binary telemetry:
+
+```text
+request:  [CMD_SEND_BINARY_REQUEST=0x32][full public key x32][app data 0x03]
+response: [PUSH_BINARY_RESPONSE=0x8c][reserved][tag little-endian u32][LPP]
+```
+
+The receiver generates the request tag and accepts a tagged response only for
+the matching in-flight request. On timeout it records a short-lived expired
+tag tombstone; a late response bearing that tag is rejected and cannot satisfy
+a newer request. A Companion `unsupported command` response falls back to the
+existing legacy telemetry request. The fallback is capability-scoped, so a
+supported tagged path is not silently changed by an unrelated timeout.
+
+`GET /api/meshcore/tracking/status` is the operator surface. It exposes the
+authoritative `controlSource` used by the scheduler, the transport and
+capability, last request/response/expired tags, fallback reason, and
+`lastFailureScheduleSource`. The last bounded history entry also reports its
+request/response tags and schedule source. It does not require exposing a
+full target key or raw telemetry payload.
+
+For a Session RF-loss check, inspect only these fields:
+
+```bash
+curl -fsS http://127.0.0.1:8080/api/meshcore/tracking/status |
+  jq '{controlSource,motionState,currentIntervalSeconds,lastRequestAt,nextRequestAt,
+       consecutiveFailures,lastFailureScheduleSource,telemetryTransport,
+       telemetryCapability,lastTelemetryRequestTag,lastTelemetryResponseTag,
+       lastTelemetryExpiredTag,lastTelemetryFallbackReason,
+       lastPoll:(.recentPolls[-1] | {requestAt,responseAt,outcome,intervalSeconds,
+       scheduleSource,requestTag,responseTag,telemetryTransport})}'
+```
+
+For `controlSource=session`, remote RF failures must report
+`scheduleSource=motion` and keep approximately 45/30/15-second request-start
+spacing for stationary/slow/fast motion respectively. `manual_backoff` is
+valid only for manual/diagnostic tracking. Adapter-disconnected failures remain
+bounded local recovery. Structured receiver logs record capability detection,
+tag acceptance/correlation/expiry, legacy fallback, late-expired rejection,
+and both `schedule_source` and `control_source` on a tracking failure.

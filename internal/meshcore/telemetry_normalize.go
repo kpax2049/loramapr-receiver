@@ -27,8 +27,12 @@ func NormalizeTelemetryResult(result TelemetryResult, binding ReceiverBinding) (
 		return nil, err
 	}
 
+	opcode := result.ResponseOpcode
+	if opcode == 0 {
+		opcode = PushTelemetryResponse
+	}
 	base := normalizedBase(protocoladapter.Event{ObservedAt: result.ReceivedAt.UTC()}, binding, PushFrame{
-		Opcode: PushTelemetryResponse, Payload: append([]byte(nil), result.RawFrame...),
+		Opcode: opcode, Payload: append([]byte(nil), result.RawFrame...),
 	})
 	base["eventType"] = "meshcore_solicited_telemetry"
 	base["contentKey"] = "meshcore:solicited-telemetry:v1:" + fmt.Sprintf("%x", target[:]) + ":" + sha256Hex(result.RawFrame)
@@ -53,6 +57,9 @@ func NormalizeTelemetryResult(result TelemetryResult, binding ReceiverBinding) (
 		"correlation":  "request_correlated",
 		"authenticity": "not_independently_signed",
 		"sourcePrefix": result.SourcePrefix,
+	}
+	if result.RequestTag != nil {
+		telemetry["requestTag"] = *result.RequestTag
 	}
 	if result.Telemetry.Voltage != nil {
 		telemetry["voltage"] = *result.Telemetry.Voltage
@@ -95,11 +102,18 @@ func NormalizeTelemetryResult(result TelemetryResult, binding ReceiverBinding) (
 	source["raw"] = base64.StdEncoding.EncodeToString(result.RawFrame)
 	source["rawSha256"] = sha256Hex(result.RawFrame)
 	source["evidence"] = map[string]any{
-		"kind":                   "meshcore_solicited_telemetry_response_v1",
+		"kind":                   telemetryEvidenceKind(result),
 		"sourcePrefix":           result.SourcePrefix,
 		"requestTargetCanonical": result.TargetPublicKey,
 	}
 	return base, nil
+}
+
+func telemetryEvidenceKind(result TelemetryResult) string {
+	if result.Tagged && result.ResponseOpcode == PushBinaryResponse {
+		return "meshcore_solicited_telemetry_binary_response_v1"
+	}
+	return "meshcore_solicited_telemetry_response_v1"
 }
 
 func validateNormalizedTelemetry(telemetry Telemetry) error {

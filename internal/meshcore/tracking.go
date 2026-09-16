@@ -100,23 +100,30 @@ func (p TrackingPolicy) normalized() TrackingPolicy {
 // TrackingStatus is ephemeral operational state. The future Session lifecycle
 // owner can bind directly to Start and Stop; it must not be persisted.
 type TrackingStatus struct {
-	Active                 bool        `json:"active"`
-	TargetPublicKey        string      `json:"targetPublicKey,omitempty"`
-	MotionState            MotionState `json:"motionState"`
-	EstimatedSpeedKmh      *float64    `json:"estimatedSpeedKmh"`
-	CurrentIntervalSeconds int64       `json:"currentIntervalSeconds"`
-	LastRequestAt          *time.Time  `json:"lastRequestAt"`
-	LastResponseAt         *time.Time  `json:"lastResponseAt"`
-	NextRequestAt          *time.Time  `json:"nextRequestAt"`
-	ConsecutiveFailures    int         `json:"consecutiveFailures"`
-	LastError              *string     `json:"lastError"`
-	RouteRecoveryState     string      `json:"routeRecoveryState"`
-	LastRouteRecoveryEvent string      `json:"lastRouteRecoveryEvent"`
-	RecoveryEpisodeActive  bool        `json:"recoveryEpisodeActive"`
-	RouteGeneration        uint64      `json:"routeGeneration"`
-	RouteFingerprint       string      `json:"routeFingerprint"`
-	LastPathUpdateAt       *time.Time  `json:"lastPathUpdateAt"`
-	PathUpdatePending      bool        `json:"pathUpdatePending"`
+	Active                      bool        `json:"active"`
+	TargetPublicKey             string      `json:"targetPublicKey,omitempty"`
+	MotionState                 MotionState `json:"motionState"`
+	EstimatedSpeedKmh           *float64    `json:"estimatedSpeedKmh"`
+	CurrentIntervalSeconds      int64       `json:"currentIntervalSeconds"`
+	LastRequestAt               *time.Time  `json:"lastRequestAt"`
+	LastResponseAt              *time.Time  `json:"lastResponseAt"`
+	TelemetryTransport          string      `json:"telemetryTransport,omitempty"`
+	TelemetryCapability         string      `json:"telemetryCapability,omitempty"`
+	LastTelemetryRequestTag     *uint32     `json:"lastTelemetryRequestTag,omitempty"`
+	LastTelemetryResponseTag    *uint32     `json:"lastTelemetryResponseTag,omitempty"`
+	LastTelemetryExpiredTag     *uint32     `json:"lastTelemetryExpiredTag,omitempty"`
+	LastTelemetryFallbackReason string      `json:"lastTelemetryFallbackReason,omitempty"`
+	LastFailureScheduleSource   string      `json:"lastFailureScheduleSource,omitempty"`
+	NextRequestAt               *time.Time  `json:"nextRequestAt"`
+	ConsecutiveFailures         int         `json:"consecutiveFailures"`
+	LastError                   *string     `json:"lastError"`
+	RouteRecoveryState          string      `json:"routeRecoveryState"`
+	LastRouteRecoveryEvent      string      `json:"lastRouteRecoveryEvent"`
+	RecoveryEpisodeActive       bool        `json:"recoveryEpisodeActive"`
+	RouteGeneration             uint64      `json:"routeGeneration"`
+	RouteFingerprint            string      `json:"routeFingerprint"`
+	LastPathUpdateAt            *time.Time  `json:"lastPathUpdateAt"`
+	PathUpdatePending           bool        `json:"pathUpdatePending"`
 	// LatestTelemetry is the latest prefix-correlated observation obtained by
 	// this temporary receiver-local tracking harness. It is intentionally not
 	// a signed current-position assertion.
@@ -150,6 +157,11 @@ type TrackingPoll struct {
 	RouteRecovery        string         `json:"routeRecovery,omitempty"`
 	PathUpdateObserved   bool           `json:"pathUpdateObserved"`
 	ConsecutiveFailures  int            `json:"consecutiveFailures"`
+	TelemetryTransport   string         `json:"telemetryTransport,omitempty"`
+	RequestTag           *uint32        `json:"requestTag,omitempty"`
+	ResponseTag          *uint32        `json:"responseTag,omitempty"`
+	FallbackReason       string         `json:"fallbackReason,omitempty"`
+	ScheduleSource       string         `json:"scheduleSource,omitempty"`
 }
 
 type telemetryRequester func(context.Context, string) (TelemetryResult, error)
@@ -178,10 +190,10 @@ type TrackingController struct {
 	pendingCount int
 	cancel       context.CancelFunc
 	generation   uint64
-	// sessionManaged selects the explicit active-Session recovery policy. It
-	// belongs here, rather than in runtime status decoration, because the poll
-	// scheduler must choose its next delay before runtime exposes status.
-	sessionManaged        bool
+	// controlSource is the authoritative owner used by both scheduling and the
+	// exported status. Runtime must set it before starting/reusing a controller;
+	// no separately decorated status source is permitted.
+	controlSource         string
 	scheduleChanged       chan struct{}
 	routeFingerprint      string
 	routeGeneration       uint64
@@ -217,26 +229,47 @@ func NewTrackingControllerWithRouteRecovery(request func(context.Context, string
 	return &TrackingController{request: request, reset: reset, policy: p, logger: logger.With("component", "meshcore_tracking"), now: func() time.Time { return time.Now().UTC() }, scheduleChanged: make(chan struct{}, 1), status: TrackingStatus{MotionState: MotionUnknown, CurrentIntervalSeconds: int64(p.UnknownInterval / time.Second), RecentPolls: []TrackingPoll{}}}
 }
 
-// SetSessionManaged selects the recovery cadence for an explicitly active
-// LoRaMapr Session. It is deliberately separate from status.ControlSource,
-// which runtime adds only after the controller has scheduled its next poll.
-// A Session takeover also wakes an already-running manual controller so a
-// stale manual backoff cannot postpone coverage discovery.
-func (c *TrackingController) SetSessionManaged(managed bool) {
+// SetControlSource sets the single authoritative owner for polling policy and
+// status. A Session takeover wakes a pending manual delay so remote RF loss
+// resumes motion-based discovery immediately.
+func (c *TrackingController) SetControlSource(source string) {
 	if c == nil {
 		return
 	}
+	source = strings.ToLower(strings.TrimSpace(source))
+	if source != "session" && source != "manual" {
+		source = ""
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.sessionManaged == managed {
+	if c.controlSource == source {
 		return
 	}
-	c.sessionManaged = managed
-	if !managed || !c.status.Active || (c.status.LastError != nil && *c.status.LastError == ErrTelemetryAdapterDisconnected.Error()) {
+	c.controlSource, c.status.ControlSource = source, source
+	if source != "session" || !c.status.Active || (c.status.LastError != nil && *c.status.LastError == ErrTelemetryAdapterDisconnected.Error()) {
 		return
 	}
 	c.status.CurrentIntervalSeconds = int64(c.intervalForLocked() / time.Second)
 	c.signalScheduleChangedLocked()
+}
+
+// SetSessionManaged remains for callers outside this package; new runtime
+// reconciliation uses SetControlSource so status and policy cannot diverge.
+func (c *TrackingController) SetSessionManaged(managed bool) {
+	if managed {
+		c.SetControlSource("session")
+		return
+	}
+	c.SetControlSource("")
+}
+
+func (c *TrackingController) ControlSource() string {
+	if c == nil {
+		return ""
+	}
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.controlSource
 }
 
 func (c *TrackingController) signalScheduleChangedLocked() {
@@ -278,7 +311,7 @@ func (c *TrackingController) Start(publicKey string) (TrackingStatus, error) {
 	c.fix, c.pending, c.pendingCount = nil, MotionUnknown, 0
 	c.routeFingerprint, c.routeGeneration, c.recoveryEpisodeActive, c.pendingRecoveryEvent = "", 0, false, ""
 	c.clearScheduleChangedLocked()
-	c.status = TrackingStatus{Active: true, TargetPublicKey: publicKey, MotionState: MotionUnknown, CurrentIntervalSeconds: int64(c.policy.UnknownInterval / time.Second), RouteRecoveryState: "idle", RecentPolls: []TrackingPoll{}}
+	c.status = TrackingStatus{Active: true, TargetPublicKey: publicKey, MotionState: MotionUnknown, CurrentIntervalSeconds: int64(c.policy.UnknownInterval / time.Second), ControlSource: c.controlSource, RouteRecoveryState: "idle", RecentPolls: []TrackingPoll{}}
 	now := c.now().UTC()
 	c.status.NextRequestAt = timePtr(now)
 	c.logger.Info("MeshCore tracking started", "target_public_key", publicKey)
@@ -335,6 +368,9 @@ func (c *TrackingController) statusCopyLocked() TrackingStatus {
 	result := c.status
 	result.LastRequestAt, result.LastResponseAt, result.NextRequestAt = copyTime(c.status.LastRequestAt), copyTime(c.status.LastResponseAt), copyTime(c.status.NextRequestAt)
 	result.LastPathUpdateAt = copyTime(c.status.LastPathUpdateAt)
+	result.LastTelemetryRequestTag = copyUint32(c.status.LastTelemetryRequestTag)
+	result.LastTelemetryResponseTag = copyUint32(c.status.LastTelemetryResponseTag)
+	result.LastTelemetryExpiredTag = copyUint32(c.status.LastTelemetryExpiredTag)
 	if c.status.EstimatedSpeedKmh != nil {
 		value := *c.status.EstimatedSpeedKmh
 		result.EstimatedSpeedKmh = &value
@@ -385,26 +421,37 @@ func copyTrackingPoll(poll TrackingPoll) TrackingPoll {
 		value := *poll.Error
 		poll.Error = &value
 	}
+	poll.RequestTag = copyUint32(poll.RequestTag)
+	poll.ResponseTag = copyUint32(poll.ResponseTag)
 	return poll
 }
 
 func (c *TrackingController) run(ctx context.Context, target string, generation uint64) {
 	for {
-		c.poll(ctx, target, generation)
+		requestAt, tagged := c.poll(ctx, target, generation)
 		c.mu.RLock()
 		if !c.currentLocked(target, generation) {
 			c.mu.RUnlock()
 			return
 		}
 		delay := time.Duration(c.status.CurrentIntervalSeconds) * time.Second
-		next := c.now().UTC().Add(delay)
+		// A tagged binary request can be safely expired without a later 0x8C
+		// satisfying its replacement. For Session-owned discovery, schedule from
+		// the actual request start rather than response/timeout completion.
+		// Legacy prefix-only telemetry intentionally retains its conservative
+		// completion-based behavior.
+		next := nextTrackingRequestAt(c.now().UTC(), requestAt, delay, c.controlSource == "session", tagged)
 		c.mu.RUnlock()
 		c.mu.Lock()
 		if c.currentLocked(target, generation) {
 			c.status.NextRequestAt = timePtr(next)
 		}
 		c.mu.Unlock()
-		timer := time.NewTimer(delay)
+		waitFor := next.Sub(c.now().UTC())
+		if waitFor < 0 {
+			waitFor = 0
+		}
+		timer := time.NewTimer(waitFor)
 		select {
 		case <-ctx.Done():
 			timer.Stop()
@@ -422,12 +469,24 @@ func (c *TrackingController) run(ctx context.Context, target string, generation 
 	}
 }
 
-func (c *TrackingController) poll(ctx context.Context, target string, generation uint64) {
+func nextTrackingRequestAt(now, requestAt time.Time, interval time.Duration, sessionManaged, tagged bool) time.Time {
+	now = now.UTC()
+	if !sessionManaged || !tagged || requestAt.IsZero() {
+		return now.Add(interval)
+	}
+	next := requestAt.UTC().Add(interval)
+	if next.Before(now) {
+		return now
+	}
+	return next
+}
+
+func (c *TrackingController) poll(ctx context.Context, target string, generation uint64) (time.Time, bool) {
 	now := c.now().UTC()
 	c.mu.Lock()
 	if !c.currentLocked(target, generation) {
 		c.mu.Unlock()
-		return
+		return time.Time{}, false
 	}
 	c.status.LastRequestAt, c.status.NextRequestAt = timePtr(now), nil
 	c.mu.Unlock()
@@ -440,7 +499,7 @@ func (c *TrackingController) poll(ctx context.Context, target string, generation
 	if err != nil {
 		c.recoverStaleRouteTimeout(ctx, target, generation, result, err)
 		c.recordFailure(target, generation, result, err, requestAt)
-		return
+		return requestAt, result.Tagged
 	}
 	result = c.withSuccessfulRouteEvidence(target, generation, result)
 	c.mu.RLock()
@@ -449,10 +508,11 @@ func (c *TrackingController) poll(ctx context.Context, target string, generation
 	if stage != nil {
 		if err := stage(result); err != nil {
 			c.recordFailure(target, generation, result, err, requestAt)
-			return
+			return requestAt, result.Tagged
 		}
 	}
 	c.recordSuccess(target, generation, result, requestAt)
+	return requestAt, result.Tagged
 }
 
 // withSuccessfulRouteEvidence snapshots only the request-side tracking facts
@@ -533,6 +593,7 @@ func (c *TrackingController) recordSuccess(target string, generation uint64, res
 	latest := copyTelemetryResult(result)
 	c.status.LatestTelemetry = &latest
 	c.status.ConsecutiveFailures, c.status.LastError = 0, nil
+	c.recordTelemetryDiagnosticsLocked(result, nil)
 	c.applyFixLocked(result)
 	c.status.CurrentIntervalSeconds = int64(c.intervalForLocked() / time.Second)
 	recovery := c.routeRecoveryForPollLocked(result.RouteAttempt)
@@ -544,6 +605,7 @@ func (c *TrackingController) recordSuccess(target string, generation uint64, res
 		EstimatedSpeedKmh: copyFloat64(c.status.EstimatedSpeedKmh), MotionState: c.status.MotionState,
 		IntervalSeconds: c.status.CurrentIntervalSeconds, RouteAttempt: routeEvidenceOrUnknown(result.RouteAttempt),
 		ResponseRouteUnknown: true, RouteRecovery: recovery, PathUpdateObserved: pathUpdateObserved, ConsecutiveFailures: c.status.ConsecutiveFailures,
+		TelemetryTransport: result.Transport, RequestTag: copyUint32(result.RequestTag), ResponseTag: copyUint32(result.ResponseTag), FallbackReason: result.FallbackReason,
 	})
 	c.logger.Info("MeshCore tracking poll succeeded", "target_public_key", target,
 		"elapsed", result.ReceivedAt.Sub(requestAt).String(), "motion_state", c.status.MotionState,
@@ -572,8 +634,10 @@ func (c *TrackingController) recordFailure(target string, generation uint64, res
 	c.status.ConsecutiveFailures++
 	message := err.Error()
 	c.status.LastError = &message
+	c.recordTelemetryDiagnosticsLocked(result, err)
 	next, scheduleSource := c.failureIntervalLocked(err)
 	c.status.CurrentIntervalSeconds = int64(next / time.Second)
+	c.status.LastFailureScheduleSource = scheduleSource
 	recovery := c.routeRecoveryForPollLocked(result.RouteAttempt)
 	pathUpdateObserved := c.status.PathUpdatePending
 	c.status.PathUpdatePending = false
@@ -582,14 +646,36 @@ func (c *TrackingController) recordFailure(target string, generation uint64, res
 		EstimatedSpeedKmh: copyFloat64(c.status.EstimatedSpeedKmh), MotionState: c.status.MotionState,
 		IntervalSeconds: c.status.CurrentIntervalSeconds, RouteAttempt: routeEvidenceOrUnknown(result.RouteAttempt),
 		ResponseRouteUnknown: true, RouteRecovery: recovery, PathUpdateObserved: pathUpdateObserved, ConsecutiveFailures: c.status.ConsecutiveFailures,
+		TelemetryTransport: result.Transport, RequestTag: copyUint32(result.RequestTag), ResponseTag: copyUint32(result.ResponseTag), FallbackReason: result.FallbackReason, ScheduleSource: scheduleSource,
 	})
 	c.logger.Warn("MeshCore tracking poll timed out", "target_public_key", target, "err", err,
 		"route_mode", routeEvidenceOrUnknown(result.RouteAttempt).Mode, "path_length", routeEvidenceOrUnknown(result.RouteAttempt).PathLength,
 		"route_source", routeEvidenceOrUnknown(result.RouteAttempt).Source, "consecutive_failures", c.status.ConsecutiveFailures,
-		"next_interval", next.String(), "schedule_source", scheduleSource)
-	c.logger.Info("MeshCore tracking failure schedule changed", "target_public_key", target, "interval", next.String(), "schedule_source", scheduleSource)
+		"next_interval", next.String(), "schedule_source", scheduleSource, "control_source", c.controlSource)
+	c.logger.Info("MeshCore tracking failure schedule changed", "target_public_key", target, "interval", next.String(), "schedule_source", scheduleSource, "control_source", c.controlSource)
 	if errors.Is(err, ErrTelemetryAdapterDisconnected) && !wasUnavailable {
 		c.logger.Warn("MeshCore tracking adapter unavailable", "target_public_key", target)
+	}
+}
+
+func (c *TrackingController) recordTelemetryDiagnosticsLocked(result TelemetryResult, err error) {
+	if result.Transport != "" {
+		c.status.TelemetryTransport = result.Transport
+	}
+	if result.Capability != "" {
+		c.status.TelemetryCapability = result.Capability
+	}
+	if result.FallbackReason != "" {
+		c.status.LastTelemetryFallbackReason = result.FallbackReason
+	}
+	if result.RequestTag != nil {
+		c.status.LastTelemetryRequestTag = copyUint32(result.RequestTag)
+	}
+	if result.ResponseTag != nil {
+		c.status.LastTelemetryResponseTag = copyUint32(result.ResponseTag)
+	}
+	if errors.Is(err, ErrTelemetryTimeout) && result.RequestTag != nil {
+		c.status.LastTelemetryExpiredTag = copyUint32(result.RequestTag)
 	}
 }
 
@@ -598,7 +684,7 @@ func (c *TrackingController) recordFailure(target string, generation uint64, res
 // coverage at its last valid motion cadence; the BLE adapter's own bounded
 // reconnect behavior is protected by the existing exponential backoff.
 func (c *TrackingController) failureIntervalLocked(err error) (time.Duration, string) {
-	if c.sessionManaged && !errors.Is(err, ErrTelemetryAdapterDisconnected) {
+	if c.controlSource == "session" && !errors.Is(err, ErrTelemetryAdapterDisconnected) {
 		return c.intervalForLocked(), "motion"
 	}
 	next := time.Duration(c.status.CurrentIntervalSeconds) * time.Second
@@ -707,6 +793,14 @@ func trackingOutcome(err error) string {
 }
 
 func copyFloat64(value *float64) *float64 {
+	if value == nil {
+		return nil
+	}
+	copy := *value
+	return &copy
+}
+
+func copyUint32(value *uint32) *uint32 {
 	if value == nil {
 		return nil
 	}

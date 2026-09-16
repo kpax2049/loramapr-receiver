@@ -16,8 +16,28 @@ const (
 	telemetryPrefixLength    = 6
 	defaultTelemetryTimeout  = 45 * time.Second
 	minimumTelemetryTimeout  = time.Second
+	binaryTelemetryGuard     = 2 * time.Second
+	expiredTagRetention      = defaultTelemetryTimeout
 	routeSnapshotTimeout     = 2 * time.Second
 	pathResetTimeout         = 5 * time.Second
+)
+
+// telemetryBinaryCapability is deliberately runtime-probed rather than
+// inferred solely from a firmware label. Protocol-compatible older Companion
+// builds can reject command 50; they retain the legacy command 39 behavior.
+type telemetryBinaryCapability uint8
+
+const (
+	telemetryBinaryUnknown telemetryBinaryCapability = iota
+	telemetryBinarySupported
+	telemetryBinaryUnsupported
+)
+
+type telemetryRequestMode uint8
+
+const (
+	telemetryRequestLegacy telemetryRequestMode = iota
+	telemetryRequestBinary
 )
 
 var (
@@ -51,6 +71,13 @@ type TelemetryResult struct {
 	TargetPublicKey      string        `json:"targetPublicKey"`
 	RequestedAt          time.Time     `json:"requestedAt"`
 	SourcePrefix         string        `json:"sourcePrefix"`
+	RequestTag           *uint32       `json:"requestTag,omitempty"`
+	ResponseTag          *uint32       `json:"responseTag,omitempty"`
+	Tagged               bool          `json:"tagged"`
+	Transport            string        `json:"transport,omitempty"`
+	Capability           string        `json:"capability,omitempty"`
+	FallbackReason       string        `json:"fallbackReason,omitempty"`
+	ResponseOpcode       byte          `json:"-"`
 	ReceivedAt           time.Time     `json:"receivedAt"`
 	Telemetry            Telemetry     `json:"telemetry"`
 	RouteAttempt         RouteEvidence `json:"routeAttempt"`
@@ -79,6 +106,10 @@ type telemetryRequest struct {
 	routeDone       chan RouteEvidence
 	awaitingContact bool
 	requestedAt     time.Time
+	mode            telemetryRequestMode
+	tag             uint32
+	tagKnown        bool
+	fallbackReason  string
 }
 
 type pathResetRequest struct {
@@ -106,6 +137,17 @@ func BuildTelemetryRequest(target [telemetryPublicKeyLength]byte) []byte {
 	frame := make([]byte, 4+len(target))
 	frame[0] = CommandSendTelemetryRequest
 	copy(frame[4:], target[:])
+	return frame
+}
+
+// BuildBinaryTelemetryRequest creates the stock tagged request:
+// [0x32][destination public key x32][0x03 telemetry request type].
+// The Companion, not the client, assigns the uint32 tag in RESP_CODE_SENT.
+func BuildBinaryTelemetryRequest(target [telemetryPublicKeyLength]byte) []byte {
+	frame := make([]byte, 1+len(target)+1)
+	frame[0] = CommandSendBinaryRequest
+	copy(frame[1:], target[:])
+	frame[len(frame)-1] = 0x03 // stock binary telemetry request type
 	return frame
 }
 
@@ -201,6 +243,7 @@ func (a *Adapter) RequestTelemetry(ctx context.Context, publicKey string) (Telem
 		target:       target,
 		done:         make(chan telemetryCompletion, 1),
 		routeAttempt: unknownRouteEvidence("contact_out_path_unavailable"),
+		mode:         a.telemetryRequestModeLocked(),
 	}
 	request.timer = time.AfterFunc(defaultTelemetryTimeout, func() {
 		a.finishTelemetry(request, TelemetryResult{}, ErrTelemetryTimeout)
@@ -219,7 +262,11 @@ func (a *Adapter) RequestTelemetry(ctx context.Context, publicKey string) (Telem
 	}
 
 	a.setTelemetryRequestedAt(request, time.Now().UTC())
-	if err := link.WriteFrame(ctx, BuildTelemetryRequest(target)); err != nil {
+	frame := BuildTelemetryRequest(target)
+	if request.mode == telemetryRequestBinary {
+		frame = BuildBinaryTelemetryRequest(target)
+	}
+	if err := link.WriteFrame(ctx, frame); err != nil {
 		wrapped := fmt.Errorf("%w: %v", ErrTelemetryAdapterDisconnected, err)
 		a.finishTelemetry(request, TelemetryResult{}, wrapped)
 		return TelemetryResult{}, wrapped
@@ -232,6 +279,13 @@ func (a *Adapter) RequestTelemetry(ctx context.Context, publicKey string) (Telem
 		a.finishTelemetry(request, TelemetryResult{}, ctx.Err())
 		return TelemetryResult{}, ctx.Err()
 	}
+}
+
+func (a *Adapter) telemetryRequestModeLocked() telemetryRequestMode {
+	if a.binaryTelemetryCapability == telemetryBinaryUnsupported {
+		return telemetryRequestLegacy
+	}
+	return telemetryRequestBinary
 }
 
 func (a *Adapter) setTelemetryRequestedAt(request *telemetryRequest, at time.Time) {
@@ -313,6 +367,10 @@ func (a *Adapter) handleTelemetryResponse(frame []byte, receivedAt time.Time) {
 		a.telemetryMu.Unlock()
 		return // unsolicited or late: a prefix is not a canonical identity
 	}
+	if request.mode != telemetryRequestLegacy {
+		a.telemetryMu.Unlock()
+		return // legacy response cannot complete a tagged request
+	}
 	if !bytes.Equal(prefix[:], request.target[:telemetryPrefixLength]) {
 		a.telemetryMu.Unlock()
 		a.finishTelemetry(request, TelemetryResult{}, ErrTelemetryMismatchedResponse)
@@ -321,6 +379,56 @@ func (a *Adapter) handleTelemetryResponse(frame []byte, receivedAt time.Time) {
 	result.TargetPublicKey = hex.EncodeToString(request.target[:])
 	result.RequestedAt = request.requestedAt
 	a.telemetryMu.Unlock()
+	a.finishTelemetry(request, result, nil)
+}
+
+func (a *Adapter) handleBinaryTelemetryResponse(frame []byte, receivedAt time.Time) {
+	if len(frame) < 6 || frame[0] != PushBinaryResponse {
+		return // malformed unsolicited input must not fail an unrelated request
+	}
+	tag := binary.LittleEndian.Uint32(frame[2:6])
+	telemetry, err := ParseTelemetryLPP(frame[6:])
+	if err != nil {
+		// A matching request receives its payload error; a stale/unknown tag is
+		// ignored so it cannot interrupt a newer request.
+		a.telemetryMu.Lock()
+		request := a.telemetry
+		matches := request != nil && request.mode == telemetryRequestBinary && request.tagKnown && request.tag == tag
+		a.telemetryMu.Unlock()
+		if matches {
+			a.finishTelemetry(request, TelemetryResult{}, err)
+		}
+		return
+	}
+
+	a.telemetryMu.Lock()
+	a.pruneExpiredTelemetryTagsLocked(receivedAt)
+	request := a.telemetry
+	if request == nil || request.mode != telemetryRequestBinary || !request.tagKnown || request.tag != tag {
+		if _, expired := a.expiredTelemetryTags[tag]; expired {
+			a.logger.Warn("MeshCore late tagged telemetry response rejected", "response_tag", tag, "reason", "expired_request")
+		}
+		a.telemetryMu.Unlock()
+		return // stale, expired, or unrelated binary response
+	}
+	if _, expired := a.expiredTelemetryTags[tag]; expired {
+		a.logger.Warn("MeshCore late tagged telemetry response rejected", "response_tag", tag, "reason", "expired_request")
+		a.telemetryMu.Unlock()
+		return // never accept a tag that could identify a prior request
+	}
+	requestTag := tag
+	result := TelemetryResult{
+		TargetPublicKey: hex.EncodeToString(request.target[:]),
+		// 0x8C has no sender prefix. The exact tag-to-request mapping is the
+		// equivalent target validation; retain the requested target prefix for
+		// the existing normalized telemetry schema.
+		SourcePrefix: hex.EncodeToString(request.target[:telemetryPrefixLength]),
+		RequestTag:   &requestTag, ResponseTag: &requestTag, Tagged: true, Transport: "tagged_binary", Capability: "tagged_binary_supported", ResponseOpcode: PushBinaryResponse,
+		RequestedAt: request.requestedAt, ReceivedAt: receivedAt.UTC(), Telemetry: telemetry,
+		RawFrame: append([]byte(nil), frame...),
+	}
+	a.telemetryMu.Unlock()
+	a.logger.Info("MeshCore tagged telemetry response correlated", "request_tag", tag, "response_tag", tag, "request_started_at", result.RequestedAt)
 	a.finishTelemetry(request, result, nil)
 }
 
@@ -354,6 +462,26 @@ func (a *Adapter) handleTelemetryCommandResponse(frame ResponseFrame) {
 	a.telemetryMu.Unlock()
 	switch frame.Code {
 	case ResponseError:
+		// Capability detection is intentionally behavioral: an older Companion
+		// that rejects CMD_SEND_BINARY_REQ gets the legacy request exactly once.
+		if request != nil && request.mode == telemetryRequestBinary && binaryRequestUnsupported(frame.Payload) {
+			a.telemetryMu.Lock()
+			if a.telemetry == request {
+				a.binaryTelemetryCapability = telemetryBinaryUnsupported
+				request.mode, request.tagKnown, request.fallbackReason = telemetryRequestLegacy, false, "unsupported_command"
+			}
+			a.telemetryMu.Unlock()
+			a.logger.Info("MeshCore telemetry transport fell back to legacy", "transport", "legacy", "reason", "unsupported_command")
+			if a.currentTelemetry(request) {
+				a.mu.RLock()
+				link := a.link
+				a.mu.RUnlock()
+				if link == nil || link.WriteFrame(context.Background(), BuildTelemetryRequest(request.target)) != nil {
+					a.finishTelemetry(request, TelemetryResult{}, ErrTelemetryAdapterDisconnected)
+				}
+			}
+			return
+		}
 		a.finishCurrentTelemetry(TelemetryResult{}, ErrTelemetryFirmware)
 	case ResponseSent:
 		// Protocol 13: [0x06][is_flood][ack_hash x4][estimated_timeout_ms x4 LE].
@@ -362,14 +490,34 @@ func (a *Adapter) handleTelemetryCommandResponse(frame ResponseFrame) {
 			return
 		}
 		requested := time.Duration(binary.LittleEndian.Uint32(frame.Payload[6:10])) * time.Millisecond
+		a.telemetryMu.Lock()
+		request := a.telemetry
+		if request != nil && request.mode == telemetryRequestBinary {
+			tag := binary.LittleEndian.Uint32(frame.Payload[2:6])
+			a.pruneExpiredTelemetryTagsLocked(time.Now().UTC())
+			if _, expired := a.expiredTelemetryTags[tag]; expired {
+				a.telemetryMu.Unlock()
+				a.finishTelemetry(request, TelemetryResult{}, ErrTelemetryFirmware)
+				return
+			}
+			wasUnknown := a.binaryTelemetryCapability == telemetryBinaryUnknown
+			request.tag, request.tagKnown = tag, true
+			a.binaryTelemetryCapability = telemetryBinarySupported
+			if wasUnknown {
+				a.logger.Info("MeshCore tagged binary telemetry capability detected", "transport", "tagged_binary", "capability", "supported")
+			}
+			a.logger.Info("MeshCore tagged telemetry request accepted", "request_tag", tag, "request_started_at", request.requestedAt, "estimated_timeout", requested)
+		}
 		if requested <= 0 || requested >= defaultTelemetryTimeout {
+			a.telemetryMu.Unlock()
 			return
 		}
 		if requested < minimumTelemetryTimeout {
 			requested = minimumTelemetryTimeout
 		}
-		a.telemetryMu.Lock()
-		request := a.telemetry
+		if request != nil && request.mode == telemetryRequestBinary {
+			requested += binaryTelemetryGuard
+		}
 		if request != nil && request.suggestedTimer == nil {
 			request.suggestedTimer = time.AfterFunc(requested, func() {
 				a.finishTelemetry(request, TelemetryResult{}, ErrTelemetryTimeout)
@@ -377,6 +525,13 @@ func (a *Adapter) handleTelemetryCommandResponse(frame ResponseFrame) {
 		}
 		a.telemetryMu.Unlock()
 	}
+}
+
+func binaryRequestUnsupported(payload []byte) bool {
+	// ERR_CODE_UNSUPPORTED_CMD is 1 in the pinned stock source. Treat any
+	// malformed error as a normal firmware error rather than silently changing
+	// the transport path.
+	return len(payload) >= 2 && payload[1] == 1
 }
 
 func (a *Adapter) handlePathResetCommandResponse(frame ResponseFrame) bool {
@@ -457,10 +612,33 @@ func (a *Adapter) finishTelemetry(request *telemetryRequest, result TelemetryRes
 		return
 	}
 	result.TargetPublicKey = hex.EncodeToString(request.target[:])
+	if result.RequestedAt.IsZero() {
+		result.RequestedAt = request.requestedAt
+	}
+	if request.mode == telemetryRequestBinary && request.tagKnown {
+		tag := request.tag
+		if result.RequestTag == nil {
+			result.RequestTag = &tag
+		}
+		result.Tagged = true
+		result.Transport = "tagged_binary"
+		result.Capability = "tagged_binary_supported"
+		a.expiredTelemetryTags[tag] = time.Now().UTC().Add(expiredTagRetention)
+		if errors.Is(err, ErrTelemetryTimeout) {
+			a.logger.Warn("MeshCore tagged telemetry request expired", "request_tag", tag, "request_started_at", result.RequestedAt)
+		}
+	} else if request.mode == telemetryRequestLegacy {
+		result.Transport = "legacy"
+		result.Capability = "legacy_fallback"
+		result.FallbackReason = request.fallbackReason
+	}
+	if result.ResponseOpcode == 0 {
+		result.ResponseOpcode = PushTelemetryResponse
+	}
 	result.RouteAttempt = request.routeAttempt.copy()
-	// PUSH_CODE_TELEMETRY_RESPONSE contains a source-key prefix and CayenneLPP
-	// payload only. It does not prove its return path, flood/direct mode, or
-	// receiver-local RF metadata.
+	// Neither stock telemetry response form proves a return path, flood/direct
+	// mode, or receiver-local RF metadata. 0x8C additionally has no source
+	// prefix; its exact tag-to-request mapping supplies target ownership.
 	result.ResponseRouteUnknown = true
 	a.telemetry = nil
 	if request.timer != nil {
@@ -471,6 +649,14 @@ func (a *Adapter) finishTelemetry(request *telemetryRequest, result TelemetryRes
 	}
 	a.telemetryMu.Unlock()
 	request.done <- telemetryCompletion{result: result, err: err}
+}
+
+func (a *Adapter) pruneExpiredTelemetryTagsLocked(now time.Time) {
+	for tag, expiry := range a.expiredTelemetryTags {
+		if !expiry.After(now) {
+			delete(a.expiredTelemetryTags, tag)
+		}
+	}
 }
 
 func parseTelemetryResponse(frame []byte, receivedAt time.Time) (TelemetryResult, [telemetryPrefixLength]byte, error) {
@@ -484,10 +670,11 @@ func parseTelemetryResponse(frame []byte, receivedAt time.Time) (TelemetryResult
 		return TelemetryResult{}, prefix, err
 	}
 	return TelemetryResult{
-		SourcePrefix: hex.EncodeToString(prefix[:]),
-		ReceivedAt:   receivedAt.UTC(),
-		Telemetry:    telemetry,
-		RawFrame:     append([]byte(nil), frame...),
+		SourcePrefix:   hex.EncodeToString(prefix[:]),
+		ResponseOpcode: PushTelemetryResponse,
+		ReceivedAt:     receivedAt.UTC(),
+		Telemetry:      telemetry,
+		RawFrame:       append([]byte(nil), frame...),
 	}, prefix, nil
 }
 

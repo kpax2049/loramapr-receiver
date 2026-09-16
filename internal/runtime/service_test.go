@@ -544,10 +544,22 @@ func TestMeshCoreSessionIntentReconcilesAndBlocksManualControl(t *testing.T) {
 		Version: "session:one:1", SessionID: "session-1", DeviceID: "device-1", Protocol: "meshcore",
 		PublicKey: key, ReceiverAgentID: "agent-1", InstallationID: "installation-1",
 	}
+	// Exercise the physical regression shape: a cloud Session takes over an
+	// already active manual controller for the same target. No controller reset
+	// occurs in this case, so the scheduler's ownership must be updated in place.
+	if _, err := svc.StartMeshCoreTracking(context.Background(), key); err != nil {
+		t.Fatalf("start manual tracking: %v", err)
+	}
+	if source := tracking.ControlSource(); source != "manual" {
+		t.Fatalf("manual controller source=%q, want manual", source)
+	}
 	svc.applyMeshCoreSessionIntent(intent, snapshot, ack)
 	status := svc.meshcoreTrackingStatus()
 	if !status.Active || status.ControlSource != "session" || status.SessionID != "session-1" || !status.Desired {
 		t.Fatalf("expected active session-managed tracking, got %#v", status)
+	}
+	if controllerStatus := tracking.Status(); controllerStatus.ControlSource != "session" || tracking.ControlSource() != "session" {
+		t.Fatalf("runtime reported Session source without scheduler ownership: %#v", controllerStatus)
 	}
 	if _, err := svc.StartMeshCoreTracking(context.Background(), key); !errors.Is(err, meshcore.ErrTrackingSessionManaged) {
 		t.Fatalf("manual start error=%v, want session managed conflict", err)
