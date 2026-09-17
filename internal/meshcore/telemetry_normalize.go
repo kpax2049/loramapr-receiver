@@ -45,6 +45,8 @@ func NormalizeTelemetryResult(result TelemetryResult, binding ReceiverBinding) (
 		"sender_identity":     "available",
 		"position_signed":     "unavailable",
 		"solicited_telemetry": "available",
+		"receiver_rssi":       telemetryRFCapability(result, "rssi"),
+		"receiver_snr":        telemetryRFCapability(result, "snr"),
 		"receiver_clock":      capabilityAvailability(binding.Clock != nil),
 	}
 	base["authenticity"] = map[string]any{
@@ -98,15 +100,79 @@ func NormalizeTelemetryResult(result TelemetryResult, binding ReceiverBinding) (
 	base["requestRoute"] = requestRoute
 	// PUSH_CODE_TELEMETRY_RESPONSE carries no return-path proof.
 	base["responseRoute"] = map[string]any{"known": false}
+	if stagesTelemetryRFEvidence(result.RFEvidence) {
+		base["radio"] = map[string]any{
+			"metrics": []any{
+				map[string]any{
+					"kind": "rssi", "value": *result.RFEvidence.RSSI, "unit": "dBm", "origin": "receiver_local",
+				},
+				map[string]any{
+					"kind": "snr", "value": *result.RFEvidence.SNR, "unit": "dB", "origin": "receiver_local",
+					"source": map[string]any{
+						"value": int(*result.RFEvidence.SNR * 4), "unit": "quarter_dB", "encoding": "meshcore_snr_x4",
+					},
+				},
+			},
+		}
+	}
 	source := base["source"].(map[string]any)
 	source["raw"] = base64.StdEncoding.EncodeToString(result.RawFrame)
 	source["rawSha256"] = sha256Hex(result.RawFrame)
-	source["evidence"] = map[string]any{
+	evidence := map[string]any{
 		"kind":                   telemetryEvidenceKind(result),
 		"sourcePrefix":           result.SourcePrefix,
 		"requestTargetCanonical": result.TargetPublicKey,
 	}
+	if result.Tagged && stagesTelemetryRFEvidence(result.RFEvidence) {
+		evidence["rfEvidence"] = normalizedRFEvidence(result.RFEvidence)
+	}
+	source["evidence"] = evidence
 	return base, nil
+}
+
+func telemetryRFCapability(result TelemetryResult, kind string) string {
+	if !stagesTelemetryRFEvidence(result.RFEvidence) {
+		return "unavailable"
+	}
+	if kind == "rssi" && result.RFEvidence.RSSI != nil {
+		return "available"
+	}
+	if kind == "snr" && result.RFEvidence.SNR != nil {
+		return "available"
+	}
+	return "unavailable"
+}
+
+// stagesTelemetryRFEvidence preserves the existing cloud contract for the
+// strongest host-order association only. Medium/low associations remain
+// receiver-local until confidence has an explicit end-to-end contract.
+func stagesTelemetryRFEvidence(value RFEvidence) bool {
+	return value.Outcome == "matched_ordered_temporal" && value.AssociationConfidence == "high" &&
+		value.RSSI != nil && value.SNR != nil
+}
+
+func normalizedRFEvidence(value RFEvidence) map[string]any {
+	result := map[string]any{
+		"method":                value.Method,
+		"deterministic":         value.Deterministic,
+		"outcome":               value.Outcome,
+		"candidateCount":        value.CandidateCount,
+		"associationConfidence": value.AssociationConfidence,
+		"associationReason":     value.AssociationReason,
+	}
+	if value.DeltaMS != nil {
+		result["deltaMs"] = *value.DeltaMS
+	}
+	if value.FrameSequenceDelta != nil {
+		result["frameSequenceDelta"] = *value.FrameSequenceDelta
+	}
+	if value.CandidateSequence != nil {
+		result["candidateSequence"] = *value.CandidateSequence
+	}
+	if value.CandidateRawSHA256 != "" {
+		result["candidateRawSha256"] = value.CandidateRawSHA256
+	}
+	return result
 }
 
 func telemetryEvidenceKind(result TelemetryResult) string {

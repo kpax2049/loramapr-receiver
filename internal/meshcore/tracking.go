@@ -162,6 +162,7 @@ type TrackingPoll struct {
 	ResponseTag          *uint32        `json:"responseTag,omitempty"`
 	FallbackReason       string         `json:"fallbackReason,omitempty"`
 	ScheduleSource       string         `json:"scheduleSource,omitempty"`
+	RFEvidence           RFEvidence     `json:"rfEvidence"`
 }
 
 type telemetryRequester func(context.Context, string) (TelemetryResult, error)
@@ -403,6 +404,7 @@ func copyTelemetryResult(result TelemetryResult) TelemetryResult {
 		result.Telemetry.BatteryPercentage = &value
 	}
 	result.RouteAttempt = result.RouteAttempt.copy()
+	result.RFEvidence = copyRFEvidence(result.RFEvidence)
 	return result
 }
 
@@ -423,6 +425,7 @@ func copyTrackingPoll(poll TrackingPoll) TrackingPoll {
 	}
 	poll.RequestTag = copyUint32(poll.RequestTag)
 	poll.ResponseTag = copyUint32(poll.ResponseTag)
+	poll.RFEvidence = copyRFEvidence(poll.RFEvidence)
 	return poll
 }
 
@@ -606,6 +609,7 @@ func (c *TrackingController) recordSuccess(target string, generation uint64, res
 		IntervalSeconds: c.status.CurrentIntervalSeconds, RouteAttempt: routeEvidenceOrUnknown(result.RouteAttempt),
 		ResponseRouteUnknown: true, RouteRecovery: recovery, PathUpdateObserved: pathUpdateObserved, ConsecutiveFailures: c.status.ConsecutiveFailures,
 		TelemetryTransport: result.Transport, RequestTag: copyUint32(result.RequestTag), ResponseTag: copyUint32(result.ResponseTag), FallbackReason: result.FallbackReason,
+		RFEvidence: copyRFEvidence(result.RFEvidence),
 	})
 	c.logger.Info("MeshCore tracking poll succeeded", "target_public_key", target,
 		"elapsed", result.ReceivedAt.Sub(requestAt).String(), "motion_state", c.status.MotionState,
@@ -647,6 +651,7 @@ func (c *TrackingController) recordFailure(target string, generation uint64, res
 		IntervalSeconds: c.status.CurrentIntervalSeconds, RouteAttempt: routeEvidenceOrUnknown(result.RouteAttempt),
 		ResponseRouteUnknown: true, RouteRecovery: recovery, PathUpdateObserved: pathUpdateObserved, ConsecutiveFailures: c.status.ConsecutiveFailures,
 		TelemetryTransport: result.Transport, RequestTag: copyUint32(result.RequestTag), ResponseTag: copyUint32(result.ResponseTag), FallbackReason: result.FallbackReason, ScheduleSource: scheduleSource,
+		RFEvidence: copyRFEvidence(result.RFEvidence),
 	})
 	c.logger.Warn("MeshCore tracking poll timed out", "target_public_key", target, "err", err,
 		"route_mode", routeEvidenceOrUnknown(result.RouteAttempt).Mode, "path_length", routeEvidenceOrUnknown(result.RouteAttempt).PathLength,
@@ -801,6 +806,53 @@ func copyFloat64(value *float64) *float64 {
 }
 
 func copyUint32(value *uint32) *uint32 {
+	if value == nil {
+		return nil
+	}
+	copy := *value
+	return &copy
+}
+
+func copyRFEvidence(value RFEvidence) RFEvidence {
+	value.DeltaMS = int64PtrValue(value.DeltaMS)
+	value.FrameSequenceDelta = uint64PtrValue(value.FrameSequenceDelta)
+	value.CandidateSequence = uint64PtrValue(value.CandidateSequence)
+	value.RSSI = intPtrValue(value.RSSI)
+	value.SNR = copyFloat64(value.SNR)
+	value.NearestCandidateSequence = uint64PtrValue(value.NearestCandidateSequence)
+	value.NearestCandidateDeltaMS = int64PtrValue(value.NearestCandidateDeltaMS)
+	value.NearestCandidateFrameSequenceDelta = uint64PtrValue(value.NearestCandidateFrameSequenceDelta)
+	value.NearestCandidateRSSI = intPtrValue(value.NearestCandidateRSSI)
+	value.NearestCandidateSNR = copyFloat64(value.NearestCandidateSNR)
+	value.NearestCandidateIsImmediatePredecessor = boolPtrValue(value.NearestCandidateIsImmediatePredecessor)
+	return value
+}
+
+func int64PtrValue(value *int64) *int64 {
+	if value == nil {
+		return nil
+	}
+	copy := *value
+	return &copy
+}
+
+func uint64PtrValue(value *uint64) *uint64 {
+	if value == nil {
+		return nil
+	}
+	copy := *value
+	return &copy
+}
+
+func intPtrValue(value *int) *int {
+	if value == nil {
+		return nil
+	}
+	copy := *value
+	return &copy
+}
+
+func boolPtrValue(value *bool) *bool {
 	if value == nil {
 		return nil
 	}

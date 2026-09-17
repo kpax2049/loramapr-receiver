@@ -177,7 +177,22 @@ func TestMeshCoreTelemetryRequestAPIValidatesAndReturnsLocalResult(t *testing.T)
 func TestMeshCoreTrackingAPIsAreExplicitLocalLifecycleHarness(t *testing.T) {
 	t.Parallel()
 	key := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-	submitter := &trackingSubmitter{recordingPairingSubmitter: &recordingPairingSubmitter{}, status: meshcore.TrackingStatus{Active: true, TargetPublicKey: key, MotionState: meshcore.MotionUnknown, CurrentIntervalSeconds: 30}}
+	nearestSequence := uint64(10)
+	nearestDelta := int64(1)
+	nearestFrameDelta := uint64(1)
+	nearestImmediate := true
+	nearestRSSI := -77
+	nearestSNR := 2.5
+	submitter := &trackingSubmitter{recordingPairingSubmitter: &recordingPairingSubmitter{}, status: meshcore.TrackingStatus{
+		Active: true, TargetPublicKey: key, MotionState: meshcore.MotionUnknown, CurrentIntervalSeconds: 30,
+		RecentPolls: []meshcore.TrackingPoll{{
+			Outcome: "success", RFEvidence: meshcore.RFEvidence{
+				Method: "ordered_temporal", Deterministic: false, Outcome: "ambiguous_multiple_candidates", CandidateCount: 2,
+				NearestCandidateSequence: &nearestSequence, NearestCandidateDeltaMS: &nearestDelta, NearestCandidateFrameSequenceDelta: &nearestFrameDelta,
+				NearestCandidateIsImmediatePredecessor: &nearestImmediate, NearestCandidateRSSI: &nearestRSSI, NearestCandidateSNR: &nearestSNR,
+			},
+		}},
+	}}
 	srv := New("127.0.0.1:0", staticStatusProvider{snapshot: sampleSnapshot()}, submitter, nil)
 	start := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(start, httptest.NewRequest(http.MethodPost, "/api/meshcore/tracking/start", strings.NewReader(`{"publicKey":"`+key+`"}`)))
@@ -186,7 +201,10 @@ func TestMeshCoreTrackingAPIsAreExplicitLocalLifecycleHarness(t *testing.T) {
 	}
 	status := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(status, httptest.NewRequest(http.MethodGet, "/api/meshcore/tracking/status", nil))
-	if status.Code != http.StatusOK || !strings.Contains(status.Body.String(), `"targetPublicKey":"`+key+`"`) {
+	if status.Code != http.StatusOK || !strings.Contains(status.Body.String(), `"targetPublicKey":"`+key+`"`) ||
+		!strings.Contains(status.Body.String(), `"nearestCandidateSequence":10`) ||
+		!strings.Contains(status.Body.String(), `"nearestCandidateIsImmediatePredecessor":true`) ||
+		!strings.Contains(status.Body.String(), `"nearestCandidateRssi":-77`) {
 		t.Fatalf("status=%d body=%s", status.Code, status.Body.String())
 	}
 	stop := httptest.NewRecorder()

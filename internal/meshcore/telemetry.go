@@ -87,7 +87,10 @@ type TelemetryResult struct {
 	// They say nothing about the response route.
 	RouteRecovery      string `json:"routeRecovery,omitempty"`
 	PathUpdateObserved bool   `json:"pathUpdateObserved"`
-	RawFrame           []byte `json:"-"`
+	// RFEvidence is an explicitly heuristic association with a preceding raw
+	// LOG_RX frame. It never changes telemetry identity or route semantics.
+	RFEvidence RFEvidence `json:"rfEvidence"`
+	RawFrame   []byte     `json:"-"`
 }
 
 type telemetryCompletion struct {
@@ -101,15 +104,16 @@ type telemetryRequest struct {
 	timer  *time.Timer
 	// suggestedTimer is separate from the initial bounded watchdog so a timer
 	// callback racing with RESP_CODE_SENT cannot accidentally extend a request.
-	suggestedTimer  *time.Timer
-	routeAttempt    RouteEvidence
-	routeDone       chan RouteEvidence
-	awaitingContact bool
-	requestedAt     time.Time
-	mode            telemetryRequestMode
-	tag             uint32
-	tagKnown        bool
-	fallbackReason  string
+	suggestedTimer       *time.Timer
+	routeAttempt         RouteEvidence
+	routeDone            chan RouteEvidence
+	awaitingContact      bool
+	requestedAt          time.Time
+	requestFrameSequence uint64
+	mode                 telemetryRequestMode
+	tag                  uint32
+	tagKnown             bool
+	fallbackReason       string
 }
 
 type pathResetRequest struct {
@@ -293,6 +297,7 @@ func (a *Adapter) setTelemetryRequestedAt(request *telemetryRequest, at time.Tim
 	defer a.telemetryMu.Unlock()
 	if a.telemetry == request {
 		request.requestedAt = at.UTC()
+		request.requestFrameSequence = a.frameSequence
 	}
 }
 
@@ -382,7 +387,7 @@ func (a *Adapter) handleTelemetryResponse(frame []byte, receivedAt time.Time) {
 	a.finishTelemetry(request, result, nil)
 }
 
-func (a *Adapter) handleBinaryTelemetryResponse(frame []byte, receivedAt time.Time) {
+func (a *Adapter) handleBinaryTelemetryResponse(frame []byte, receivedAt time.Time, frameSequences ...uint64) {
 	if len(frame) < 6 || frame[0] != PushBinaryResponse {
 		return // malformed unsolicited input must not fail an unrelated request
 	}
@@ -417,6 +422,10 @@ func (a *Adapter) handleBinaryTelemetryResponse(frame []byte, receivedAt time.Ti
 		return // never accept a tag that could identify a prior request
 	}
 	requestTag := tag
+	responseSequence := uint64(0)
+	if len(frameSequences) > 0 {
+		responseSequence = frameSequences[0]
+	}
 	result := TelemetryResult{
 		TargetPublicKey: hex.EncodeToString(request.target[:]),
 		// 0x8C has no sender prefix. The exact tag-to-request mapping is the
@@ -427,8 +436,11 @@ func (a *Adapter) handleBinaryTelemetryResponse(frame []byte, receivedAt time.Ti
 		RequestedAt: request.requestedAt, ReceivedAt: receivedAt.UTC(), Telemetry: telemetry,
 		RawFrame: append([]byte(nil), frame...),
 	}
+	result.RFEvidence = a.correlateTaggedTelemetryRF(request, receivedAt.UTC(), responseSequence)
 	a.telemetryMu.Unlock()
-	a.logger.Info("MeshCore tagged telemetry response correlated", "request_tag", tag, "response_tag", tag, "request_started_at", result.RequestedAt)
+	a.logger.Info("MeshCore tagged telemetry response correlated", "request_tag", tag, "response_tag", tag, "request_started_at", result.RequestedAt,
+		"rf_correlation", result.RFEvidence.Outcome, "rf_candidate_count", result.RFEvidence.CandidateCount,
+		"rf_delta_ms", result.RFEvidence.DeltaMS, "rf_rssi", result.RFEvidence.RSSI, "rf_snr", result.RFEvidence.SNR)
 	a.finishTelemetry(request, result, nil)
 }
 

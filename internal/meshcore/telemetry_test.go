@@ -279,7 +279,7 @@ func TestAdapterTelemetryRequestCorrelatesOnlyInFlightFullTarget(t *testing.T) {
 	adapter.handleBinaryTelemetryResponse(frame, time.Date(2026, 9, 12, 10, 0, 0, 0, time.UTC))
 	select {
 	case completion := <-resultCh:
-		if completion.err != nil || !completion.result.Tagged || completion.result.RequestTag == nil || *completion.result.RequestTag != 0x66554433 || completion.result.TargetPublicKey != key || completion.result.SourcePrefix != key[:12] || completion.result.Telemetry.Voltage == nil || *completion.result.Telemetry.Voltage != 4.09 || completion.result.RouteAttempt.Mode != RouteModeExplicitPath || completion.result.RouteAttempt.Source != "contact_out_path+response_sent" || !completion.result.ResponseRouteUnknown || !bytes.Equal(completion.result.RawFrame, frame) {
+		if completion.err != nil || !completion.result.Tagged || completion.result.RequestTag == nil || *completion.result.RequestTag != 0x66554433 || completion.result.TargetPublicKey != key || completion.result.SourcePrefix != key[:12] || completion.result.Telemetry.Voltage == nil || *completion.result.Telemetry.Voltage != 4.09 || completion.result.RouteAttempt.Mode != RouteModeExplicitPath || completion.result.RouteAttempt.Source != "contact_out_path+response_sent" || !completion.result.ResponseRouteUnknown || !bytes.Equal(completion.result.RawFrame, frame) || completion.result.RFEvidence.Outcome != "no_candidate" || completion.result.RFEvidence.RSSI != nil || completion.result.RFEvidence.SNR != nil {
 			t.Fatalf("unexpected completion: %#v err=%v", completion.result, completion.err)
 		}
 	case <-time.After(time.Second):

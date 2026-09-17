@@ -91,6 +91,13 @@ type Adapter struct {
 	// remains on the deprecated request for this connected Companion session.
 	binaryTelemetryCapability telemetryBinaryCapability
 	expiredTelemetryTags      map[uint32]time.Time
+	// The serial/BLE reader is the one ordered Companion frame stream. These
+	// fields are guarded by telemetryMu because request creation can race that
+	// reader, while correlation must snapshot both boundaries atomically.
+	frameSequence     uint64
+	recentRawRX       []rawRXCandidate
+	consumedRawRX     map[uint64]struct{}
+	telemetryRFWindow time.Duration
 
 	detectFn         func(Config) (detectionResult, error)
 	openFn           func(string) (io.ReadWriteCloser, error)
@@ -132,6 +139,7 @@ func NewAdapter(cfg Config, logger *slog.Logger, leases *protocoladapter.SerialL
 		detectionDelay: 3 * time.Second, reconnectDelay: 2 * time.Second, handshakeTimeout: 15 * time.Second,
 		shutdownTimeout: 3 * time.Second, reconnectWake: make(chan struct{}, 1),
 		expiredTelemetryTags: make(map[uint32]time.Time),
+		consumedRawRX:        make(map[uint64]struct{}),
 	}
 }
 
@@ -420,6 +428,9 @@ func (a *Adapter) consume(ctx context.Context, link CompanionLink, device string
 	a.telemetryMu.Lock()
 	a.binaryTelemetryCapability = telemetryBinaryUnknown
 	a.expiredTelemetryTags = make(map[uint32]time.Time)
+	a.frameSequence = 0
+	a.recentRawRX = nil
+	a.consumedRawRX = make(map[uint64]struct{})
 	a.telemetryMu.Unlock()
 	session := NewCompanionSessionForTransport("loramapr-receiver", link.Metadata())
 	a.setStatus(func(status *AdapterStatus) {
@@ -455,6 +466,10 @@ func (a *Adapter) consume(ctx context.Context, link CompanionLink, device string
 			}
 			return err
 		}
+		a.telemetryMu.Lock()
+		a.frameSequence++
+		frameSequence := a.frameSequence
+		a.telemetryMu.Unlock()
 		result, err := session.Handle(payload)
 		if err != nil {
 			if connected && (errors.Is(err, ErrUnsupportedPush) || errors.Is(err, ErrInvalidPush)) {
@@ -493,8 +508,11 @@ func (a *Adapter) consume(ctx context.Context, link CompanionLink, device string
 			continue
 		}
 		if result.Push.Opcode == PushBinaryResponse {
-			a.handleBinaryTelemetryResponse(result.Push.Payload, observedAt)
+			a.handleBinaryTelemetryResponse(result.Push.Payload, observedAt, frameSequence)
 			continue
+		}
+		if result.Push.Opcode == PushLogRXData {
+			a.recordRawRXCandidate(result.Push.Payload, observedAt, frameSequence)
 		}
 		event := AdapterEvent{
 			Frame: *result.Push, Session: session.Snapshot(), Device: device, ObservedAt: observedAt,

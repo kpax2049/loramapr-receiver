@@ -250,7 +250,7 @@
     text("telemetry-voltage", formatNumber(telemetry.voltage, " V", 2));
     text("telemetry-temperature", formatNumber(telemetry.temperatureC, " °C", 1));
     text("telemetry-received", formatTime(latest.receivedAt));
-    text("telemetry-correlation", latest.sourcePrefix ? "prefix matched: " + latest.sourcePrefix : "request correlated");
+    text("telemetry-correlation", (latest.sourcePrefix ? "prefix matched: " + latest.sourcePrefix : "request correlated") + "; " + rfSummary(latest.rfEvidence));
   }
   function routeLabel(route) {
     const mode = route && route.mode;
@@ -265,6 +265,15 @@
     if (sub) { const detail = document.createElement("div"); detail.className = "lmr-sub"; detail.textContent = sub; cell.appendChild(detail); }
     row.appendChild(cell);
   }
+  function rfSummary(evidence) {
+    if (!evidence || !evidence.outcome) return "RF unavailable";
+    const base = "RF " + evidence.outcome + " (candidates " + optional(evidence.candidateCount, "0") + ")";
+    if (evidence.outcome !== "matched_ordered_temporal") return base;
+    const rssi = evidence.rssi === undefined ? "unavailable" : formatNumber(evidence.rssi, " dBm", 0);
+    const snr = evidence.snr === undefined ? "unavailable" : formatNumber(evidence.snr, " dB", 1);
+    const delta = evidence.deltaMs === undefined ? "" : "; " + evidence.deltaMs + " ms";
+    return base + ": " + rssi + ", " + snr + delta;
+  }
   function renderPolls(polls) {
     const body = byID("tracking-polls");
     if (!body) return;
@@ -272,7 +281,8 @@
     if (!polls.length) { const row = document.createElement("tr"); const cell = document.createElement("td"); cell.colSpan = 6; cell.className = "lmr-cell-soft"; cell.textContent = "No telemetry polls recorded."; row.appendChild(cell); body.appendChild(row); return; }
     polls.slice().reverse().forEach(function (poll) {
       const row = document.createElement("tr");
-      addCell(row, formatTime(poll.requestAt), optional(poll.outcome, "unknown") + (poll.error ? ": " + poll.error : ""));
+      const tag = poll.requestTag === undefined ? "untagged" : "tag " + poll.requestTag;
+      addCell(row, formatTime(poll.requestAt), optional(poll.outcome, "unknown") + (poll.error ? ": " + poll.error : "") + "; " + tag + "; " + rfSummary(poll.rfEvidence));
       const route = poll.routeAttempt || {};
       const path = route.path && route.path.length ? "Raw path hashes: " + route.path.join(", ") : "Path length: " + optional(route.pathLength, "unknown");
       addCell(row, routeLabel(route), path + "; response route unknown");
