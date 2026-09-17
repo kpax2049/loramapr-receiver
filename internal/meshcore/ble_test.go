@@ -114,6 +114,42 @@ func TestBLEPairingIsExplicitAndDoesNotExposePIN(t *testing.T) {
 	}
 }
 
+func TestBLEPairingRejectsConcurrentRequestWithoutPassingItsPINToBlueZ(t *testing.T) {
+	t.Parallel()
+	started := make(chan struct{})
+	unblock := make(chan struct{})
+	backend := &fakeBLEBackend{pairFn: func(_ context.Context, _ BLEConfig, _ string) error {
+		close(started)
+		<-unblock
+		return nil
+	}}
+	pairing := NewBLEPairingBackendWithBackend(backend)
+	firstDone := make(chan error, 1)
+	go func() {
+		firstDone <- pairing.Pair(context.Background(), BLEConfig{PeerAddress: "AA:BB:CC:DD:EE:FF"}, "012345")
+	}()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("first pairing request did not reach backend")
+	}
+	err := pairing.Pair(context.Background(), BLEConfig{PeerAddress: "AA:BB:CC:DD:EE:FF"}, "654321")
+	diagnostic, ok := err.(*BLEPairingDiagnostic)
+	if !ok || diagnostic.Operation != "pair" || diagnostic.Code != "busy" {
+		t.Fatalf("concurrent pair error=%#v; want safe pair/busy diagnostic", err)
+	}
+	if backend.pairPin != "012345" {
+		t.Fatalf("concurrent request replaced active PIN: %q", backend.pairPin)
+	}
+	close(unblock)
+	if err := <-firstDone; err != nil {
+		t.Fatalf("first pairing request: %v", err)
+	}
+	if backend.pairPin != "012345" {
+		t.Fatalf("first PIN was not preserved: %q", backend.pairPin)
+	}
+}
+
 func TestBLERawSignedAdvertRetainsIndependentVerificationAndDelegatedAdvertFailsClosed(t *testing.T) {
 	t.Parallel()
 	ble := pinnedReadySnapshot()
@@ -139,6 +175,7 @@ type fakeBLEBackend struct {
 	pairAddress, pairPin, forgetAddress string
 	disconnectAddress                   string
 	pairErr                             error
+	pairFn                              func(context.Context, BLEConfig, string) error
 }
 
 func (b *fakeBLEBackend) Discover(_ context.Context, _ string) ([]BLEDevice, error) {
@@ -154,9 +191,12 @@ func (b *fakeBLEBackend) Disconnect(_ context.Context, cfg BLEConfig) error {
 	b.disconnectAddress = cfg.PeerAddress
 	return nil
 }
-func (b *fakeBLEBackend) Pair(_ context.Context, cfg BLEConfig, pin string) error {
+func (b *fakeBLEBackend) Pair(ctx context.Context, cfg BLEConfig, pin string) error {
 	b.pairAddress = cfg.PeerAddress
 	b.pairPin = pin
+	if b.pairFn != nil {
+		return b.pairFn(ctx, cfg, pin)
+	}
 	return b.pairErr
 }
 func (b *fakeBLEBackend) Forget(_ context.Context, cfg BLEConfig) error {

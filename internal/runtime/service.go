@@ -86,6 +86,10 @@ type CloudClient interface {
 }
 
 type Service struct {
+	// meshcoreBLEMu makes release, pairing, and resume one local lifecycle
+	// transaction. Resume therefore cannot restart the receiver's BLE
+	// reconnect loop while a temporary BlueZ pairing agent is active.
+	meshcoreBLEMu   sync.Mutex
 	container       *Container
 	mode            config.RunMode
 	steady          steadyState
@@ -504,6 +508,17 @@ func (s *Service) PairMeshCoreBLE(ctx context.Context, cfg meshcore.BLEConfig, p
 	if s.container == nil || s.container.MeshCoreBLE == nil {
 		return meshcore.ErrBLEUnsupported
 	}
+	s.meshcoreBLEMu.Lock()
+	defer s.meshcoreBLEMu.Unlock()
+	if adapter := s.container.MeshCore; adapter != nil {
+		status := adapter.DetailedSnapshot()
+		if status.Transport == "ble" && !status.ReconnectSuppressed {
+			// Pairing must be performed after the operator has released the
+			// receiver-owned BLE loop. Silently releasing it here would interrupt
+			// active traffic, and a concurrent Resume would race BlueZ.
+			return &meshcore.BLEPairingDiagnostic{Operation: "pair", Code: "receiver_active"}
+		}
+	}
 	return s.container.MeshCoreBLE.Pair(ctx, cfg, pin)
 }
 
@@ -521,6 +536,8 @@ func (s *Service) ReleaseMeshCoreBLE(_ context.Context) (meshcore.AdapterStatus,
 	if s.container == nil || s.container.MeshCore == nil {
 		return meshcore.AdapterStatus{}, meshcore.ErrBLEUnsupported
 	}
+	s.meshcoreBLEMu.Lock()
+	defer s.meshcoreBLEMu.Unlock()
 	if s.container.MeshCoreTracking != nil {
 		s.container.MeshCoreTracking.Stop()
 	}
@@ -534,6 +551,8 @@ func (s *Service) ResumeMeshCoreBLE(_ context.Context) (meshcore.AdapterStatus, 
 	if s.container == nil || s.container.MeshCore == nil {
 		return meshcore.AdapterStatus{}, meshcore.ErrBLEUnsupported
 	}
+	s.meshcoreBLEMu.Lock()
+	defer s.meshcoreBLEMu.Unlock()
 	err := s.container.MeshCore.Resume()
 	s.refreshAdapterStatuses()
 	return s.container.MeshCore.DetailedSnapshot(), err

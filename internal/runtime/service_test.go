@@ -84,6 +84,73 @@ func TestReleaseMeshCoreBLEStopsTrackingAndBlocksNewTrackingUntilResume(t *testi
 	}
 }
 
+func TestPairMeshCoreBLERequiresReleaseAndBlocksResumeUntilPairCompletes(t *testing.T) {
+	t.Parallel()
+	adapter := meshcore.NewAdapter(meshcore.Config{Transport: "ble", BLE: meshcore.BLEConfig{PeerAddress: "AA:BB:CC:DD:EE:FF"}}, nil, nil)
+	backend := &runtimePairingBackend{started: make(chan struct{}), unblock: make(chan struct{})}
+	svc := &Service{container: &Container{
+		MeshCore:    adapter,
+		MeshCoreBLE: meshcore.NewBLEPairingBackendWithBackend(backend),
+	}}
+	cfg := meshcore.BLEConfig{PeerAddress: "AA:BB:CC:DD:EE:FF"}
+	if err := svc.PairMeshCoreBLE(context.Background(), cfg, "012345"); err == nil {
+		t.Fatal("pairing while receiver BLE loop is active succeeded")
+	} else if diagnostic, ok := err.(*meshcore.BLEPairingDiagnostic); !ok || diagnostic.Operation != "pair" || diagnostic.Code != "receiver_active" {
+		t.Fatalf("active receiver error=%#v; want safe pair/receiver_active diagnostic", err)
+	}
+	if backend.pairCalls != 0 {
+		t.Fatalf("active receiver pairing reached backend %d times", backend.pairCalls)
+	}
+	if _, err := svc.ReleaseMeshCoreBLE(context.Background()); err != nil {
+		t.Fatalf("release BLE receiver: %v", err)
+	}
+	pairDone := make(chan error, 1)
+	go func() { pairDone <- svc.PairMeshCoreBLE(context.Background(), cfg, "012345") }()
+	select {
+	case <-backend.started:
+	case <-time.After(time.Second):
+		t.Fatal("released receiver did not start pairing")
+	}
+	resumeDone := make(chan error, 1)
+	go func() { _, err := svc.ResumeMeshCoreBLE(context.Background()); resumeDone <- err }()
+	select {
+	case err := <-resumeDone:
+		t.Fatalf("resume raced active pairing: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(backend.unblock)
+	if err := <-pairDone; err != nil {
+		t.Fatalf("pair after release: %v", err)
+	}
+	if err := <-resumeDone; err != nil {
+		t.Fatalf("resume after pairing: %v", err)
+	}
+}
+
+type runtimePairingBackend struct {
+	started, unblock chan struct{}
+	pairCalls        int
+}
+
+func (*runtimePairingBackend) Discover(context.Context, string) ([]meshcore.BLEDevice, error) {
+	return nil, nil
+}
+func (*runtimePairingBackend) Connect(context.Context, meshcore.BLEConfig) (meshcore.BLEConnection, error) {
+	return nil, errors.New("not used")
+}
+func (*runtimePairingBackend) Disconnect(context.Context, meshcore.BLEConfig) error { return nil }
+func (b *runtimePairingBackend) Pair(ctx context.Context, _ meshcore.BLEConfig, _ string) error {
+	b.pairCalls++
+	close(b.started)
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-b.unblock:
+		return nil
+	}
+}
+func (*runtimePairingBackend) Forget(context.Context, meshcore.BLEConfig) error { return nil }
+
 func TestUpdateFailureStateRecoversMeshCoreOnlyReceiverAfterBLEReconnect(t *testing.T) {
 	t.Parallel()
 

@@ -161,9 +161,18 @@ func (b *bluezBackend) Pair(ctx context.Context, cfg BLEConfig, pin string) erro
 	if err != nil {
 		return newBLEPairingDiagnostic("system_bus", "unavailable")
 	}
-	path, _, err := findBluezDevice(conn, cfg)
+	path, props, err := findBluezDevice(conn, cfg)
 	if err != nil {
 		return newBLEPairingDiagnostic("peer_selection", "unavailable")
+	}
+	// Device1.Pair returns AlreadyExists for an established pairing. Treat an
+	// existing persisted bond as the successful, idempotent result rather than
+	// starting an agent transaction that cannot make progress.
+	if bluezDeviceIsBonded(props) {
+		return nil
+	}
+	if variantBool(props, "Paired") {
+		return newBLEPairingDiagnostic("pair", "bond_incomplete")
 	}
 	agentPath := dbus.ObjectPath(fmt.Sprintf("/io/loramapr/receiver/meshcore/agent/%d", time.Now().UnixNano()))
 	agent := &bluezPairAgent{pin: pin, device: path}
@@ -176,13 +185,58 @@ func (b *bluezBackend) Pair(ctx context.Context, cfg BLEConfig, pin string) erro
 	if call := manager.CallWithContext(ctx, agentManagerInterface+".RegisterAgent", 0, agentPath, "KeyboardOnly"); call.Err != nil {
 		return bluezPairingDiagnostic("agent_register", call.Err)
 	}
-	defer manager.Call(agentManagerInterface+".UnregisterAgent", 0, agentPath)
+	// RegisterAgent associates this agent with this D-Bus caller, which is the
+	// caller that invokes Device1.Pair below. RequestDefaultAgent is therefore
+	// neither needed nor appropriate for this short-lived pairing wizard.
+	defer unregisterBluezPairAgent(manager, agentPath)
 	call := conn.Object(bluezName, path).CallWithContext(ctx, deviceInterface+".Pair", 0)
 	if call.Err != nil {
-		_ = conn.Object(bluezName, path).Call(deviceInterface+".CancelPairing", 0).Err
+		// If another client already owns a pairing transaction, Pair reports
+		// InProgress. CancelPairing is not ownership-aware, so calling it here
+		// would abort that other client's flow. Cancellation of our own request
+		// is the only case in which this caller may cancel the device operation.
+		if ctx.Err() != nil {
+			cancelBluezPairing(conn, path)
+		}
+		// A racing successful pairing can surface as AlreadyExists. Re-read the
+		// safe local state before reporting a failure.
+		if paired, stateErr := bluezDeviceIsBondedAt(conn, path); stateErr == nil && paired {
+			return nil
+		}
 		return bluezPairingDiagnostic("pair", call.Err)
 	}
+	if paired, stateErr := bluezDeviceIsBondedAt(conn, path); stateErr != nil || !paired {
+		return newBLEPairingDiagnostic("pair", "bond_incomplete")
+	}
 	return nil
+}
+
+func bluezDeviceIsBonded(props map[string]dbus.Variant) bool {
+	return variantBool(props, "Paired") && variantBool(props, "Bonded")
+}
+
+func bluezDeviceIsBondedAt(conn *dbus.Conn, path dbus.ObjectPath) (bool, error) {
+	objects, err := managedObjects(conn)
+	if err != nil {
+		return false, err
+	}
+	props, ok := objects[path][deviceInterface]
+	if !ok {
+		return false, errors.New("BlueZ device disappeared during pairing")
+	}
+	return bluezDeviceIsBonded(props), nil
+}
+
+func cancelBluezPairing(conn *dbus.Conn, path dbus.ObjectPath) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	_ = conn.Object(bluezName, path).CallWithContext(ctx, deviceInterface+".CancelPairing", 0).Err
+}
+
+func unregisterBluezPairAgent(manager dbus.BusObject, agentPath dbus.ObjectPath) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	_ = manager.CallWithContext(ctx, agentManagerInterface+".UnregisterAgent", 0, agentPath).Err
 }
 
 func (b *bluezBackend) Forget(ctx context.Context, cfg BLEConfig) error {

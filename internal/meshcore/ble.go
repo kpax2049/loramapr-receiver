@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 )
 
 const (
@@ -192,7 +193,10 @@ func (l *bleCompanionLink) Close() error { return l.connection.Close() }
 // BLEPairingBackend exposes explicit local pairing actions for a later portal
 // UI. The six-digit PIN is passed only to the current call and is neither
 // stored here nor included in returned errors.
-type BLEPairingBackend struct{ backend BLEBackend }
+type BLEPairingBackend struct {
+	backend BLEBackend
+	pairMu  sync.Mutex
+}
 
 func NewBLEPairingBackend() *BLEPairingBackend {
 	return &BLEPairingBackend{backend: newSystemBLEBackend()}
@@ -224,6 +228,13 @@ func (p *BLEPairingBackend) Pair(ctx context.Context, cfg BLEConfig, pin string)
 			return fmt.Errorf("%w: PIN must contain exactly six digits", ErrBLEPairingFailed)
 		}
 	}
+	// BlueZ has one pairing transaction per device and a temporary Agent1 is
+	// scoped to the D-Bus caller. Do not let a second portal request race the
+	// first request's agent lifetime or attempt to cancel its transaction.
+	if !p.pairMu.TryLock() {
+		return newBLEPairingDiagnostic("pair", "busy")
+	}
+	defer p.pairMu.Unlock()
 	if err := p.backend.Pair(ctx, cfg, pin); err != nil {
 		var diagnostic *BLEPairingDiagnostic
 		if errors.As(err, &diagnostic) {
