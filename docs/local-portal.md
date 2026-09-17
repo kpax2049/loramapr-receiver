@@ -26,8 +26,15 @@ Bind address is configured by `portal.bind_address`.
    policy visibility and local fallback config
 5. **Troubleshooting**: resolve common issues and run reset/re-pair when needed
 6. **Advanced**: build/install/identity metadata for support and diagnostics
-7. **MeshCore**: BLE connection ownership, temporary tracking observability,
-   and recent request-side route evidence for a configured MeshCore adapter
+7. **MeshCore**: BLE connection ownership, Session-managed tracking status,
+   and recent request-side route evidence for a configured MeshCore Companion
+   adapter. It shows the configured/connected device and connection state, and
+   provides **Release device** and **Resume receiver connection** actions.
+
+The MeshCore dashboard is a status and lifecycle page. Receiver-local BLE
+discovery and pairing APIs are available, but this version does not provide a
+device-picker form. The chosen peer remains explicit Receiver configuration.
+See [MeshCore Companion setup and operation](./meshcore-companion.md).
 
 Identity shown in portal includes:
 

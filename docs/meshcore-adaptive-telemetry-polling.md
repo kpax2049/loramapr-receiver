@@ -1,22 +1,19 @@
-# MeshCore Adaptive Telemetry Polling (M7A)
+# MeshCore adaptive telemetry polling (developer reference)
 
-M7A adds an in-memory, receiver-controlled polling controller for one selected
-canonical MeshCore field-node public key. It uses the existing MeshCore
-telemetry request, response-correlation, normalization, and durable outbox
-path; it does not implement a second telemetry protocol path. Stock MeshCore
-Companion firmware is sufficient.
+The receiver has an adaptive polling controller for one selected canonical
+MeshCore field-device public key. It uses the existing MeshCore telemetry
+request, response-correlation, normalization, and durable outbox path; it does
+not implement a second telemetry protocol path. Stock MeshCore Companion
+firmware is sufficient.
 
 ## Lifecycle boundary
 
-The product lifecycle is Session-bound: starting an active LoRaMapr tracking
-Session must start polling, and ending that Session must stop it. No active
-Session will mean no automatic telemetry requests.
-
-M7A has no cloud Session integration yet. The local receiver endpoints below
-are a temporary physical-test harness only, not a permanent independent
-always-on subsystem. Controller state is deliberately ephemeral and is not
-restored after a receiver restart. Its `Start`/`Stop` seam is the intended
-future Session lifecycle binding point.
+The product lifecycle is Session-bound: an active LoRaMapr Session supplies
+the receiver's authoritative tracking intent, and ending that Session removes
+it. No active Session means no automatic telemetry requests. The local receiver
+endpoints below are a diagnostic harness, not an independent always-on
+subsystem. Controller state is deliberately ephemeral and is not restored after
+a receiver restart; Cloud reaffirms any active Session on a later heartbeat.
 
 ## Local harness API
 

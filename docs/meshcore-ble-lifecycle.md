@@ -1,7 +1,8 @@
 # MeshCore BLE lifecycle
 
 For `meshcore.transport: ble`, the receiver owns the configured BlueZ peer's
-connection lifecycle. Pairing remains a separate local operation; releasing a
+connection lifecycle. Pairing remains a separate local operation, and must be
+started after the receiver has released its BLE connection. Releasing a
 connection never removes the BlueZ device or its bond.
 
 ## Release for phone use
@@ -25,8 +26,10 @@ curl -X POST http://127.0.0.1:8080/api/meshcore/adapter/resume
 ```
 
 Resume is also idempotent. It clears the in-memory release gate and returns to
-the usual discovery/connect/handshake flow. Release is intentionally not
-persisted, so a receiver restart follows its configured auto-connect behavior.
+the usual discovery/connect/handshake flow. Session-managed collection waits
+for Cloud to reaffirm an active Session; it does not restore a remembered
+tracking target locally. Release is intentionally not persisted, so a receiver
+restart follows its configured auto-connect behavior.
 
 ## Status and shutdown
 
