@@ -1,9 +1,12 @@
 package webportal
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -45,6 +48,7 @@ type blePairingSubmitter struct {
 	devices []meshcore.BLEDevice
 	pairCfg meshcore.BLEConfig
 	pairPIN string
+	pairErr error
 }
 
 type telemetrySubmitter struct {
@@ -104,7 +108,7 @@ func (s *blePairingSubmitter) DiscoverMeshCoreBLE(_ context.Context, _ string) (
 }
 func (s *blePairingSubmitter) PairMeshCoreBLE(_ context.Context, cfg meshcore.BLEConfig, pin string) error {
 	s.pairCfg, s.pairPIN = cfg, pin
-	return nil
+	return s.pairErr
 }
 func (s *blePairingSubmitter) ForgetMeshCoreBLE(_ context.Context, cfg meshcore.BLEConfig) error {
 	s.pairCfg = cfg
@@ -126,6 +130,69 @@ func TestMeshCoreBLEPairingAPIIsLocalAndDoesNotEchoPIN(t *testing.T) {
 	if pair.Code != http.StatusAccepted || strings.Contains(pair.Body.String(), "123456") || submitter.pairPIN != "123456" || submitter.pairCfg.PeerAddress != "AA:BB:CC:DD:EE:FF" {
 		t.Fatalf("pair status=%d body=%s cfg=%#v", pair.Code, pair.Body.String(), submitter.pairCfg)
 	}
+}
+
+func TestMeshCoreBLEPairingAPIReturnsSafeDiagnosticOnly(t *testing.T) {
+	t.Parallel()
+	const pin = "927461"
+	var logs bytes.Buffer
+	submitter := &blePairingSubmitter{
+		recordingPairingSubmitter: &recordingPairingSubmitter{},
+		pairErr:                   &meshcore.BLEPairingDiagnostic{Operation: "pair", Code: "authentication_rejected"},
+	}
+	srv := New("127.0.0.1:0", staticStatusProvider{snapshot: sampleSnapshot()}, submitter, slog.New(slog.NewJSONHandler(&logs, nil)))
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/meshcore/ble/pair", strings.NewReader(`{"adapter":"hci0","peerAddress":"AA:BB:CC:DD:EE:FF","pin":"`+pin+`"}`))
+	srv.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var body map[string]string
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if want := map[string]string{"error": "MeshCore BLE pairing failed", "operation": "pair", "code": "authentication_rejected"}; !mapsEqual(body, want) {
+		t.Fatalf("safe diagnostic=%#v, want %#v", body, want)
+	}
+	if strings.Contains(rec.Body.String(), pin) || strings.Contains(logs.String(), pin) || strings.Contains(logs.String(), "AA:BB:CC:DD:EE:FF") {
+		t.Fatalf("pairing response/log leaked sensitive or request-supplied data: body=%s logs=%s", rec.Body.String(), logs.String())
+	}
+	if !strings.Contains(logs.String(), `"operation":"pair"`) || !strings.Contains(logs.String(), `"code":"authentication_rejected"`) {
+		t.Fatalf("safe diagnostic was not logged: %s", logs.String())
+	}
+}
+
+func TestMeshCoreBLEPairingAPIKeepsArbitraryErrorSanitized(t *testing.T) {
+	t.Parallel()
+	const pin = "927461"
+	const unsafe = "BlueZ body: rejected pin 927461"
+	var logs bytes.Buffer
+	submitter := &blePairingSubmitter{
+		recordingPairingSubmitter: &recordingPairingSubmitter{},
+		pairErr:                   errors.New(unsafe),
+	}
+	srv := New("127.0.0.1:0", staticStatusProvider{snapshot: sampleSnapshot()}, submitter, slog.New(slog.NewJSONHandler(&logs, nil)))
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/meshcore/ble/pair", strings.NewReader(`{"adapter":"hci0","peerAddress":"AA:BB:CC:DD:EE:FF","pin":"`+pin+`"}`))
+	srv.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest || rec.Body.String() != "MeshCore BLE pairing failed\n" {
+		t.Fatalf("unsafe pairing error was not sanitized: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), pin) || strings.Contains(rec.Body.String(), unsafe) || strings.Contains(logs.String(), pin) || strings.Contains(logs.String(), unsafe) {
+		t.Fatalf("pairing response/log leaked arbitrary error or PIN: body=%s logs=%s", rec.Body.String(), logs.String())
+	}
+}
+
+func mapsEqual(got, want map[string]string) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	for key, wantValue := range want {
+		if got[key] != wantValue {
+			return false
+		}
+	}
+	return true
 }
 
 func TestMeshCoreTelemetryRequestAPIValidatesAndReturnsLocalResult(t *testing.T) {

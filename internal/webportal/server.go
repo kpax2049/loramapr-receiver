@@ -493,6 +493,19 @@ func (s *Server) handleMeshCoreBLEPair(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.meshcoreBLE.PairMeshCoreBLE(r.Context(), meshcore.BLEConfig{Adapter: request.Adapter, PeerAddress: request.PeerAddress}, request.PIN); err != nil {
+		var diagnostic *meshcore.BLEPairingDiagnostic
+		if errors.As(err, &diagnostic) {
+			// BLEPairingDiagnostic is deliberately restricted to a safe operation
+			// and classification code. Do not add the PIN, D-Bus body, wrapped
+			// error, or request-supplied peer material to this response or log.
+			s.logger.Warn("MeshCore BLE pairing failed", "operation", diagnostic.Operation, "code", diagnostic.Code)
+			writeJSON(w, http.StatusBadRequest, map[string]string{
+				"error":     "MeshCore BLE pairing failed",
+				"operation": diagnostic.Operation,
+				"code":      diagnostic.Code,
+			})
+			return
+		}
 		// Deliberately omit the underlying error: it may contain sensitive agent
 		// material. The PIN exists only in this active method call.
 		http.Error(w, "MeshCore BLE pairing failed", http.StatusBadRequest)
