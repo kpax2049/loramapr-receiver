@@ -15,7 +15,10 @@ import (
 	"github.com/loramapr/loramapr-receiver/internal/protocoladapter"
 )
 
-const AdapterName = "meshcore-companion"
+const (
+	AdapterName           = "meshcore-companion"
+	defaultBLEOpenTimeout = 12 * time.Second
+)
 
 type ConnectionState string
 
@@ -105,6 +108,7 @@ type Adapter struct {
 	disconnectBLE    func(context.Context, BLEConfig) error
 	detectionDelay   time.Duration
 	reconnectDelay   time.Duration
+	bleOpenTimeout   time.Duration
 	handshakeTimeout time.Duration
 	shutdownTimeout  time.Duration
 	reconnectWake    chan struct{}
@@ -136,7 +140,7 @@ func NewAdapter(cfg Config, logger *slog.Logger, leases *protocoladapter.SerialL
 		disconnectBLE: func(ctx context.Context, config BLEConfig) error {
 			return NewBLECompanionTransport(config).Disconnect(ctx)
 		},
-		detectionDelay: 3 * time.Second, reconnectDelay: 2 * time.Second, handshakeTimeout: 15 * time.Second,
+		detectionDelay: 3 * time.Second, reconnectDelay: 2 * time.Second, bleOpenTimeout: defaultBLEOpenTimeout, handshakeTimeout: 15 * time.Second,
 		shutdownTimeout: 3 * time.Second, reconnectWake: make(chan struct{}, 1),
 		expiredTelemetryTags: make(map[uint32]time.Time),
 		consumedRawRX:        make(map[uint64]struct{}),
@@ -270,17 +274,31 @@ func (a *Adapter) runBLE(ctx context.Context, sink protocoladapter.AdapterSink) 
 			status.LastError = ""
 		})
 		a.setStatus(func(status *AdapterStatus) { status.State = StateOpening })
+		// Keep the outer attempt context alive for the complete open/handshake
+		// lifecycle so Release can cancel either phase immediately. The nested
+		// deadline is only for BlueZ connection/service resolution; Companion
+		// protocol negotiation has its own independent handshake timeout.
 		attemptCtx, cancelAttempt := context.WithCancel(ctx)
+		openCtx, cancelOpen := context.WithTimeout(attemptCtx, a.bleOpenTimeout)
 		a.setAttemptCancel(cancelAttempt)
 		transport := a.newBLETransport(a.cfg.BLE)
-		link, err := transport.Open(attemptCtx)
+		link, err := transport.Open(openCtx)
+		openTimedOut := errors.Is(openCtx.Err(), context.DeadlineExceeded)
+		cancelOpen()
 		a.clearAttemptCancel(cancelAttempt)
 		if err != nil {
 			cancelAttempt()
 			if a.reconnectIsSuppressed() {
 				continue
 			}
+			if openTimedOut {
+				err = fmt.Errorf("MeshCore BLE open timed out after %s: %w", a.bleOpenTimeout, context.DeadlineExceeded)
+			} else {
+				err = fmt.Errorf("open MeshCore BLE peer %s: %w", peer, err)
+			}
+			a.logger.Warn("MeshCore BLE open attempt failed", "peer", peer, "timed_out", openTimedOut, "err", err)
 			a.degrade(err)
+			a.setStatus(func(status *AdapterStatus) { status.Reconnects++ })
 			if !wait(ctx, a.reconnectDelay) {
 				break
 			}

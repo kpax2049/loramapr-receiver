@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -426,6 +427,56 @@ func TestAdapterBLEReconnectRepeatsSharedHandshake(t *testing.T) {
 	}
 }
 
+func TestAdapterBLEOpenTimeoutDegradesAndRetries(t *testing.T) {
+	firstOpened := make(chan struct{}, 1)
+	firstCancelled := make(chan error, 1)
+	second := &scriptedCompanionLink{frames: [][]byte{
+		readHexFixture(t, "device-info-v1.17.1.hex"), readHexFixture(t, "self-info-v1.17.1.hex"),
+	}}
+	adapter := NewAdapter(Config{Transport: "ble", BLE: BLEConfig{PeerAddress: "AA:BB:CC:DD:EE:FF"}}, nil, nil)
+	adapter.bleOpenTimeout = 10 * time.Millisecond
+	adapter.reconnectDelay = 100 * time.Millisecond
+	var opens atomic.Int32
+	adapter.newBLETransport = func(BLEConfig) CompanionTransport {
+		if opens.Add(1) == 1 {
+			return blockingOpenTransport{opened: firstOpened, cancelled: firstCancelled}
+		}
+		return staticCompanionTransport{link: second}
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- adapter.Start(ctx, &discardSink{}) }()
+	select {
+	case <-firstOpened:
+	case <-time.After(time.Second):
+		t.Fatal("BLE open did not begin")
+	}
+	select {
+	case err := <-firstCancelled:
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("BLE open cancellation=%v, want deadline exceeded", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("BLE open was not cancelled at its deadline")
+	}
+	waitForAdapterState(t, adapter, StateDegraded)
+	status := adapter.DetailedSnapshot()
+	if !strings.Contains(status.LastError, "BLE open timed out") || status.Reconnects != 1 {
+		t.Fatalf("timeout was not actionable/retryable: %#v", status)
+	}
+	waitForAdapterState(t, adapter, StateConnected)
+	if opens.Load() != 2 {
+		t.Fatalf("BLE open retry count=%d, want 2", opens.Load())
+	}
+	if err := adapter.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestAdapterBLEReleaseDisconnectsAndSuppressesReconnect(t *testing.T) {
 	link := &countingCompanionLink{scriptedCompanionLink: scriptedCompanionLink{frames: [][]byte{
 		readHexFixture(t, "device-info-v1.17.1.hex"), readHexFixture(t, "self-info-v1.17.1.hex"),
@@ -492,11 +543,21 @@ func TestAdapterBLEReleaseDisconnectsAndSuppressesReconnect(t *testing.T) {
 	}
 }
 
-func TestAdapterBLEReleaseDisconnectsInFlightOpen(t *testing.T) {
+func TestAdapterBLEReleaseDuringOpenCancelsAndResumeReconnects(t *testing.T) {
 	adapter := NewAdapter(Config{Transport: "ble", BLE: BLEConfig{PeerAddress: "AA:BB:CC:DD:EE:FF"}}, nil, nil)
-	opened := make(chan struct{})
+	adapter.bleOpenTimeout = time.Hour
+	adapter.reconnectDelay = time.Millisecond
+	opened := make(chan struct{}, 1)
+	cancelled := make(chan error, 1)
+	connected := &scriptedCompanionLink{frames: [][]byte{
+		readHexFixture(t, "device-info-v1.17.1.hex"), readHexFixture(t, "self-info-v1.17.1.hex"),
+	}}
+	var opens atomic.Int32
 	adapter.newBLETransport = func(BLEConfig) CompanionTransport {
-		return blockingOpenTransport{opened: opened}
+		if opens.Add(1) == 1 {
+			return blockingOpenTransport{opened: opened, cancelled: cancelled}
+		}
+		return staticCompanionTransport{link: connected}
 	}
 	deviceDisconnect := make(chan struct{}, 1)
 	adapter.disconnectBLE = func(context.Context, BLEConfig) error {
@@ -514,9 +575,31 @@ func TestAdapterBLEReleaseDisconnectsInFlightOpen(t *testing.T) {
 		t.Fatal(err)
 	}
 	select {
+	case err := <-cancelled:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("BLE open cancellation=%v, want context canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("release did not cancel an in-flight BLE open")
+	}
+	select {
 	case <-deviceDisconnect:
 	case <-time.After(time.Second):
 		t.Fatal("release did not disconnect a BLE device during an in-flight open")
+	}
+	if status := adapter.DetailedSnapshot(); status.State != StateReleased || !status.ReconnectSuppressed || !status.ReleasedByUser {
+		t.Fatalf("release did not remain authoritative: %#v", status)
+	}
+	time.Sleep(20 * time.Millisecond)
+	if opens.Load() != 1 {
+		t.Fatalf("release allowed a reconnect attempt: opens=%d", opens.Load())
+	}
+	if err := adapter.Resume(); err != nil {
+		t.Fatal(err)
+	}
+	waitForAdapterState(t, adapter, StateConnected)
+	if opens.Load() != 2 {
+		t.Fatalf("resume did not start another BLE open: opens=%d", opens.Load())
 	}
 	if err := adapter.Close(); err != nil {
 		t.Fatal(err)
@@ -623,7 +706,10 @@ func (failingCompanionTransport) Open(context.Context) (CompanionLink, error) {
 	return nil, errors.New("BlueZ unavailable")
 }
 
-type blockingOpenTransport struct{ opened chan<- struct{} }
+type blockingOpenTransport struct {
+	opened    chan<- struct{}
+	cancelled chan<- error
+}
 
 func (t blockingOpenTransport) Open(ctx context.Context) (CompanionLink, error) {
 	select {
@@ -632,7 +718,14 @@ func (t blockingOpenTransport) Open(ctx context.Context) (CompanionLink, error) 
 		return nil, ctx.Err()
 	}
 	<-ctx.Done()
-	return nil, ctx.Err()
+	err := ctx.Err()
+	if t.cancelled != nil {
+		select {
+		case t.cancelled <- err:
+		default:
+		}
+	}
+	return nil, err
 }
 
 type discardSink struct{}
