@@ -173,14 +173,17 @@ contact, and responds `RESP_CODE_OK`; an unknown contact responds with
 
 The controller fingerprints only the observable route mode and route-hash
 sequence; hashes are not repeater identities. A successful usable route clears
-the streak, closes the episode, and updates its route generation. That makes a later stale
-generation eligible for one new reset. Until such a success, an acknowledged
-reset is never repeated in that episode: continuous direct failures, a failing
-flood, or a disconnect cannot generate reset loops. If the reset command
-itself fails, Companion state is unchanged, so Receiver retries it only after
-another full three-timeout streak on the same confirmed direct route (at 3,
-6, 9, ... failures). Manual tracking retains its existing 30s/60s/... capped
-backoff. An explicitly active Session instead
+the streak, closes the episode, and updates its route generation. An
+acknowledged reset is not repeated while Companion remains on that same route
+or in flood. However, Companion can learn a new route before Receiver accepts
+a telemetry response. The controller rearms a new bounded episode when it
+observes a changed route-hash sequence, a flood-to-direct transition after the
+reset, or a `PUSH_CODE_PATH_UPDATED` notice followed by direct traffic. Thus a
+new route can receive its own three-timeout reset even if its compact hash is
+the same as the route that was reset. If the reset command itself fails,
+Companion state is unchanged, so Receiver retries it only after another full
+three-timeout streak on the same confirmed direct route (at 3, 6, 9, ...
+failures). Manual tracking retains its existing 30s/60s/... capped backoff. An explicitly active Session instead
 continues normal motion-cadenced discovery after remote RF failures, but still
 makes no extra reset requests.
 
@@ -191,9 +194,10 @@ events (`path_reset_acknowledged` or `path_reset_failed`) are likewise attached
 to the timeout that caused them. Each poll additionally exposes
 `staleRouteFailures`; status exposes that streak, its threshold, and
 `pathResetAttempts` alongside the current episode, last recovery event, route generation, and route
-fingerprint. Field testing can therefore distinguish a first/second retained
-explicit-path failure, the threshold-triggered reset, a fallback flood, and a
-completed recovery.
+fingerprint. `new_route_observed` identifies rearming before an accepted
+telemetry response. Field testing can therefore distinguish a first/second
+retained explicit-path failure, the threshold-triggered reset, a fallback
+flood, a newly learned route, and a completed recovery.
 
 `PUSH_CODE_PATH_UPDATED` carries only the contact public key
 ([`MyMesh.cpp:377-382`](https://github.com/meshcore-dev/MeshCore/blob/d92964352441e53b93e8667b802e04f6e072b39e/examples/companion_radio/MyMesh.cpp#L377-L382)). It marks the active target for a fresh normal pre-poll contact
@@ -210,11 +214,11 @@ response routing remains unknown.
    Verify every visible direct-range poll is `zero_hop` with `pathLength: 0`;
    after three same-route direct failures, verify exactly one reset event and then a fresh
    normal contact snapshot. Confirm a later actual flood is recorded as
-   `flood_attempted`, a flood failure does not reset again, and a successful
-   flood or learned route completes the episode. Return to direct range and
-   confirm a zero-hop success; then make the route stale again and verify one
-   new reset for that later episode, with Session failures continuing at the
-   current motion cadence.
+   `flood_attempted`, and that flood failures do not reset again. If a path
+   update or flood-to-direct transition supplies a new direct route before a
+   response, verify `new_route_observed` then one reset after that route's
+   third timeout. Return to direct range and confirm a zero-hop success, with
+   Session failures continuing at the current motion cadence.
 # Session-managed operation
 
 The adaptive poller can be owned by an active LoRaMapr Session. The receiver
@@ -254,9 +258,10 @@ state remains the scheduling input until a later valid telemetry response
 changes it through the normal hysteresis rules.
 
 This applies only to remote RF/path failures while `controlSource=session`.
-The recovery episode still permits only one `CMD_RESET_PATH`; subsequent polls
-can be ordinary firmware-selected flood/discovery attempts at the table's
-cadence, and a successful response closes the episode. Manual/diagnostic
+The recovery episode permits only one `CMD_RESET_PATH` per observed route
+generation; subsequent polls can be ordinary firmware-selected flood/discovery
+attempts at the table's cadence, and a successful response closes the episode.
+Manual/diagnostic
 tracking keeps its exponential backoff. Local adapter-disconnected failures
 also retain bounded adapter-recovery backoff regardless of ownership, distinct
 from remote coverage discovery.

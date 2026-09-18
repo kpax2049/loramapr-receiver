@@ -561,6 +561,61 @@ func TestTrackingRouteRecoveryEpisodesAreRepeatableAndActual(t *testing.T) {
 	}
 }
 
+func TestTrackingPathUpdateRearmsAcknowledgedRecoveryBeforeTelemetrySuccess(t *testing.T) {
+	controller := activeTrackingController()
+	var resets atomic.Int32
+	controller.reset = func(context.Context, string) error { resets.Add(1); return nil }
+	at := time.Date(2026, 9, 18, 6, 48, 36, 0, time.UTC)
+	explicit := func(observedAt time.Time) TelemetryResult {
+		result := telemetryFix(52, 13, observedAt)
+		// Deliberately retain the same compact hash for both generations: a
+		// PATH_UPDATED notice, not hash identity, proves the new generation.
+		result.RouteAttempt = RouteEvidence{Mode: RouteModeExplicitPath, Path: []string{"18"}, PathLength: 1, Source: "contact_out_path+response_sent"}
+		return result
+	}
+	flood := TelemetryResult{RouteAttempt: RouteEvidence{Mode: RouteModeFlood, Source: "response_sent"}}
+
+	// A successful explicit path A becomes stale and is reset only after the
+	// normal three-timeout threshold.
+	controller.recordSuccess(trackingKey, 1, explicit(at))
+	for attempt := 1; attempt <= staleRouteFailureThreshold; attempt++ {
+		recordRouteTimeout(controller, explicit(at.Add(time.Duration(attempt)*30*time.Second)))
+	}
+	if status := controller.Status(); resets.Load() != 1 || !status.RecoveryEpisodeActive || status.LastRouteRecoveryEvent != "path_reset_acknowledged" {
+		t.Fatalf("route A reset status=%#v resets=%d", status, resets.Load())
+	}
+
+	// Remaining in flood after the acknowledged reset never creates another
+	// reset, even across many failed requests.
+	for attempt := 1; attempt <= 5; attempt++ {
+		recordRouteTimeout(controller, flood)
+	}
+	if status := controller.Status(); resets.Load() != 1 || !status.RecoveryEpisodeActive || !controller.floodObservedAfterReset {
+		t.Fatalf("flood failures created a reset or lost transition state: %#v resets=%d", status, resets.Load())
+	}
+
+	// Companion can publish PATH_UPDATED and learn explicit path B before any
+	// telemetry response is accepted. The first B timeout rearms a new episode,
+	// and B becomes eligible for its own reset at the same threshold.
+	controller.HandlePathUpdated(trackingKey, at.Add(6*time.Minute))
+	for attempt := 1; attempt < staleRouteFailureThreshold; attempt++ {
+		if got := recordRouteTimeout(controller, explicit(at.Add(time.Duration(6+attempt)*time.Minute))); got != "" {
+			t.Fatalf("route B timeout %d recovery=%q", attempt, got)
+		}
+	}
+	status := controller.Status()
+	firstB := status.RecentPolls[len(status.RecentPolls)-2]
+	if firstB.RouteRecovery != "new_route_observed" || !firstB.PathUpdateObserved || firstB.StaleRouteFailures != 1 || status.RecoveryEpisodeActive || status.StaleRouteFailures != staleRouteFailureThreshold-1 || resets.Load() != 1 {
+		t.Fatalf("route B was not rearmed: %#v firstB=%#v resets=%d", status, firstB, resets.Load())
+	}
+	if got := recordRouteTimeout(controller, explicit(at.Add(9*time.Minute))); got != "path_reset_acknowledged" {
+		t.Fatalf("route B threshold recovery=%q", got)
+	}
+	if status := controller.Status(); resets.Load() != 2 || !status.RecoveryEpisodeActive || status.LastRouteRecoveryEvent != "path_reset_acknowledged" || status.PathResetAttempts != 1 {
+		t.Fatalf("route B did not receive a bounded second reset: %#v resets=%d", status, resets.Load())
+	}
+}
+
 func TestTrackingRecoveryNeverLabelsFloodWithoutAnActualFloodPoll(t *testing.T) {
 	controller := activeTrackingController()
 	controller.recoveryEpisodeActive = true
