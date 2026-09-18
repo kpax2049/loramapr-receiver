@@ -230,6 +230,8 @@
     text("tracking-speed", formatNumber(tracking.estimatedSpeedKmh, " km/h", 1));
     text("tracking-interval", optional(tracking.currentIntervalSeconds, "unknown") + " s");
     text("tracking-failures", optional(tracking.consecutiveFailures, "0"));
+    text("tracking-stale-route-failures", optional(tracking.staleRouteFailures, "0") + " / " + optional(tracking.staleRouteFailureThreshold, "3"));
+    text("tracking-path-reset-attempts", optional(tracking.pathResetAttempts, "0"));
     text("tracking-next", tracking.nextRequestAt ? formatTime(tracking.nextRequestAt) : "not scheduled");
     text("tracking-recovery", optional(tracking.routeRecoveryState, "idle"));
     text("tracking-recovery-event", optional(tracking.lastRouteRecoveryEvent, "none"));
@@ -289,7 +291,7 @@
       addCell(row, optional(poll.motionState, "unknown"), formatNumber(poll.estimatedSpeedKmh, " km/h", 1));
       addCell(row, optional(poll.intervalSeconds, "unknown") + " s");
       addCell(row, optional(poll.routeRecovery, "none"), poll.responseRouteUnknown ? "Response route unknown" : "Response route supplied");
-      addCell(row, poll.pathUpdateObserved ? "Path update observed" : "No path update", "Failures: " + optional(poll.consecutiveFailures, "0"));
+      addCell(row, poll.pathUpdateObserved ? "Path update observed" : "No path update", "Failures: " + optional(poll.consecutiveFailures, "0") + "; stale route: " + optional(poll.staleRouteFailures, "0"));
       body.appendChild(row);
     });
   }

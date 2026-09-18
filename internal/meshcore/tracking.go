@@ -120,6 +120,9 @@ type TrackingStatus struct {
 	RouteRecoveryState          string      `json:"routeRecoveryState"`
 	LastRouteRecoveryEvent      string      `json:"lastRouteRecoveryEvent"`
 	RecoveryEpisodeActive       bool        `json:"recoveryEpisodeActive"`
+	PathResetAttempts           int         `json:"pathResetAttempts"`
+	StaleRouteFailures          int         `json:"staleRouteFailures"`
+	StaleRouteFailureThreshold  int         `json:"staleRouteFailureThreshold"`
 	RouteGeneration             uint64      `json:"routeGeneration"`
 	RouteFingerprint            string      `json:"routeFingerprint"`
 	LastPathUpdateAt            *time.Time  `json:"lastPathUpdateAt"`
@@ -138,7 +141,10 @@ type TrackingStatus struct {
 	ReconciliationError *string          `json:"reconciliationError,omitempty"`
 }
 
-const recentPollLimit = 50
+const (
+	recentPollLimit            = 50
+	staleRouteFailureThreshold = 3
+)
 
 // TrackingPoll is bounded, receiver-local route observability for field
 // validation. ResponseRoute remains nil unless a future Companion payload
@@ -155,6 +161,7 @@ type TrackingPoll struct {
 	ResponseRoute        *RouteEvidence `json:"responseRoute"`
 	ResponseRouteUnknown bool           `json:"responseRouteUnknown"`
 	RouteRecovery        string         `json:"routeRecovery,omitempty"`
+	StaleRouteFailures   int            `json:"staleRouteFailures"`
 	PathUpdateObserved   bool           `json:"pathUpdateObserved"`
 	ConsecutiveFailures  int            `json:"consecutiveFailures"`
 	TelemetryTransport   string         `json:"telemetryTransport,omitempty"`
@@ -200,6 +207,9 @@ type TrackingController struct {
 	routeGeneration       uint64
 	recoveryEpisodeActive bool
 	pendingRecoveryEvent  string
+	staleRouteFingerprint string
+	staleRouteFailures    int
+	pathResetAcknowledged bool
 }
 
 // SetSuccessfulTelemetryStager installs the receiver outbox seam for
@@ -227,7 +237,7 @@ func NewTrackingControllerWithRouteRecovery(request func(context.Context, string
 		logger = slog.Default()
 	}
 	p := policy.normalized()
-	return &TrackingController{request: request, reset: reset, policy: p, logger: logger.With("component", "meshcore_tracking"), now: func() time.Time { return time.Now().UTC() }, scheduleChanged: make(chan struct{}, 1), status: TrackingStatus{MotionState: MotionUnknown, CurrentIntervalSeconds: int64(p.UnknownInterval / time.Second), RecentPolls: []TrackingPoll{}}}
+	return &TrackingController{request: request, reset: reset, policy: p, logger: logger.With("component", "meshcore_tracking"), now: func() time.Time { return time.Now().UTC() }, scheduleChanged: make(chan struct{}, 1), status: TrackingStatus{MotionState: MotionUnknown, CurrentIntervalSeconds: int64(p.UnknownInterval / time.Second), StaleRouteFailureThreshold: staleRouteFailureThreshold, RecentPolls: []TrackingPoll{}}}
 }
 
 // SetControlSource sets the single authoritative owner for polling policy and
@@ -311,8 +321,10 @@ func (c *TrackingController) Start(publicKey string) (TrackingStatus, error) {
 	generation := c.generation
 	c.fix, c.pending, c.pendingCount = nil, MotionUnknown, 0
 	c.routeFingerprint, c.routeGeneration, c.recoveryEpisodeActive, c.pendingRecoveryEvent = "", 0, false, ""
+	c.staleRouteFingerprint, c.staleRouteFailures = "", 0
+	c.pathResetAcknowledged = false
 	c.clearScheduleChangedLocked()
-	c.status = TrackingStatus{Active: true, TargetPublicKey: publicKey, MotionState: MotionUnknown, CurrentIntervalSeconds: int64(c.policy.UnknownInterval / time.Second), ControlSource: c.controlSource, RouteRecoveryState: "idle", RecentPolls: []TrackingPoll{}}
+	c.status = TrackingStatus{Active: true, TargetPublicKey: publicKey, MotionState: MotionUnknown, CurrentIntervalSeconds: int64(c.policy.UnknownInterval / time.Second), ControlSource: c.controlSource, RouteRecoveryState: "idle", StaleRouteFailureThreshold: staleRouteFailureThreshold, RecentPolls: []TrackingPoll{}}
 	now := c.now().UTC()
 	c.status.NextRequestAt = timePtr(now)
 	c.logger.Info("MeshCore tracking started", "target_public_key", publicKey)
@@ -341,9 +353,14 @@ func (c *TrackingController) Stop() TrackingStatus {
 	// Companion to another client.
 	c.fix, c.pending, c.pendingCount = nil, MotionUnknown, 0
 	c.routeFingerprint, c.routeGeneration, c.recoveryEpisodeActive, c.pendingRecoveryEvent = "", 0, false, ""
+	c.staleRouteFingerprint, c.staleRouteFailures = "", 0
+	c.pathResetAcknowledged = false
 	c.status.RouteRecoveryState = "idle"
 	c.status.LastRouteRecoveryEvent = ""
 	c.status.RecoveryEpisodeActive = false
+	c.status.PathResetAttempts = 0
+	c.status.StaleRouteFailures = 0
+	c.status.StaleRouteFailureThreshold = staleRouteFailureThreshold
 	c.status.RouteGeneration = 0
 	c.status.RouteFingerprint = ""
 	c.status.LastPathUpdateAt = nil
@@ -544,20 +561,44 @@ func (c *TrackingController) withSuccessfulRouteEvidence(target string, generati
 }
 
 func (c *TrackingController) recoverStaleRouteTimeout(ctx context.Context, target string, generation uint64, result TelemetryResult, err error) string {
-	if !errors.Is(err, ErrTelemetryTimeout) || !recoverableRoute(result.RouteAttempt) || c.reset == nil {
-		return ""
-	}
 	c.mu.Lock()
-	if !c.currentLocked(target, generation) || c.recoveryEpisodeActive || ctx.Err() != nil {
+	if !c.currentLocked(target, generation) {
 		c.mu.Unlock()
 		return ""
 	}
-	c.recoveryEpisodeActive = true
+	// The contact snapshot is only an observation. Reset a Companion-owned
+	// path only after RESP_CODE_SENT confirmed the same request was actually
+	// sent as direct, and only after a short same-route timeout streak.
+	if !errors.Is(err, ErrTelemetryTimeout) || !staleRouteCandidate(result.RouteAttempt) || c.reset == nil {
+		c.clearStaleRouteFailuresLocked()
+		c.mu.Unlock()
+		return ""
+	}
+	c.noteStaleRouteFailureLocked(result.RouteAttempt)
+	if c.staleRouteFailures < staleRouteFailureThreshold || ctx.Err() != nil {
+		c.mu.Unlock()
+		return ""
+	}
+	if c.recoveryEpisodeActive {
+		// An acknowledged reset already changed Companion state; wait for the
+		// resulting normal flood/path-learning traffic rather than sending more
+		// resets. A failed command changed nothing, so retry only after another
+		// complete same-route streak (3, 6, 9...) to avoid a command loop.
+		if c.pathResetAcknowledged || c.staleRouteFailures%staleRouteFailureThreshold != 0 {
+			c.mu.Unlock()
+			return ""
+		}
+	} else {
+		c.recoveryEpisodeActive = true
+		c.status.PathResetAttempts = 0
+	}
 	c.status.RouteRecoveryState = "path_reset_requested"
 	c.status.RecoveryEpisodeActive = true
 	c.status.LastRouteRecoveryEvent = "path_reset_requested"
+	c.status.PathResetAttempts++
+	staleFailures := c.staleRouteFailures
 	c.mu.Unlock()
-	c.logger.Warn("MeshCore tracking stale-route telemetry timed out; requesting path reset", "target_public_key", target, "route_mode", result.RouteAttempt.Mode, "path_length", result.RouteAttempt.PathLength)
+	c.logger.Warn("MeshCore tracking stale-route timeout threshold reached; requesting path reset", "target_public_key", target, "route_mode", result.RouteAttempt.Mode, "path_length", result.RouteAttempt.PathLength, "stale_route_failures", staleFailures, "stale_route_failure_threshold", staleRouteFailureThreshold)
 	if err := c.reset(ctx, target); err != nil {
 		c.mu.Lock()
 		if c.currentLocked(target, generation) {
@@ -573,6 +614,7 @@ func (c *TrackingController) recoverStaleRouteTimeout(ctx context.Context, targe
 	if c.currentLocked(target, generation) {
 		c.status.RouteRecoveryState = "recovery_active"
 		c.status.LastRouteRecoveryEvent = "path_reset_acknowledged"
+		c.pathResetAcknowledged = true
 		c.pendingRecoveryEvent = "path_reset_acknowledged"
 	}
 	c.mu.Unlock()
@@ -596,6 +638,7 @@ func (c *TrackingController) recordSuccess(target string, generation uint64, res
 	latest := copyTelemetryResult(result)
 	c.status.LatestTelemetry = &latest
 	c.status.ConsecutiveFailures, c.status.LastError = 0, nil
+	c.clearStaleRouteFailuresLocked()
 	c.recordTelemetryDiagnosticsLocked(result, nil)
 	c.applyFixLocked(result)
 	c.status.CurrentIntervalSeconds = int64(c.intervalForLocked() / time.Second)
@@ -608,6 +651,7 @@ func (c *TrackingController) recordSuccess(target string, generation uint64, res
 		EstimatedSpeedKmh: copyFloat64(c.status.EstimatedSpeedKmh), MotionState: c.status.MotionState,
 		IntervalSeconds: c.status.CurrentIntervalSeconds, RouteAttempt: routeEvidenceOrUnknown(result.RouteAttempt),
 		ResponseRouteUnknown: true, RouteRecovery: recovery, PathUpdateObserved: pathUpdateObserved, ConsecutiveFailures: c.status.ConsecutiveFailures,
+		StaleRouteFailures: c.status.StaleRouteFailures,
 		TelemetryTransport: result.Transport, RequestTag: copyUint32(result.RequestTag), ResponseTag: copyUint32(result.ResponseTag), FallbackReason: result.FallbackReason,
 		RFEvidence: copyRFEvidence(result.RFEvidence),
 	})
@@ -650,6 +694,7 @@ func (c *TrackingController) recordFailure(target string, generation uint64, res
 		EstimatedSpeedKmh: copyFloat64(c.status.EstimatedSpeedKmh), MotionState: c.status.MotionState,
 		IntervalSeconds: c.status.CurrentIntervalSeconds, RouteAttempt: routeEvidenceOrUnknown(result.RouteAttempt),
 		ResponseRouteUnknown: true, RouteRecovery: recovery, PathUpdateObserved: pathUpdateObserved, ConsecutiveFailures: c.status.ConsecutiveFailures,
+		StaleRouteFailures: c.status.StaleRouteFailures,
 		TelemetryTransport: result.Transport, RequestTag: copyUint32(result.RequestTag), ResponseTag: copyUint32(result.ResponseTag), FallbackReason: result.FallbackReason, ScheduleSource: scheduleSource,
 		RFEvidence: copyRFEvidence(result.RFEvidence),
 	})
@@ -712,11 +757,40 @@ func recoverableRoute(evidence RouteEvidence) bool {
 	return evidence.Mode == RouteModeZeroHop || evidence.Mode == RouteModeExplicitPath
 }
 
+// staleRouteCandidate requires both the cached-contact snapshot and the
+// firmware's direct-send acknowledgement. A contact path alone does not prove
+// that the telemetry command reached the send path, so it must not trigger a
+// contact mutation.
+func staleRouteCandidate(evidence RouteEvidence) bool {
+	return recoverableRoute(evidence) && evidence.Source == "contact_out_path+response_sent"
+}
+
 func routeFingerprint(evidence RouteEvidence) string {
 	if !recoverableRoute(evidence) && evidence.Mode != RouteModeFlood {
 		return ""
 	}
 	return string(evidence.Mode) + ":" + strings.Join(evidence.Path, ",")
+}
+
+func (c *TrackingController) noteStaleRouteFailureLocked(evidence RouteEvidence) {
+	fingerprint := routeFingerprint(evidence)
+	if fingerprint == "" {
+		c.clearStaleRouteFailuresLocked()
+		return
+	}
+	if c.staleRouteFingerprint != fingerprint {
+		c.staleRouteFingerprint, c.staleRouteFailures = fingerprint, 1
+	} else {
+		c.staleRouteFailures++
+	}
+	c.status.StaleRouteFailures = c.staleRouteFailures
+	c.status.StaleRouteFailureThreshold = staleRouteFailureThreshold
+}
+
+func (c *TrackingController) clearStaleRouteFailuresLocked() {
+	c.staleRouteFingerprint, c.staleRouteFailures = "", 0
+	c.status.StaleRouteFailures = 0
+	c.status.StaleRouteFailureThreshold = staleRouteFailureThreshold
 }
 
 // routeRecoveryForPollLocked creates history evidence only for an actual
@@ -759,6 +833,7 @@ func (c *TrackingController) establishRouteLocked(evidence RouteEvidence) {
 	}
 	if c.recoveryEpisodeActive {
 		c.recoveryEpisodeActive = false
+		c.pathResetAcknowledged = false
 		c.status.RecoveryEpisodeActive = false
 		c.status.RouteRecoveryState = "recovery_complete"
 		c.status.LastRouteRecoveryEvent = "route_recovered"
