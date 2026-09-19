@@ -74,10 +74,13 @@ type ReceiverHeartbeat struct {
 // local adapter. It never carries device paths, raw evidence, credentials, or
 // arbitrary diagnostic strings.
 type ReceiverAdapterStatus struct {
-	Protocol        string                         `json:"protocol"`
-	Enabled         bool                           `json:"enabled"`
-	Configured      bool                           `json:"configured"`
-	Lifecycle       string                         `json:"lifecycle"`
+	Protocol   string `json:"protocol"`
+	Enabled    bool   `json:"enabled"`
+	Configured bool   `json:"configured"`
+	Lifecycle  string `json:"lifecycle"`
+	// ConnectionState is the Receiver-native connection authority. Connected
+	// remains on the wire for older Cloud deployments during the migration.
+	ConnectionState string                         `json:"connectionState,omitempty"`
 	Connected       bool                           `json:"connected"`
 	Ready           bool                           `json:"ready"`
 	Transport       string                         `json:"transport,omitempty"`

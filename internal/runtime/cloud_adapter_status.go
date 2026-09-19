@@ -24,7 +24,8 @@ func cloudAdapterStatuses(adapters []status.AdapterStatus) []cloudclient.Receive
 		profileState := cloudProfileState(adapter.ProfileState)
 		item := cloudclient.ReceiverAdapterStatus{
 			Protocol: protocol, Enabled: adapter.Enabled, Configured: adapter.Configured,
-			Lifecycle: lifecycle, Connected: adapter.ConnectionState == "connected", Ready: adapter.Ready && profileState != "raw_capture_only",
+			Lifecycle: lifecycle, ConnectionState: cloudConnectionState(adapter.ConnectionState),
+			Connected: adapter.ConnectionState == "connected", Ready: adapter.Ready,
 			Transport: cloudTransport(adapter.Transport), ProtocolVersion: boundedProtocolVersion(adapter.ProtocolVersion),
 			ProfileState: profileState, ErrorCode: cloudAdapterErrorCode(lifecycle),
 		}
@@ -48,10 +49,17 @@ func allowedAdapterLifecycle(value string) bool {
 	return false
 }
 func cloudTransport(value string) string {
-	if value == "physical_serial" || value == "serial" || value == "bridge" || value == "json_stream" || value == "disabled" {
+	if value == "physical_serial" || value == "ble" || value == "serial" || value == "bridge" || value == "json_stream" || value == "disabled" {
 		return value
 	}
 	return ""
+}
+func cloudConnectionState(value string) string {
+	switch value {
+	case "connecting", "reconnecting", "connected", "disconnected", "unknown":
+		return value
+	}
+	return "unknown"
 }
 func boundedProtocolVersion(value string) string {
 	value = strings.TrimSpace(value)

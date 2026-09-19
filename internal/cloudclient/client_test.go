@@ -240,8 +240,16 @@ func TestSendReceiverHeartbeat(t *testing.T) {
 			if err := json.NewDecoder(req.Body).Decode(&payload); err != nil {
 				t.Fatalf("decode request: %v", err)
 			}
-			if payload["runtimeVersion"] != "1.0.0" {
+			if payload["runtimeVersion"] != "dev" {
 				t.Fatalf("unexpected runtime version payload: %#v", payload)
+			}
+			adapters, ok := payload["adapters"].([]any)
+			if !ok || len(adapters) != 1 {
+				t.Fatalf("unexpected adapter payload: %#v", payload)
+			}
+			adapter, ok := adapters[0].(map[string]any)
+			if !ok || adapter["connectionState"] != "connected" || adapter["connected"] != true || adapter["ready"] != true || adapter["transport"] != "ble" {
+				t.Fatalf("unexpected adapter status payload: %#v", adapters[0])
 			}
 			return jsonResponse(http.StatusCreated, `{
 				"receiverAgentId":"agent-1",
@@ -267,12 +275,16 @@ func TestSendReceiverHeartbeat(t *testing.T) {
 	}
 
 	ack, err := client.SendReceiverHeartbeat(context.Background(), "/api/receiver/heartbeat", "ingest-secret", ReceiverHeartbeat{
-		RuntimeVersion:  "1.0.0",
+		RuntimeVersion:  "dev",
 		Platform:        "linux",
 		Arch:            "arm64",
 		LocalNodeID:     "!home",
 		ObservedNodeIDs: []string{"!node-1", "!node-2"},
 		Status:          map[string]any{"queueDepth": 1},
+		Adapters: []ReceiverAdapterStatus{{
+			Protocol: "meshcore", Enabled: true, Configured: true, Lifecycle: "connected",
+			ConnectionState: "connected", Connected: true, Ready: true, Transport: "ble",
+		}},
 	})
 	if err != nil {
 		t.Fatalf("SendReceiverHeartbeat returned error: %v", err)
