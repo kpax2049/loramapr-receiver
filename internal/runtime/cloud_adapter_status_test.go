@@ -32,3 +32,10 @@ func TestCloudAdapterStatusesPreserveReadyRawCaptureState(t *testing.T) {
 		t.Fatalf("unexpected raw-capture-only projection: %#v", items)
 	}
 }
+
+func TestCloudAdapterStatusesMarksIntentionalBLEReleaseWithoutDeviceIdentity(t *testing.T) {
+	items := cloudAdapterStatuses([]status.AdapterStatus{{Protocol: "meshcore", Enabled: true, Configured: true, Lifecycle: "released", ConnectionState: "disconnected", Transport: "ble", ReleasedByUser: true, ConfiguredDevice: "AA:BB:CC:DD:EE:FF"}})
+	if len(items) != 1 || !items[0].IntentionalRelease || items[0].Lifecycle != "released" || items[0].Connected {
+		t.Fatalf("unexpected released cloud status: %#v", items)
+	}
+}

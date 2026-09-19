@@ -61,13 +61,14 @@ type ActivationResult struct {
 }
 
 type ReceiverHeartbeat struct {
-	RuntimeVersion  string
-	Platform        string
-	Arch            string
-	LocalNodeID     string
-	ObservedNodeIDs []string
-	Status          map[string]any
-	Adapters        []ReceiverAdapterStatus
+	RuntimeVersion           string
+	Platform                 string
+	Arch                     string
+	LocalNodeID              string
+	ObservedNodeIDs          []string
+	Status                   map[string]any
+	Adapters                 []ReceiverAdapterStatus
+	MeshCoreBLEControlResult *MeshCoreBLEControlResult
 }
 
 // ReceiverAdapterStatus is the deliberately small cloud-safe projection of a
@@ -80,14 +81,22 @@ type ReceiverAdapterStatus struct {
 	Lifecycle  string `json:"lifecycle"`
 	// ConnectionState is the Receiver-native connection authority. Connected
 	// remains on the wire for older Cloud deployments during the migration.
-	ConnectionState string                         `json:"connectionState,omitempty"`
-	Connected       bool                           `json:"connected"`
-	Ready           bool                           `json:"ready"`
-	Transport       string                         `json:"transport,omitempty"`
-	ProtocolVersion string                         `json:"protocolVersion,omitempty"`
-	ProfileState    string                         `json:"profileState,omitempty"`
-	ErrorCode       string                         `json:"errorCode,omitempty"`
-	Delivery        *ReceiverAdapterDeliveryStatus `json:"delivery,omitempty"`
+	ConnectionState    string                         `json:"connectionState,omitempty"`
+	Connected          bool                           `json:"connected"`
+	Ready              bool                           `json:"ready"`
+	Transport          string                         `json:"transport,omitempty"`
+	ProtocolVersion    string                         `json:"protocolVersion,omitempty"`
+	ProfileState       string                         `json:"profileState,omitempty"`
+	ErrorCode          string                         `json:"errorCode,omitempty"`
+	IntentionalRelease bool                           `json:"intentionalRelease,omitempty"`
+	Delivery           *ReceiverAdapterDeliveryStatus `json:"delivery,omitempty"`
+}
+
+type MeshCoreBLEControlResult struct {
+	Version   string `json:"version"`
+	Operation string `json:"operation"`
+	State     string `json:"state"`
+	ErrorCode string `json:"errorCode,omitempty"`
 }
 
 type ReceiverAdapterDeliveryStatus struct {
@@ -124,17 +133,26 @@ type HomeAutoSessionManagedConfig struct {
 }
 
 type ReceiverHeartbeatAck struct {
-	ReceiverAgentID        string
-	OwnerID                string
-	ReceiverLabel          string
-	SiteLabel              string
-	GroupLabel             string
-	ConfigVersion          string
-	LastHeartbeatAt        time.Time
-	NodeCount              int
-	HomeAutoSessionConfig  *HomeAutoSessionManagedConfig
-	MeshCoreTrackingIntent *MeshCoreTrackingIntent
-	ClockAttestation       *clockattestation.Candidate
+	ReceiverAgentID          string
+	OwnerID                  string
+	ReceiverLabel            string
+	SiteLabel                string
+	GroupLabel               string
+	ConfigVersion            string
+	LastHeartbeatAt          time.Time
+	NodeCount                int
+	HomeAutoSessionConfig    *HomeAutoSessionManagedConfig
+	MeshCoreTrackingIntent   *MeshCoreTrackingIntent
+	MeshCoreBLEControlIntent *MeshCoreBLEControlIntent
+	ClockAttestation         *clockattestation.Candidate
+}
+
+type MeshCoreBLEControlIntent struct {
+	Version         string `json:"version"`
+	Operation       string `json:"operation"`
+	ReceiverAgentID string `json:"receiverAgentId"`
+	InstallationID  string `json:"installationId"`
+	RequestedAt     string `json:"requestedAt"`
 }
 
 // MeshCoreTrackingIntent is a cloud-authoritative snapshot. It is not a
@@ -554,35 +572,38 @@ func (c *HTTPClient) SendReceiverHeartbeat(
 	}
 
 	request := struct {
-		RuntimeVersion  string                  `json:"runtimeVersion,omitempty"`
-		Platform        string                  `json:"platform,omitempty"`
-		Arch            string                  `json:"arch,omitempty"`
-		LocalNodeID     string                  `json:"localNodeId,omitempty"`
-		ObservedNodeIDs []string                `json:"observedNodeIds,omitempty"`
-		Status          map[string]any          `json:"status,omitempty"`
-		Adapters        []ReceiverAdapterStatus `json:"adapters,omitempty"`
+		RuntimeVersion           string                    `json:"runtimeVersion,omitempty"`
+		Platform                 string                    `json:"platform,omitempty"`
+		Arch                     string                    `json:"arch,omitempty"`
+		LocalNodeID              string                    `json:"localNodeId,omitempty"`
+		ObservedNodeIDs          []string                  `json:"observedNodeIds,omitempty"`
+		Status                   map[string]any            `json:"status,omitempty"`
+		Adapters                 []ReceiverAdapterStatus   `json:"adapters,omitempty"`
+		MeshCoreBLEControlResult *MeshCoreBLEControlResult `json:"meshcoreBleControlResult,omitempty"`
 	}{
-		RuntimeVersion:  strings.TrimSpace(heartbeat.RuntimeVersion),
-		Platform:        strings.TrimSpace(heartbeat.Platform),
-		Arch:            strings.TrimSpace(heartbeat.Arch),
-		LocalNodeID:     strings.TrimSpace(heartbeat.LocalNodeID),
-		ObservedNodeIDs: append([]string(nil), heartbeat.ObservedNodeIDs...),
-		Status:          heartbeat.Status,
-		Adapters:        append([]ReceiverAdapterStatus(nil), heartbeat.Adapters...),
+		RuntimeVersion:           strings.TrimSpace(heartbeat.RuntimeVersion),
+		Platform:                 strings.TrimSpace(heartbeat.Platform),
+		Arch:                     strings.TrimSpace(heartbeat.Arch),
+		LocalNodeID:              strings.TrimSpace(heartbeat.LocalNodeID),
+		ObservedNodeIDs:          append([]string(nil), heartbeat.ObservedNodeIDs...),
+		Status:                   heartbeat.Status,
+		Adapters:                 append([]ReceiverAdapterStatus(nil), heartbeat.Adapters...),
+		MeshCoreBLEControlResult: heartbeat.MeshCoreBLEControlResult,
 	}
 
 	var response struct {
-		ReceiverAgentID        string                        `json:"receiverAgentId"`
-		OwnerID                string                        `json:"ownerId"`
-		ReceiverLabel          string                        `json:"receiverLabel"`
-		SiteLabel              string                        `json:"siteLabel"`
-		GroupLabel             string                        `json:"groupLabel"`
-		ConfigVersion          string                        `json:"configVersion"`
-		LastHeartbeatAt        string                        `json:"lastHeartbeatAt"`
-		NodeCount              int                           `json:"nodeCount"`
-		HomeAutoSessionConfig  *HomeAutoSessionManagedConfig `json:"homeAutoSessionConfig"`
-		MeshCoreTrackingIntent *MeshCoreTrackingIntent       `json:"meshcoreTrackingIntent"`
-		ClockAttestation       json.RawMessage               `json:"clockAttestation"`
+		ReceiverAgentID          string                        `json:"receiverAgentId"`
+		OwnerID                  string                        `json:"ownerId"`
+		ReceiverLabel            string                        `json:"receiverLabel"`
+		SiteLabel                string                        `json:"siteLabel"`
+		GroupLabel               string                        `json:"groupLabel"`
+		ConfigVersion            string                        `json:"configVersion"`
+		LastHeartbeatAt          string                        `json:"lastHeartbeatAt"`
+		NodeCount                int                           `json:"nodeCount"`
+		HomeAutoSessionConfig    *HomeAutoSessionManagedConfig `json:"homeAutoSessionConfig"`
+		MeshCoreTrackingIntent   *MeshCoreTrackingIntent       `json:"meshcoreTrackingIntent"`
+		MeshCoreBLEControlIntent *MeshCoreBLEControlIntent     `json:"meshcoreBleControlIntent"`
+		ClockAttestation         json.RawMessage               `json:"clockAttestation"`
 	}
 	meta, err := c.postJSONWithMeta(ctx, heartbeatEndpoint, request, map[string]string{
 		"x-api-key": trimmedKey,
@@ -597,17 +618,18 @@ func (c *HTTPClient) SendReceiverHeartbeat(
 	}
 
 	return ReceiverHeartbeatAck{
-		ReceiverAgentID:        response.ReceiverAgentID,
-		OwnerID:                response.OwnerID,
-		ReceiverLabel:          strings.TrimSpace(response.ReceiverLabel),
-		SiteLabel:              strings.TrimSpace(response.SiteLabel),
-		GroupLabel:             strings.TrimSpace(response.GroupLabel),
-		ConfigVersion:          strings.TrimSpace(response.ConfigVersion),
-		LastHeartbeatAt:        lastHeartbeatAt,
-		NodeCount:              response.NodeCount,
-		HomeAutoSessionConfig:  response.HomeAutoSessionConfig,
-		MeshCoreTrackingIntent: response.MeshCoreTrackingIntent,
-		ClockAttestation:       c.parseClockAttestation(decodeClockWire(response.ClockAttestation), meta.ReceivedAt, meta.Request, meta.Response),
+		ReceiverAgentID:          response.ReceiverAgentID,
+		OwnerID:                  response.OwnerID,
+		ReceiverLabel:            strings.TrimSpace(response.ReceiverLabel),
+		SiteLabel:                strings.TrimSpace(response.SiteLabel),
+		GroupLabel:               strings.TrimSpace(response.GroupLabel),
+		ConfigVersion:            strings.TrimSpace(response.ConfigVersion),
+		LastHeartbeatAt:          lastHeartbeatAt,
+		NodeCount:                response.NodeCount,
+		HomeAutoSessionConfig:    response.HomeAutoSessionConfig,
+		MeshCoreTrackingIntent:   response.MeshCoreTrackingIntent,
+		MeshCoreBLEControlIntent: response.MeshCoreBLEControlIntent,
+		ClockAttestation:         c.parseClockAttestation(decodeClockWire(response.ClockAttestation), meta.ReceivedAt, meta.Request, meta.Response),
 	}, nil
 }
 

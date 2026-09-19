@@ -28,6 +28,7 @@ func cloudAdapterStatuses(adapters []status.AdapterStatus) []cloudclient.Receive
 			Connected: adapter.ConnectionState == "connected", Ready: adapter.Ready,
 			Transport: cloudTransport(adapter.Transport), ProtocolVersion: boundedProtocolVersion(adapter.ProtocolVersion),
 			ProfileState: profileState, ErrorCode: cloudAdapterErrorCode(lifecycle),
+			IntentionalRelease: adapter.ReleasedByUser,
 		}
 		if adapter.Delivery != nil {
 			item.Delivery = &cloudclient.ReceiverAdapterDeliveryStatus{
@@ -43,7 +44,7 @@ func cloudAdapterStatuses(adapters []status.AdapterStatus) []cloudclient.Receive
 func allowedAdapterProtocol(value string) bool { return value == "meshcore" || value == "meshtastic" }
 func allowedAdapterLifecycle(value string) bool {
 	switch value {
-	case "disabled", "not_present", "detected", "opening", "handshaking", "connecting", "connected", "incompatible", "configuration_error", "degraded":
+	case "disabled", "not_present", "detected", "opening", "handshaking", "connecting", "connected", "released", "incompatible", "configuration_error", "degraded":
 		return true
 	}
 	return false

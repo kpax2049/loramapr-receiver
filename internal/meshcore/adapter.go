@@ -357,13 +357,18 @@ func (a *Adapter) Release() error {
 	if attemptCancel != nil {
 		attemptCancel()
 	}
+	// Closing the active GATT link races the cancelled reader's own cleanup.
+	// Its StopNotify/Disconnect calls may time out after BlueZ has accepted the
+	// disconnect. The explicit Device1.Disconnect below is the release outcome
+	// authority: do not report an incomplete physical release until it fails.
+	var linkCloseErr error
 	if link != nil {
-		if err := a.closeLinkBounded(link); err != nil {
-			a.logger.Warn("MeshCore BLE release disconnect did not complete", "err", err)
-		}
+		linkCloseErr = a.closeLinkBounded(link)
 	}
 	if err := a.disconnectBLEBounded(); err != nil {
-		a.logger.Warn("MeshCore BLE release device disconnect did not complete", "err", err)
+		a.logger.Warn("MeshCore BLE release device disconnect did not complete", "err", err, "gatt_cleanup_err", linkCloseErr)
+	} else if linkCloseErr != nil {
+		a.logger.Debug("MeshCore BLE release GATT cleanup did not complete before device disconnect was acknowledged", "err", linkCloseErr)
 	}
 	return nil
 }

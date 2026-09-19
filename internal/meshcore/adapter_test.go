@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"io"
+	"log/slog"
 	"net"
 	"os"
 	"path/filepath"
@@ -543,6 +544,41 @@ func TestAdapterBLEReleaseDisconnectsAndSuppressesReconnect(t *testing.T) {
 	}
 }
 
+func TestAdapterBLEReleaseDoesNotReportIncompleteDisconnectAfterDeviceDisconnectAcknowledged(t *testing.T) {
+	var logs bytes.Buffer
+	adapter := NewAdapter(Config{Transport: "ble", BLE: BLEConfig{PeerAddress: "AA:BB:CC:DD:EE:FF"}}, slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})), nil)
+	adapter.shutdownTimeout = 20 * time.Millisecond
+	adapter.setLink(&errorCloseCompanionLink{scriptedCompanionLink: scriptedCompanionLink{}, err: context.DeadlineExceeded})
+	adapter.disconnectBLE = func(context.Context, BLEConfig) error { return nil }
+
+	if err := adapter.Release(); err != nil {
+		t.Fatal(err)
+	}
+	if status := adapter.DetailedSnapshot(); status.State != StateReleased || !status.ReconnectSuppressed || !status.ReleasedByUser {
+		t.Fatalf("release state=%#v", status)
+	}
+	output := logs.String()
+	if strings.Contains(output, "release device disconnect did not complete") || strings.Contains(output, "release disconnect did not complete") {
+		t.Fatalf("successful device disconnect was reported as incomplete: %s", output)
+	}
+	if !strings.Contains(output, "GATT cleanup did not complete before device disconnect was acknowledged") {
+		t.Fatalf("missing bounded cleanup diagnostic: %s", output)
+	}
+}
+
+func TestAdapterBLEReleaseStillReportsFailedDeviceDisconnect(t *testing.T) {
+	var logs bytes.Buffer
+	adapter := NewAdapter(Config{Transport: "ble", BLE: BLEConfig{PeerAddress: "AA:BB:CC:DD:EE:FF"}}, slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})), nil)
+	adapter.disconnectBLE = func(context.Context, BLEConfig) error { return context.DeadlineExceeded }
+
+	if err := adapter.Release(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(logs.String(), "release device disconnect did not complete") {
+		t.Fatalf("failed device disconnect was not reported: %s", logs.String())
+	}
+}
+
 func TestAdapterBLEReleaseDuringOpenCancelsAndResumeReconnects(t *testing.T) {
 	adapter := NewAdapter(Config{Transport: "ble", BLE: BLEConfig{PeerAddress: "AA:BB:CC:DD:EE:FF"}}, nil, nil)
 	adapter.bleOpenTimeout = time.Hour
@@ -792,6 +828,13 @@ type blockingCloseCompanionLink struct{ scriptedCompanionLink }
 func (*blockingCloseCompanionLink) Close() error {
 	select {}
 }
+
+type errorCloseCompanionLink struct {
+	scriptedCompanionLink
+	err error
+}
+
+func (l *errorCloseCompanionLink) Close() error { return l.err }
 
 func existingDeviceFixture(t *testing.T) string {
 	t.Helper()

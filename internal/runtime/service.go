@@ -89,16 +89,23 @@ type Service struct {
 	// meshcoreBLEMu makes release, pairing, and resume one local lifecycle
 	// transaction. Resume therefore cannot restart the receiver's BLE
 	// reconnect loop while a temporary BlueZ pairing agent is active.
-	meshcoreBLEMu   sync.Mutex
-	container       *Container
-	mode            config.RunMode
-	steady          steadyState
-	build           buildinfo.Info
-	updater         *update.Checker
-	ingestWake      chan struct{}
-	normalizedWake  chan struct{}
-	ingestTrace     bool
-	meshcoreControl meshcoreTrackingControl
+	meshcoreBLEMu      sync.Mutex
+	container          *Container
+	mode               config.RunMode
+	steady             steadyState
+	build              buildinfo.Info
+	updater            *update.Checker
+	ingestWake         chan struct{}
+	normalizedWake     chan struct{}
+	ingestTrace        bool
+	meshcoreControl    meshcoreTrackingControl
+	meshcoreBLEControl meshcoreBLEControl
+}
+
+type meshcoreBLEControl struct {
+	mu             sync.RWMutex
+	appliedVersion string
+	result         *cloudclient.MeshCoreBLEControlResult
 }
 
 type meshcoreTrackingControl struct {
@@ -1474,12 +1481,13 @@ func (s *Service) sendHeartbeat(ctx context.Context, snapshot state.Data, meshSn
 	receiverID := strings.TrimSpace(snapshot.Cloud.ReceiverID)
 
 	ack, err := s.container.Cloud.SendReceiverHeartbeat(callCtx, endpoint, apiKey, cloudclient.ReceiverHeartbeat{
-		RuntimeVersion:  s.build.Version,
-		Platform:        goruntime.GOOS,
-		Arch:            goruntime.GOARCH,
-		LocalNodeID:     meshSnap.LocalNodeID,
-		ObservedNodeIDs: append([]string(nil), meshSnap.ObservedNodeIDs...),
-		Adapters:        cloudAdapterStatuses(updateSnap.Adapters),
+		RuntimeVersion:           s.build.Version,
+		Platform:                 goruntime.GOOS,
+		Arch:                     goruntime.GOARCH,
+		LocalNodeID:              meshSnap.LocalNodeID,
+		ObservedNodeIDs:          append([]string(nil), meshSnap.ObservedNodeIDs...),
+		Adapters:                 cloudAdapterStatuses(updateSnap.Adapters),
+		MeshCoreBLEControlResult: s.meshcoreBLEControlResult(),
 		Status: map[string]any{
 			"installationId":         snapshot.Installation.ID,
 			"localName":              snapshot.Installation.LocalName,
@@ -1629,6 +1637,7 @@ func (s *Service) sendHeartbeat(ctx context.Context, snapshot state.Data, meshSn
 		latest.Cloud.GroupLabel,
 	)
 	s.applyHomeAutoCloudConfigFromAck(ack)
+	s.applyMeshCoreBLEControlIntent(ack.MeshCoreBLEControlIntent, latest, ack)
 	s.applyMeshCoreSessionIntent(ack.MeshCoreTrackingIntent, latest, ack)
 	s.steady.cloudReachable = true
 	s.container.Logger.Info(
@@ -1652,6 +1661,53 @@ func (s *Service) sendHeartbeat(ctx context.Context, snapshot state.Data, meshSn
 		strings.TrimSpace(ack.ConfigVersion),
 	)
 	return nil
+}
+
+func (s *Service) meshcoreBLEControlResult() *cloudclient.MeshCoreBLEControlResult {
+	s.meshcoreBLEControl.mu.RLock()
+	defer s.meshcoreBLEControl.mu.RUnlock()
+	if s.meshcoreBLEControl.result == nil {
+		return nil
+	}
+	value := *s.meshcoreBLEControl.result
+	return &value
+}
+
+// applyMeshCoreBLEControlIntent is the only Cloud-directed BLE executor. It
+// intentionally delegates to the portal lifecycle methods, which already own
+// the adapter lock, tracking shutdown, release gate, and reconnect lifecycle.
+func (s *Service) applyMeshCoreBLEControlIntent(intent *cloudclient.MeshCoreBLEControlIntent, snapshot state.Data, ack cloudclient.ReceiverHeartbeatAck) {
+	if s == nil || intent == nil || s.container == nil {
+		return
+	}
+	if strings.TrimSpace(intent.Version) == "" || intent.ReceiverAgentID != ack.ReceiverAgentID || intent.InstallationID != snapshot.Installation.ID {
+		return
+	}
+	s.meshcoreBLEControl.mu.RLock()
+	alreadyApplied := s.meshcoreBLEControl.appliedVersion == intent.Version
+	s.meshcoreBLEControl.mu.RUnlock()
+	if alreadyApplied {
+		return
+	}
+	var err error
+	switch intent.Operation {
+	case "release_ble":
+		_, err = s.ReleaseMeshCoreBLE(context.Background())
+	case "resume_ble":
+		_, err = s.ResumeMeshCoreBLE(context.Background())
+	default:
+		return
+	}
+	result := &cloudclient.MeshCoreBLEControlResult{Version: intent.Version, Operation: intent.Operation, State: "applied"}
+	if err != nil {
+		result.State, result.ErrorCode = "failed", "receiver_operation_failed"
+	}
+	s.meshcoreBLEControl.mu.Lock()
+	if err == nil {
+		s.meshcoreBLEControl.appliedVersion = intent.Version
+	}
+	s.meshcoreBLEControl.result = result
+	s.meshcoreBLEControl.mu.Unlock()
 }
 
 func (s *Service) meshcoreSessionManaged() bool {

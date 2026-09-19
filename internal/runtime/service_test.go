@@ -84,6 +84,23 @@ func TestReleaseMeshCoreBLEStopsTrackingAndBlocksNewTrackingUntilResume(t *testi
 	}
 }
 
+func TestCloudBLEControlReusesLifecycleAndAcknowledgesOnlyAfterExecution(t *testing.T) {
+	adapter := meshcore.NewAdapter(meshcore.Config{Transport: "ble", BLE: meshcore.BLEConfig{PeerAddress: "AA:BB:CC:DD:EE:FF"}}, nil, nil)
+	svc := &Service{container: &Container{MeshCore: adapter}}
+	snapshot := state.Data{Installation: state.InstallationState{ID: "installation-1"}}
+	ack := cloudclient.ReceiverHeartbeatAck{ReceiverAgentID: "receiver-1"}
+	svc.applyMeshCoreBLEControlIntent(&cloudclient.MeshCoreBLEControlIntent{Version: "ble:1", Operation: "release_ble", ReceiverAgentID: "receiver-1", InstallationID: "installation-1"}, snapshot, ack)
+	result := svc.meshcoreBLEControlResult()
+	if result == nil || result.State != "applied" || result.Operation != "release_ble" || !adapter.ReconnectSuppressed() {
+		t.Fatalf("release result=%#v suppressed=%v", result, adapter.ReconnectSuppressed())
+	}
+	svc.applyMeshCoreBLEControlIntent(&cloudclient.MeshCoreBLEControlIntent{Version: "ble:2", Operation: "resume_ble", ReceiverAgentID: "receiver-1", InstallationID: "installation-1"}, snapshot, ack)
+	result = svc.meshcoreBLEControlResult()
+	if result == nil || result.State != "applied" || result.Operation != "resume_ble" || adapter.ReconnectSuppressed() {
+		t.Fatalf("resume result=%#v suppressed=%v", result, adapter.ReconnectSuppressed())
+	}
+}
+
 func TestPairMeshCoreBLERequiresReleaseAndBlocksResumeUntilPairCompletes(t *testing.T) {
 	t.Parallel()
 	adapter := meshcore.NewAdapter(meshcore.Config{Transport: "ble", BLE: meshcore.BLEConfig{PeerAddress: "AA:BB:CC:DD:EE:FF"}}, nil, nil)
