@@ -101,6 +101,97 @@ func TestCloudBLEControlReusesLifecycleAndAcknowledgesOnlyAfterExecution(t *test
 	}
 }
 
+func TestCloudBLEScanReconciliationReportsCurrentRevisionOnly(t *testing.T) {
+	adapter := meshcore.NewAdapter(meshcore.Config{Transport: "ble", BLE: meshcore.BLEConfig{PeerAddress: "AA:BB:CC:DD:EE:FF"}}, nil, nil)
+	backend := &runtimePairingBackend{devices: []meshcore.BLEDevice{{Address: "11:22:33:44:55:66", Name: "Nearby", Bonded: true}}}
+	cfg := config.Default()
+	cfg.MeshCore.Transport = "ble"
+	cfg.MeshCore.BLE.PeerAddress = "AA:BB:CC:DD:EE:FF"
+	svc := &Service{container: &Container{Config: cfg, MeshCore: adapter, MeshCoreBLE: meshcore.NewBLEPairingBackendWithBackend(backend)}}
+	snapshot := state.Data{Installation: state.InstallationState{ID: "installation-1"}}
+	ack := cloudclient.ReceiverHeartbeatAck{ReceiverAgentID: "receiver-1"}
+	svc.applyMeshCoreBLEControlIntent(&cloudclient.MeshCoreBLEControlIntent{Version: "ble:7", Operation: "scan_ble", ReceiverAgentID: "receiver-1", InstallationID: "installation-1"}, snapshot, ack)
+	control := svc.meshcoreBLEControlResult()
+	discovery := svc.meshcoreBLEDiscoveryResult()
+	if control == nil || control.Operation != "scan_ble" || control.State != "applied" {
+		t.Fatalf("scan control=%#v", control)
+	}
+	if discovery == nil || discovery.Version != "ble:7" || discovery.State != "completed" || len(discovery.Devices) != 1 || !discovery.Devices[0].Bonded {
+		t.Fatalf("scan discovery=%#v", discovery)
+	}
+	// The already-applied version cannot repeat a scan on a later heartbeat.
+	svc.applyMeshCoreBLEControlIntent(&cloudclient.MeshCoreBLEControlIntent{Version: "ble:7", Operation: "scan_ble", ReceiverAgentID: "receiver-1", InstallationID: "installation-1"}, snapshot, ack)
+	if backend.discoverCalls != 1 {
+		t.Fatalf("scan calls=%d, want 1", backend.discoverCalls)
+	}
+}
+
+func TestCloudBLEConfigureForgetReconnectAndReleaseInteraction(t *testing.T) {
+	adapter := meshcore.NewAdapter(meshcore.Config{Transport: "ble", BLE: meshcore.BLEConfig{PeerAddress: "AA:BB:CC:DD:EE:FF"}}, nil, nil)
+	backend := &runtimePairingBackend{}
+	cfg := config.Default()
+	cfg.MeshCore.Transport = "ble"
+	cfg.MeshCore.BLE.PeerAddress = "AA:BB:CC:DD:EE:FF"
+	svc := &Service{container: &Container{Config: cfg, MeshCore: adapter, MeshCoreBLE: meshcore.NewBLEPairingBackendWithBackend(backend)}}
+	snapshot := state.Data{Installation: state.InstallationState{ID: "installation-1"}}
+	ack := cloudclient.ReceiverHeartbeatAck{ReceiverAgentID: "receiver-1"}
+	svc.applyMeshCoreBLEControlIntent(&cloudclient.MeshCoreBLEControlIntent{Version: "ble:3", Operation: "connect_ble", DeviceAddress: "11:22:33:44:55:66", PairingPIN: "123456", ReceiverAgentID: "receiver-1", InstallationID: "installation-1"}, snapshot, ack)
+	if result := svc.meshcoreBLEControlResult(); result == nil || result.Operation != "connect_ble" || result.State != "applied" {
+		t.Fatalf("connect result=%#v", result)
+	}
+	if got := adapter.DetailedSnapshot().Configured; got != "11:22:33:44:55:66" {
+		t.Fatalf("configured device=%q", got)
+	}
+	if backend.pairCalls != 1 {
+		t.Fatalf("pair calls=%d, want 1", backend.pairCalls)
+	}
+	svc.applyMeshCoreBLEControlIntent(&cloudclient.MeshCoreBLEControlIntent{Version: "ble:4", Operation: "forget_ble", ReceiverAgentID: "receiver-1", InstallationID: "installation-1"}, snapshot, ack)
+	if result := svc.meshcoreBLEControlResult(); result == nil || result.Operation != "forget_ble" || result.State != "applied" {
+		t.Fatalf("forget result=%#v", result)
+	}
+	if got := adapter.DetailedSnapshot(); got.Configured != "" || got.State != meshcore.StateNotPresent {
+		t.Fatalf("forget status=%#v", got)
+	}
+	if backend.forgetCalls != 1 || backend.forgetAddress != "11:22:33:44:55:66" {
+		t.Fatalf("forget backend=%#v", backend)
+	}
+	if _, err := svc.ReleaseMeshCoreBLE(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	svc.applyMeshCoreBLEControlIntent(&cloudclient.MeshCoreBLEControlIntent{Version: "ble:5", Operation: "connect_ble", DeviceAddress: "22:33:44:55:66:77", ReceiverAgentID: "receiver-1", InstallationID: "installation-1"}, snapshot, ack)
+	if result := svc.meshcoreBLEControlResult(); result == nil || result.State != "failed" || result.Operation != "connect_ble" {
+		t.Fatalf("released connect result=%#v", result)
+	}
+}
+
+func TestCloudBLEControlPreservesSafePairingFailureAndRestoresExistingPeer(t *testing.T) {
+	adapter := meshcore.NewAdapter(meshcore.Config{Transport: "ble", BLE: meshcore.BLEConfig{PeerAddress: "AA:BB:CC:DD:EE:FF"}}, nil, nil)
+	backend := &runtimePairingBackend{pairErr: &meshcore.BLEPairingDiagnostic{Operation: "peer_selection", Code: "unavailable"}}
+	cfg := config.Default()
+	cfg.MeshCore.Transport = "ble"
+	cfg.MeshCore.BLE.PeerAddress = "AA:BB:CC:DD:EE:FF"
+	svc := &Service{container: &Container{Config: cfg, MeshCore: adapter, MeshCoreBLE: meshcore.NewBLEPairingBackendWithBackend(backend)}}
+	snapshot := state.Data{Installation: state.InstallationState{ID: "installation-1"}}
+	ack := cloudclient.ReceiverHeartbeatAck{ReceiverAgentID: "receiver-1"}
+	svc.applyMeshCoreBLEControlIntent(&cloudclient.MeshCoreBLEControlIntent{Version: "ble:9", Operation: "connect_ble", DeviceAddress: "11:22:33:44:55:66", PairingPIN: "123456", ReceiverAgentID: "receiver-1", InstallationID: "installation-1"}, snapshot, ack)
+	result := svc.meshcoreBLEControlResult()
+	if result == nil || result.State != "failed" || result.ErrorCode != "pairing_peer_selection_unavailable" {
+		t.Fatalf("control result=%#v", result)
+	}
+	if got := adapter.DetailedSnapshot(); got.Configured != "AA:BB:CC:DD:EE:FF" || got.ReconnectSuppressed {
+		t.Fatalf("original peer was not resumed: %#v", got)
+	}
+	if backend.pairCalls != 1 {
+		t.Fatalf("pair calls=%d", backend.pairCalls)
+	}
+}
+
+func TestMeshcoreBLEControlErrorCodeFallsBackForUnknownFailure(t *testing.T) {
+	if got := meshcoreBLEControlErrorCode(errors.New("unexpected receiver failure")); got != "receiver_operation_failed" {
+		t.Fatalf("error code=%q", got)
+	}
+}
+
 func TestPairMeshCoreBLERequiresReleaseAndBlocksResumeUntilPairCompletes(t *testing.T) {
 	t.Parallel()
 	adapter := meshcore.NewAdapter(meshcore.Config{Transport: "ble", BLE: meshcore.BLEConfig{PeerAddress: "AA:BB:CC:DD:EE:FF"}}, nil, nil)
@@ -147,10 +238,16 @@ func TestPairMeshCoreBLERequiresReleaseAndBlocksResumeUntilPairCompletes(t *test
 type runtimePairingBackend struct {
 	started, unblock chan struct{}
 	pairCalls        int
+	discoverCalls    int
+	devices          []meshcore.BLEDevice
+	forgetCalls      int
+	forgetAddress    string
+	pairErr          error
 }
 
-func (*runtimePairingBackend) Discover(context.Context, string) ([]meshcore.BLEDevice, error) {
-	return nil, nil
+func (b *runtimePairingBackend) Discover(context.Context, string) ([]meshcore.BLEDevice, error) {
+	b.discoverCalls++
+	return append([]meshcore.BLEDevice(nil), b.devices...), nil
 }
 func (*runtimePairingBackend) Connect(context.Context, meshcore.BLEConfig) (meshcore.BLEConnection, error) {
 	return nil, errors.New("not used")
@@ -158,6 +255,9 @@ func (*runtimePairingBackend) Connect(context.Context, meshcore.BLEConfig) (mesh
 func (*runtimePairingBackend) Disconnect(context.Context, meshcore.BLEConfig) error { return nil }
 func (b *runtimePairingBackend) Pair(ctx context.Context, _ meshcore.BLEConfig, _ string) error {
 	b.pairCalls++
+	if b.started == nil || b.unblock == nil {
+		return b.pairErr
+	}
 	close(b.started)
 	select {
 	case <-ctx.Done():
@@ -166,7 +266,11 @@ func (b *runtimePairingBackend) Pair(ctx context.Context, _ meshcore.BLEConfig, 
 		return nil
 	}
 }
-func (*runtimePairingBackend) Forget(context.Context, meshcore.BLEConfig) error { return nil }
+func (b *runtimePairingBackend) Forget(_ context.Context, cfg meshcore.BLEConfig) error {
+	b.forgetCalls++
+	b.forgetAddress = cfg.PeerAddress
+	return nil
+}
 
 func TestUpdateFailureStateRecoversMeshCoreOnlyReceiverAfterBLEReconnect(t *testing.T) {
 	t.Parallel()

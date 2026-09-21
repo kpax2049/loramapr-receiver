@@ -33,10 +33,22 @@ session handshake ready.
 
 ## Discovering and pairing a Companion
 
-This release's MeshCore dashboard is a connection-status page, not a BLE device
-picker. Receiver provides local discovery, pairing, and forget operations under
-its `/api/meshcore/ble/` API for a configured BlueZ adapter; the chosen address
-must still be put in `meshcore.ble.peer_address`.
+LoRaMapr Cloud's Receiver panel is the normal device picker. A Scan request is
+delivered on the authenticated Receiver heartbeat, and the Receiver performs
+bounded BlueZ discovery locally. Choosing **Use device** persists the selected
+Bluetooth address in the existing `meshcore.ble.peer_address` Receiver
+configuration and wakes the normal Companion reconnect lifecycle. The Cloud
+action uses an existing BlueZ bond when one is available. If the device needs
+pairing, enter its six-digit PIN with the Use action; it is held only in the
+pending Cloud control record and sent with the active Receiver command, is never
+part of Receiver configuration or status, and is cleared from Cloud control
+state after acknowledgement.
+
+Receiver also retains local discovery, pairing, and forget operations under its
+`/api/meshcore/ble/` API for recovery and setup work. A remote **Forget device**
+removes the configured BlueZ peer and leaves `meshcore.transport: "ble"` enabled
+without a selected `peer_address`, ready for a later Cloud-managed scan/use
+action.
 
 Before pairing, select **Release device** in the MeshCore portal tab. This
 temporarily stops Receiver ownership without deleting an existing Bluetooth
@@ -44,11 +56,9 @@ bond. Pairing then uses the Receiver's local API and can accept the Companion's
 six-digit PIN when required. Do not use `bluetoothctl` as the normal LoRaMapr
 workflow.
 
-After pairing, select **Resume receiver connection** and verify the connection
-state again. The repaired pairing flow handles established bonds and serializes
-pairing requests, but destructive physical revalidation is still pending; treat
-pairing success as a local Bluetooth result and confirm a completed Companion
-handshake in the portal.
+After local pairing, use the Cloud panel to select the device and verify the
+reported connection state. Pairing success is only a local Bluetooth result;
+confirm a completed Companion handshake before treating the Receiver as ready.
 
 ## Sessions and telemetry
 

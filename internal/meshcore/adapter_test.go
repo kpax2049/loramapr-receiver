@@ -10,6 +10,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -541,6 +542,41 @@ func TestAdapterBLEReleaseDisconnectsAndSuppressesReconnect(t *testing.T) {
 	}
 	if err := <-done; err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestAdapterBLEReconfigureClearAndRejectReconnectWithoutTarget(t *testing.T) {
+	adapter := NewAdapter(Config{Transport: "ble", BLE: BLEConfig{Adapter: "hci0", PeerAddress: "AA:BB:CC:DD:EE:FF"}}, nil, nil)
+	var disconnected []string
+	adapter.disconnectBLE = func(_ context.Context, cfg BLEConfig) error {
+		disconnected = append(disconnected, cfg.PeerAddress)
+		return nil
+	}
+	if err := adapter.ConfigureBLE(BLEConfig{Adapter: "hci0", PeerAddress: "11:22:33:44:55:66"}); err != nil {
+		t.Fatalf("configure: %v", err)
+	}
+	status := adapter.DetailedSnapshot()
+	if status.Configured != "11:22:33:44:55:66" || status.State != StateConnecting || status.ReconnectSuppressed || status.ReleasedByUser {
+		t.Fatalf("configured status=%#v", status)
+	}
+	if !reflect.DeepEqual(disconnected, []string{"AA:BB:CC:DD:EE:FF"}) {
+		t.Fatalf("disconnected=%#v", disconnected)
+	}
+	if err := adapter.ReconnectBLE(); err != nil {
+		t.Fatalf("reconnect: %v", err)
+	}
+	if !reflect.DeepEqual(disconnected, []string{"AA:BB:CC:DD:EE:FF", "11:22:33:44:55:66"}) {
+		t.Fatalf("reconnect disconnected=%#v", disconnected)
+	}
+	if err := adapter.ClearBLEConfig(); err != nil {
+		t.Fatalf("clear: %v", err)
+	}
+	status = adapter.DetailedSnapshot()
+	if status.Configured != "" || status.State != StateNotPresent || status.ReconnectSuppressed || status.ReleasedByUser {
+		t.Fatalf("cleared status=%#v", status)
+	}
+	if err := adapter.ReconnectBLE(); !errors.Is(err, ErrBLEConfiguration) {
+		t.Fatalf("reconnect without target=%v", err)
 	}
 }
 

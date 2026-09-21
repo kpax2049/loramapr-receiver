@@ -257,15 +257,33 @@ func (a *Adapter) run(ctx context.Context, sink protocoladapter.AdapterSink) err
 }
 
 func (a *Adapter) runBLE(ctx context.Context, sink protocoladapter.AdapterSink) error {
-	peer := a.cfg.BLE.PeerAddress
-	if err := a.cfg.BLE.validate(); err != nil {
-		a.degrade(err)
-		return err
-	}
 	for ctx.Err() == nil {
 		if !a.waitForBLEReconnectPermission(ctx) {
 			break
 		}
+		bleCfg, configured := a.currentBLEConfig()
+		if !configured {
+			a.setStatus(func(status *AdapterStatus) {
+				status.State = StateNotPresent
+				status.Device = ""
+				status.ConnectedDevice = ""
+				status.LastError = ""
+			})
+			select {
+			case <-ctx.Done():
+				return nil
+			case <-a.reconnectWake:
+				continue
+			}
+		}
+		if err := bleCfg.validate(); err != nil {
+			a.degrade(err)
+			if !wait(ctx, a.reconnectDelay) {
+				break
+			}
+			continue
+		}
+		peer := bleCfg.PeerAddress
 		a.setStatus(func(status *AdapterStatus) {
 			status.State = StateDetected
 			status.Device = peer
@@ -281,7 +299,7 @@ func (a *Adapter) runBLE(ctx context.Context, sink protocoladapter.AdapterSink) 
 		attemptCtx, cancelAttempt := context.WithCancel(ctx)
 		openCtx, cancelOpen := context.WithTimeout(attemptCtx, a.bleOpenTimeout)
 		a.setAttemptCancel(cancelAttempt)
-		transport := a.newBLETransport(a.cfg.BLE)
+		transport := a.newBLETransport(bleCfg)
 		link, err := transport.Open(openCtx)
 		openTimedOut := errors.Is(openCtx.Err(), context.DeadlineExceeded)
 		cancelOpen()
@@ -333,17 +351,27 @@ func (a *Adapter) runBLE(ctx context.Context, sink protocoladapter.AdapterSink) 
 	return nil
 }
 
+func (a *Adapter) currentBLEConfig() (BLEConfig, bool) {
+	if a == nil {
+		return BLEConfig{}, false
+	}
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.cfg.BLE, a.cfg.Transport == "ble" && strings.TrimSpace(a.cfg.BLE.PeerAddress) != ""
+}
+
 // Release disconnects a configured BLE Companion and suspends all automatic
 // reconnect work. It deliberately leaves BlueZ pairing/bonding untouched.
 func (a *Adapter) Release() error {
-	if a == nil || a.cfg.Transport != "ble" {
+	if a == nil {
 		return ErrBLEUnsupported
 	}
 	a.mu.Lock()
-	if a.closed {
+	if a.closed || a.cfg.Transport != "ble" {
 		a.mu.Unlock()
 		return errors.New("meshcore adapter is closed")
 	}
+	bleCfg := a.cfg.BLE
 	a.status.ReconnectSuppressed = true
 	a.status.ReleasedByUser = true
 	a.status.State = StateReleased
@@ -365,7 +393,7 @@ func (a *Adapter) Release() error {
 	if link != nil {
 		linkCloseErr = a.closeLinkBounded(link)
 	}
-	if err := a.disconnectBLEBounded(); err != nil {
+	if err := a.disconnectBLEBoundedFor(bleCfg); err != nil {
 		a.logger.Warn("MeshCore BLE release device disconnect did not complete", "err", err, "gatt_cleanup_err", linkCloseErr)
 	} else if linkCloseErr != nil {
 		a.logger.Debug("MeshCore BLE release GATT cleanup did not complete before device disconnect was acknowledged", "err", linkCloseErr)
@@ -376,11 +404,11 @@ func (a *Adapter) Release() error {
 // Resume restores normal configured BLE discovery, connection, and handshake
 // behavior after a receiver-local release. Release state is never persisted.
 func (a *Adapter) Resume() error {
-	if a == nil || a.cfg.Transport != "ble" {
+	if a == nil {
 		return ErrBLEUnsupported
 	}
 	a.mu.Lock()
-	if a.closed {
+	if a.closed || a.cfg.Transport != "ble" {
 		a.mu.Unlock()
 		return errors.New("meshcore adapter is closed")
 	}
@@ -393,6 +421,120 @@ func (a *Adapter) Resume() error {
 	a.status.LastError = ""
 	a.status.UpdatedAt = time.Now().UTC()
 	a.mu.Unlock()
+	select {
+	case a.reconnectWake <- struct{}{}:
+	default:
+	}
+	return nil
+}
+
+// ConfigureBLE changes the Receiver-owned BLE target in place. The caller is
+// responsible for persisting the corresponding receiver configuration first.
+// It cancels any old attempt before waking the normal reconnect loop.
+func (a *Adapter) ConfigureBLE(cfg BLEConfig) error {
+	if a == nil {
+		return ErrBLEUnsupported
+	}
+	cfg = cfg.normalized()
+	if err := cfg.validate(); err != nil {
+		return err
+	}
+	a.mu.Lock()
+	if a.closed || a.cfg.Transport != "ble" {
+		a.mu.Unlock()
+		return ErrBLEUnsupported
+	}
+	previous := a.cfg.BLE
+	attemptCancel, link := a.attemptCancel, a.link
+	a.cfg.BLE = cfg
+	a.status.Configured = cfg.PeerAddress
+	a.status.Device = ""
+	a.status.ConnectedDevice = ""
+	a.status.ReconnectSuppressed = false
+	a.status.ReleasedByUser = false
+	a.status.State = StateConnecting
+	a.status.LastError = ""
+	a.status.UpdatedAt = time.Now().UTC()
+	a.mu.Unlock()
+	if attemptCancel != nil {
+		attemptCancel()
+	}
+	if link != nil {
+		_ = a.closeLinkBounded(link)
+	}
+	if !strings.EqualFold(previous.PeerAddress, cfg.PeerAddress) {
+		_ = a.disconnectBLEBoundedFor(previous)
+	}
+	select {
+	case a.reconnectWake <- struct{}{}:
+	default:
+	}
+	return nil
+}
+
+// ClearBLEConfig leaves the BLE transport running but without a selected peer.
+// This is the post-Forget state: it is neither a release nor a connection
+// failure, and can later be configured by a new Cloud-managed use action.
+func (a *Adapter) ClearBLEConfig() error {
+	if a == nil {
+		return ErrBLEUnsupported
+	}
+	a.mu.Lock()
+	if a.closed || a.cfg.Transport != "ble" {
+		a.mu.Unlock()
+		return ErrBLEUnsupported
+	}
+	attemptCancel, link := a.attemptCancel, a.link
+	a.cfg.BLE.PeerAddress = ""
+	a.status.Configured = ""
+	a.status.Device = ""
+	a.status.ConnectedDevice = ""
+	a.status.ReconnectSuppressed = false
+	a.status.ReleasedByUser = false
+	a.status.State = StateNotPresent
+	a.status.LastError = ""
+	a.status.UpdatedAt = time.Now().UTC()
+	a.mu.Unlock()
+	if attemptCancel != nil {
+		attemptCancel()
+	}
+	if link != nil {
+		_ = a.closeLinkBounded(link)
+	}
+	return nil
+}
+
+// ReconnectBLE explicitly cycles the configured receiver-owned peer without
+// changing the selected device or the intentional-release semantics.
+func (a *Adapter) ReconnectBLE() error {
+	if a == nil {
+		return ErrBLEUnsupported
+	}
+	a.mu.Lock()
+	if a.closed || a.cfg.Transport != "ble" || strings.TrimSpace(a.cfg.BLE.PeerAddress) == "" {
+		a.mu.Unlock()
+		return ErrBLEConfiguration
+	}
+	if a.status.ReconnectSuppressed {
+		a.mu.Unlock()
+		return ErrBLEConfiguration
+	}
+	bleCfg, attemptCancel, link := a.cfg.BLE, a.attemptCancel, a.link
+	a.status.State = StateConnecting
+	a.status.Device = ""
+	a.status.ConnectedDevice = ""
+	a.status.LastError = ""
+	a.status.UpdatedAt = time.Now().UTC()
+	a.mu.Unlock()
+	if attemptCancel != nil {
+		attemptCancel()
+	}
+	if link != nil {
+		_ = a.closeLinkBounded(link)
+	}
+	if err := a.disconnectBLEBoundedFor(bleCfg); err != nil {
+		return err
+	}
 	select {
 	case a.reconnectWake <- struct{}{}:
 	default:
@@ -647,6 +789,7 @@ func (a *Adapter) Close() error {
 	link := a.link
 	started := a.started
 	done := a.done
+	transport := a.cfg.Transport
 	a.mu.Unlock()
 	if cancel != nil {
 		cancel()
@@ -659,7 +802,7 @@ func (a *Adapter) Close() error {
 			a.logger.Warn("MeshCore adapter shutdown disconnect did not complete", "err", err)
 		}
 	}
-	if a.cfg.Transport == "ble" {
+	if transport == "ble" {
 		if err := a.disconnectBLEBounded(); err != nil {
 			a.logger.Warn("MeshCore adapter shutdown device disconnect did not complete", "err", err)
 		}
@@ -697,13 +840,27 @@ func (a *Adapter) closeLinkBounded(link CompanionLink) error {
 // disconnectBLEBounded explicitly releases the configured BlueZ device even
 // when an Open attempt was cancelled before it yielded a CompanionLink.
 func (a *Adapter) disconnectBLEBounded() error {
-	if a == nil || a.cfg.Transport != "ble" || a.disconnectBLE == nil {
+	if a == nil {
+		return nil
+	}
+	a.mu.RLock()
+	bleCfg := a.cfg.BLE
+	transport := a.cfg.Transport
+	a.mu.RUnlock()
+	if transport != "ble" {
+		return nil
+	}
+	return a.disconnectBLEBoundedFor(bleCfg)
+}
+
+func (a *Adapter) disconnectBLEBoundedFor(cfg BLEConfig) error {
+	if a == nil || strings.TrimSpace(cfg.PeerAddress) == "" || a.disconnectBLE == nil {
 		return nil
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), a.shutdownTimeout)
 	defer cancel()
 	result := make(chan error, 1)
-	go func() { result <- a.disconnectBLE(ctx, a.cfg.BLE) }()
+	go func() { result <- a.disconnectBLE(ctx, cfg) }()
 	select {
 	case err := <-result:
 		return err

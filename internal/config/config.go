@@ -333,10 +333,10 @@ func (c Config) Validate() error {
 			return errors.New("meshcore.device is required when meshcore.transport is physical_serial")
 		}
 	case "ble":
-		if strings.TrimSpace(c.MeshCore.BLE.PeerAddress) == "" {
-			return errors.New("meshcore.ble.peer_address is required when meshcore.transport is ble")
-		}
-		if !validBLEAddress(c.MeshCore.BLE.PeerAddress) {
+		// A BLE transport may intentionally have no selected peer after a
+		// Receiver-managed Forget. It remains enabled for a later Cloud-managed
+		// scan/use action, but cannot attempt a connection until configured.
+		if strings.TrimSpace(c.MeshCore.BLE.PeerAddress) != "" && !validBLEAddress(c.MeshCore.BLE.PeerAddress) {
 			return errors.New("meshcore.ble.peer_address must be a Bluetooth address")
 		}
 		if strings.TrimSpace(c.MeshCore.BLE.Adapter) == "" {

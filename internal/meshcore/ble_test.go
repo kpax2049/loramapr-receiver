@@ -114,6 +114,104 @@ func TestBLEPairingIsExplicitAndDoesNotExposePIN(t *testing.T) {
 	}
 }
 
+func TestResolveBLEPairTargetUsesExactExistingTargetWithoutDiscovery(t *testing.T) {
+	t.Parallel()
+	findCalls, discoveryCalls := 0, 0
+	target, err := resolveBLEPairTarget(context.Background(), func() (string, error) {
+		findCalls++
+		return "AA:BB:CC:DD:EE:FF", nil
+	}, func(context.Context) error {
+		discoveryCalls++
+		return nil
+	})
+	if err != nil || target != "AA:BB:CC:DD:EE:FF" || findCalls != 1 || discoveryCalls != 0 {
+		t.Fatalf("target=%q err=%v find=%d discovery=%d", target, err, findCalls, discoveryCalls)
+	}
+}
+
+func TestResolveBLEPairTargetDiscoversOnceAndRequiresExactTarget(t *testing.T) {
+	t.Parallel()
+	available := false
+	findCalls, discoveryCalls := 0, 0
+	target, err := resolveBLEPairTarget(context.Background(), func() (string, error) {
+		findCalls++
+		if !available {
+			return "", errBLEPeerUnavailable
+		}
+		return "AA:BB:CC:DD:EE:FF", nil
+	}, func(context.Context) error {
+		discoveryCalls++
+		available = true
+		return nil
+	})
+	if err != nil || target != "AA:BB:CC:DD:EE:FF" || findCalls != 2 || discoveryCalls != 1 {
+		t.Fatalf("target=%q err=%v find=%d discovery=%d", target, err, findCalls, discoveryCalls)
+	}
+}
+
+func TestResolveBLEPairTargetReturnsUnavailableAfterBoundedDiscovery(t *testing.T) {
+	t.Parallel()
+	findCalls, discoveryCalls := 0, 0
+	_, err := resolveBLEPairTarget(context.Background(), func() (string, error) {
+		findCalls++
+		return "", errBLEPeerUnavailable
+	}, func(context.Context) error {
+		discoveryCalls++
+		return nil
+	})
+	if !errors.Is(err, errBLEPeerUnavailable) || findCalls != 2 || discoveryCalls != 1 {
+		t.Fatalf("err=%v find=%d discovery=%d", err, findCalls, discoveryCalls)
+	}
+}
+
+func TestRunBoundedBLEDiscoveryCancelsAndAlwaysStops(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		wait func(context.Context) error
+	}{
+		{name: "success", wait: func(context.Context) error { return nil }},
+		{name: "failure", wait: func(context.Context) error { return errors.New("discovery failed") }},
+		{name: "cancelled", wait: func(ctx context.Context) error { <-ctx.Done(); return ctx.Err() }},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			if test.name == "cancelled" {
+				cancel()
+			} else {
+				defer cancel()
+			}
+			stopped := false
+			err := runBoundedBLEDiscovery(ctx, func(context.Context) error { return nil }, func() error { stopped = true; return nil }, test.wait)
+			if !stopped {
+				t.Fatal("discovery was not stopped")
+			}
+			if test.name == "success" && err != nil {
+				t.Fatalf("success error=%v", err)
+			}
+			if test.name == "cancelled" && !errors.Is(err, context.Canceled) {
+				t.Fatalf("cancelled error=%v", err)
+			}
+		})
+	}
+}
+
+func TestRunBoundedBLEDiscoveryDeadlineStops(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	stopped := false
+	err := runBoundedBLEDiscovery(ctx, func(context.Context) error { return nil }, func() error { stopped = true; return nil }, func(ctx context.Context) error {
+		<-ctx.Done()
+		return ctx.Err()
+	})
+	if !errors.Is(err, context.DeadlineExceeded) || !stopped {
+		t.Fatalf("err=%v stopped=%v", err, stopped)
+	}
+}
+
 func TestBLEPairingRejectsConcurrentRequestWithoutPassingItsPINToBlueZ(t *testing.T) {
 	t.Parallel()
 	started := make(chan struct{})

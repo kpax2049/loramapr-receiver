@@ -26,6 +26,11 @@ const (
 
 type bluezBackend struct{ conn *dbus.Conn }
 
+type bluezPairTarget struct {
+	path  dbus.ObjectPath
+	props map[string]dbus.Variant
+}
+
 func newSystemBLEBackend() BLEBackend {
 	return &bluezBackend{}
 }
@@ -47,23 +52,14 @@ func (b *bluezBackend) Discover(ctx context.Context, adapter string) ([]BLEDevic
 	if err != nil {
 		return nil, err
 	}
-	adapterPath := bluezAdapterPath(adapter)
-	adapterObject := conn.Object(bluezName, adapterPath)
-	filter := map[string]dbus.Variant{"UUIDs": dbus.MakeVariant([]string{NUSServiceUUID})}
-	if call := adapterObject.CallWithContext(ctx, adapterInterface+".SetDiscoveryFilter", 0, filter); call.Err != nil {
-		return nil, fmt.Errorf("%w: set NUS discovery filter", ErrBLEConfiguration)
-	}
-	if call := adapterObject.CallWithContext(ctx, adapterInterface+".StartDiscovery", 0); call.Err != nil {
-		return nil, fmt.Errorf("%w: start discovery", ErrBLEConfiguration)
-	}
-	defer adapterObject.Call(adapterInterface+".StopDiscovery", 0)
-	if err := waitForDiscovery(ctx); err != nil {
+	if err := runBluezDiscovery(ctx, conn, adapter); err != nil {
 		return nil, err
 	}
 	objects, err := managedObjects(conn)
 	if err != nil {
 		return nil, err
 	}
+	adapterPath := bluezAdapterPath(adapter)
 	devices := make([]BLEDevice, 0)
 	for path, interfaces := range objects {
 		if !strings.HasPrefix(string(path), string(adapterPath)+"/") {
@@ -78,10 +74,31 @@ func (b *bluezBackend) Discover(ctx context.Context, adapter string) ([]BLEDevic
 	return devices, nil
 }
 
+func runBluezDiscovery(ctx context.Context, conn *dbus.Conn, adapter string) error {
+	adapterPath := bluezAdapterPath(adapter)
+	adapterObject := conn.Object(bluezName, adapterPath)
+	filter := map[string]dbus.Variant{"UUIDs": dbus.MakeVariant([]string{NUSServiceUUID})}
+	if call := adapterObject.CallWithContext(ctx, adapterInterface+".SetDiscoveryFilter", 0, filter); call.Err != nil {
+		return fmt.Errorf("%w: set NUS discovery filter", ErrBLEConfiguration)
+	}
+	return runBoundedBLEDiscovery(
+		ctx,
+		func(ctx context.Context) error {
+			if call := adapterObject.CallWithContext(ctx, adapterInterface+".StartDiscovery", 0); call.Err != nil {
+				return fmt.Errorf("%w: start discovery", ErrBLEConfiguration)
+			}
+			return nil
+		},
+		func() error { return adapterObject.Call(adapterInterface+".StopDiscovery", 0).Err },
+		waitForDiscovery,
+	)
+}
+
 func waitForDiscovery(ctx context.Context) error {
-	// BlueZ discovery is asynchronous. Give its object cache one short,
-	// cancellable turn without creating a new adapter lifecycle state.
-	timer := time.NewTimer(250 * time.Millisecond)
+	// BlueZ discovery is asynchronous. Keep one bounded, cancellable window so
+	// a Cloud-requested scan can find nearby NUS peers without creating a new
+	// Receiver connection lifecycle state.
+	timer := time.NewTimer(5 * time.Second)
 	defer timer.Stop()
 	select {
 	case <-ctx.Done():
@@ -161,10 +178,20 @@ func (b *bluezBackend) Pair(ctx context.Context, cfg BLEConfig, pin string) erro
 	if err != nil {
 		return newBLEPairingDiagnostic("system_bus", "unavailable")
 	}
-	path, props, err := findBluezDevice(conn, cfg)
+	pairCtx, cancel := context.WithTimeout(ctx, pairDiscoveryTimeout)
+	defer cancel()
+	target, err := resolveBLEPairTarget(
+		pairCtx,
+		func() (bluezPairTarget, error) {
+			path, props, err := findBluezDevice(conn, cfg)
+			return bluezPairTarget{path: path, props: props}, err
+		},
+		func(ctx context.Context) error { return runBluezDiscovery(ctx, conn, cfg.Adapter) },
+	)
 	if err != nil {
 		return newBLEPairingDiagnostic("peer_selection", "unavailable")
 	}
+	path, props := target.path, target.props
 	// Device1.Pair returns AlreadyExists for an established pairing. Treat an
 	// existing persisted bond as the successful, idempotent result rather than
 	// starting an agent transaction that cannot make progress.
@@ -284,7 +311,7 @@ func findBluezDevice(conn *dbus.Conn, cfg BLEConfig) (dbus.ObjectPath, map[strin
 			return path, props, nil
 		}
 	}
-	return "", nil, fmt.Errorf("%w: selected BLE peer is unavailable", ErrBLEConfiguration)
+	return "", nil, fmt.Errorf("%w: %w", ErrBLEConfiguration, errBLEPeerUnavailable)
 }
 func waitDeviceReady(ctx context.Context, conn *dbus.Conn, path dbus.ObjectPath) (map[string]dbus.Variant, error) {
 	ticker := time.NewTicker(100 * time.Millisecond)
@@ -357,6 +384,16 @@ func variantUint16(props map[string]dbus.Variant, key string) uint16 {
 	}
 	return 0
 }
+
+func variantInt16(props map[string]dbus.Variant, key string) (int16, bool) {
+	value, ok := props[key]
+	if !ok {
+		return 0, false
+	}
+	result, ok := value.Value().(int16)
+	return result, ok
+}
+
 func variantObjectPath(props map[string]dbus.Variant, key string) dbus.ObjectPath {
 	if value, ok := props[key]; ok {
 		if path, ok := value.Value().(dbus.ObjectPath); ok {
@@ -383,7 +420,12 @@ func hasUUID(props map[string]dbus.Variant, key, want string) bool {
 }
 func hasFlag(props map[string]dbus.Variant, want string) bool { return hasUUID(props, "Flags", want) }
 func deviceFromProps(props map[string]dbus.Variant) BLEDevice {
-	return BLEDevice{Address: strings.ToUpper(variantString(props, "Address")), Name: variantString(props, "Name"), Bonded: variantBool(props, "Paired"), Connected: variantBool(props, "Connected")}
+	device := BLEDevice{Address: strings.ToUpper(variantString(props, "Address")), Name: variantString(props, "Name"), Bonded: variantBool(props, "Paired"), Connected: variantBool(props, "Connected")}
+	if rssi, ok := variantInt16(props, "RSSI"); ok {
+		value := int(rssi)
+		device.RSSI = &value
+	}
+	return device
 }
 
 type bluezConnection struct {

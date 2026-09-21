@@ -44,6 +44,16 @@ open and Companion handshake have their normal bounded timeouts and retries.
 Cloud/UI confirmation arrives on a later heartbeat, so a 30–60 second observed
 resume is expected under the default cadence and is not a second command path.
 
+Cloud-managed `scan_ble`, `connect_ble`, `forget_ble`, and `reconnect_ble`
+use the same acknowledgement path. Scan runs on the Receiver in a bounded
+BlueZ discovery window and reports results with its control revision, so old
+scan results cannot be presented as a newer request. Connect/Use persists the
+selected existing BlueZ peer and starts the normal reconnect loop; Reconnect
+explicitly cycles that configured peer. Forget removes only that peer and leaves
+the BLE transport configured without a selected target. These ownership-changing
+actions are unavailable while the Receiver has intentionally released BLE to a
+phone; resume first.
+
 ## Status and shutdown
 
 `GET /api/status` reports the MeshCore adapter with its existing

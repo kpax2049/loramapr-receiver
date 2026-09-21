@@ -29,6 +29,8 @@ func cloudAdapterStatuses(adapters []status.AdapterStatus) []cloudclient.Receive
 			Transport: cloudTransport(adapter.Transport), ProtocolVersion: boundedProtocolVersion(adapter.ProtocolVersion),
 			ProfileState: profileState, ErrorCode: cloudAdapterErrorCode(lifecycle),
 			IntentionalRelease: adapter.ReleasedByUser,
+			ConfiguredDevice:   cloudBLEDeviceAddress(adapter.ConfiguredDevice),
+			ConnectedDevice:    cloudBLEDeviceAddress(adapter.ConnectedDevice),
 		}
 		if adapter.Delivery != nil {
 			item.Delivery = &cloudclient.ReceiverAdapterDeliveryStatus{
@@ -39,6 +41,23 @@ func cloudAdapterStatuses(adapters []status.AdapterStatus) []cloudclient.Receive
 		out = append(out, item)
 	}
 	return out
+}
+
+func cloudBLEDeviceAddress(value string) string {
+	value = strings.ToUpper(strings.TrimSpace(value))
+	if len(value) != 17 {
+		return ""
+	}
+	for index, ch := range value {
+		if index%3 == 2 {
+			if ch != ':' {
+				return ""
+			}
+		} else if !(ch >= '0' && ch <= '9' || ch >= 'A' && ch <= 'F') {
+			return ""
+		}
+	}
+	return value
 }
 
 func allowedAdapterProtocol(value string) bool { return value == "meshcore" || value == "meshtastic" }

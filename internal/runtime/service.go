@@ -106,6 +106,7 @@ type meshcoreBLEControl struct {
 	mu             sync.RWMutex
 	appliedVersion string
 	result         *cloudclient.MeshCoreBLEControlResult
+	discovery      *cloudclient.MeshCoreBLEDiscoveryResult
 }
 
 type meshcoreTrackingControl struct {
@@ -534,6 +535,142 @@ func (s *Service) ForgetMeshCoreBLE(ctx context.Context, cfg meshcore.BLEConfig)
 		return meshcore.ErrBLEUnsupported
 	}
 	return s.container.MeshCoreBLE.Forget(ctx, cfg)
+}
+
+// ScanMeshCoreBLE performs a bounded Receiver-local discovery. It neither
+// changes the selected peer nor opens a browser-to-Receiver control path.
+func (s *Service) ScanMeshCoreBLE(ctx context.Context) ([]meshcore.BLEDevice, error) {
+	if s.container == nil || s.container.MeshCoreBLE == nil || s.container.MeshCore == nil {
+		return nil, meshcore.ErrBLEUnsupported
+	}
+	s.meshcoreBLEMu.Lock()
+	defer s.meshcoreBLEMu.Unlock()
+	if s.container.MeshCore.ReconnectSuppressed() {
+		return nil, meshcore.ErrBLEConfiguration
+	}
+	adapter := strings.TrimSpace(s.container.Config.MeshCore.BLE.Adapter)
+	scanCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
+	defer cancel()
+	devices, err := s.container.MeshCoreBLE.Discover(scanCtx, adapter)
+	if err != nil {
+		return nil, err
+	}
+	configured := strings.ToUpper(strings.TrimSpace(s.container.Config.MeshCore.BLE.PeerAddress))
+	for index := range devices {
+		devices[index].Configured = configured != "" && strings.EqualFold(devices[index].Address, configured)
+	}
+	return devices, nil
+}
+
+// ConfigureMeshCoreBLE persists the selected BlueZ peer using the normal
+// Receiver configuration model, then lets the existing adapter reconnect to
+// it. With an optional PIN, it delegates OS-level pairing to the existing
+// BlueZ integration; otherwise BlueZ must already have a usable bond for the
+// Companion transport to complete its handshake.
+func (s *Service) ConfigureMeshCoreBLE(ctx context.Context, deviceAddress, pairingPIN string) error {
+	if s.container == nil || s.container.MeshCore == nil || s.container.MeshCoreBLE == nil {
+		return meshcore.ErrBLEUnsupported
+	}
+	s.meshcoreBLEMu.Lock()
+	defer s.meshcoreBLEMu.Unlock()
+	if s.container.MeshCore.ReconnectSuppressed() {
+		return meshcore.ErrBLEConfiguration
+	}
+	next := s.container.Config
+	next.MeshCore.Transport = "ble"
+	next.MeshCore.BLE.PeerAddress = strings.ToUpper(strings.TrimSpace(deviceAddress))
+	if strings.TrimSpace(pairingPIN) != "" {
+		// Pairing is the one operation that requires temporary exclusive BlueZ
+		// ownership. The PIN is provided only in this command and never enters
+		// Receiver configuration or status reporting.
+		if err := s.container.MeshCore.Release(); err != nil {
+			return err
+		}
+		if err := s.container.MeshCoreBLE.Pair(ctx, meshcore.BLEConfig{Adapter: next.MeshCore.BLE.Adapter, PeerAddress: next.MeshCore.BLE.PeerAddress}, pairingPIN); err != nil {
+			_ = s.container.MeshCore.Resume()
+			return err
+		}
+	}
+	if err := persistMeshCoreBLEConfig(&next); err != nil {
+		if strings.TrimSpace(pairingPIN) != "" {
+			_ = s.container.MeshCore.Resume()
+		}
+		return err
+	}
+	if s.container.MeshCoreTracking != nil {
+		s.container.MeshCoreTracking.Stop()
+	}
+	if err := s.container.MeshCore.ConfigureBLE(meshcore.BLEConfig{Adapter: next.MeshCore.BLE.Adapter, PeerAddress: next.MeshCore.BLE.PeerAddress}); err != nil {
+		return err
+	}
+	s.container.Config = next
+	s.refreshAdapterStatuses()
+	return nil
+}
+
+// ForgetConfiguredMeshCoreBLE removes exactly the current configured BlueZ
+// peer and leaves MeshCore BLE enabled with no selected target.
+func (s *Service) ForgetConfiguredMeshCoreBLE(ctx context.Context) error {
+	if s.container == nil || s.container.MeshCore == nil || s.container.MeshCoreBLE == nil {
+		return meshcore.ErrBLEUnsupported
+	}
+	s.meshcoreBLEMu.Lock()
+	defer s.meshcoreBLEMu.Unlock()
+	if s.container.MeshCore.ReconnectSuppressed() {
+		return meshcore.ErrBLEConfiguration
+	}
+	current := s.container.Config.MeshCore.BLE
+	if strings.TrimSpace(current.PeerAddress) == "" {
+		return meshcore.ErrBLEConfiguration
+	}
+	if s.container.MeshCoreTracking != nil {
+		s.container.MeshCoreTracking.Stop()
+	}
+	if err := s.container.MeshCore.Release(); err != nil {
+		return err
+	}
+	if err := s.container.MeshCoreBLE.Forget(ctx, meshcore.BLEConfig{Adapter: current.Adapter, PeerAddress: current.PeerAddress}); err != nil {
+		_ = s.container.MeshCore.Resume()
+		return err
+	}
+	next := s.container.Config
+	next.MeshCore.BLE.PeerAddress = ""
+	if err := persistMeshCoreBLEConfig(&next); err != nil {
+		return err
+	}
+	if err := s.container.MeshCore.ClearBLEConfig(); err != nil {
+		return err
+	}
+	s.container.Config = next
+	s.refreshAdapterStatuses()
+	return nil
+}
+
+func (s *Service) ReconnectMeshCoreBLE(_ context.Context) error {
+	if s.container == nil || s.container.MeshCore == nil {
+		return meshcore.ErrBLEUnsupported
+	}
+	s.meshcoreBLEMu.Lock()
+	defer s.meshcoreBLEMu.Unlock()
+	if s.container.MeshCore.ReconnectSuppressed() {
+		return meshcore.ErrBLEConfiguration
+	}
+	err := s.container.MeshCore.ReconnectBLE()
+	s.refreshAdapterStatuses()
+	return err
+}
+
+func persistMeshCoreBLEConfig(cfg *config.Config) error {
+	if cfg == nil {
+		return errors.New("receiver configuration is unavailable")
+	}
+	if path := strings.TrimSpace(cfg.LoadedFromConfig); path != "" {
+		if err := config.Save(path, *cfg); err != nil {
+			return err
+		}
+		cfg.LoadedFromConfig = path
+	}
+	return nil
 }
 
 // ReleaseMeshCoreBLE stops receiver-owned tracking before releasing the
@@ -1481,13 +1618,14 @@ func (s *Service) sendHeartbeat(ctx context.Context, snapshot state.Data, meshSn
 	receiverID := strings.TrimSpace(snapshot.Cloud.ReceiverID)
 
 	ack, err := s.container.Cloud.SendReceiverHeartbeat(callCtx, endpoint, apiKey, cloudclient.ReceiverHeartbeat{
-		RuntimeVersion:           s.build.Version,
-		Platform:                 goruntime.GOOS,
-		Arch:                     goruntime.GOARCH,
-		LocalNodeID:              meshSnap.LocalNodeID,
-		ObservedNodeIDs:          append([]string(nil), meshSnap.ObservedNodeIDs...),
-		Adapters:                 cloudAdapterStatuses(updateSnap.Adapters),
-		MeshCoreBLEControlResult: s.meshcoreBLEControlResult(),
+		RuntimeVersion:             s.build.Version,
+		Platform:                   goruntime.GOOS,
+		Arch:                       goruntime.GOARCH,
+		LocalNodeID:                meshSnap.LocalNodeID,
+		ObservedNodeIDs:            append([]string(nil), meshSnap.ObservedNodeIDs...),
+		Adapters:                   cloudAdapterStatuses(updateSnap.Adapters),
+		MeshCoreBLEControlResult:   s.meshcoreBLEControlResult(),
+		MeshCoreBLEDiscoveryResult: s.meshcoreBLEDiscoveryResult(),
 		Status: map[string]any{
 			"installationId":         snapshot.Installation.ID,
 			"localName":              snapshot.Installation.LocalName,
@@ -1673,6 +1811,17 @@ func (s *Service) meshcoreBLEControlResult() *cloudclient.MeshCoreBLEControlResu
 	return &value
 }
 
+func (s *Service) meshcoreBLEDiscoveryResult() *cloudclient.MeshCoreBLEDiscoveryResult {
+	s.meshcoreBLEControl.mu.RLock()
+	defer s.meshcoreBLEControl.mu.RUnlock()
+	if s.meshcoreBLEControl.discovery == nil {
+		return nil
+	}
+	value := *s.meshcoreBLEControl.discovery
+	value.Devices = append([]cloudclient.MeshCoreBLEDiscoveryDevice(nil), value.Devices...)
+	return &value
+}
+
 // applyMeshCoreBLEControlIntent is the only Cloud-directed BLE executor. It
 // intentionally delegates to the portal lifecycle methods, which already own
 // the adapter lock, tracking shutdown, release gate, and reconnect lifecycle.
@@ -1690,24 +1839,61 @@ func (s *Service) applyMeshCoreBLEControlIntent(intent *cloudclient.MeshCoreBLEC
 		return
 	}
 	var err error
+	var discovery *cloudclient.MeshCoreBLEDiscoveryResult
 	switch intent.Operation {
 	case "release_ble":
 		_, err = s.ReleaseMeshCoreBLE(context.Background())
 	case "resume_ble":
 		_, err = s.ResumeMeshCoreBLE(context.Background())
+	case "scan_ble":
+		var devices []meshcore.BLEDevice
+		devices, err = s.ScanMeshCoreBLE(context.Background())
+		discovery = meshcoreBLEDiscoveryResult(intent.Version, devices, err)
+	case "connect_ble":
+		err = s.ConfigureMeshCoreBLE(context.Background(), intent.DeviceAddress, intent.PairingPIN)
+	case "forget_ble":
+		err = s.ForgetConfiguredMeshCoreBLE(context.Background())
+	case "reconnect_ble":
+		err = s.ReconnectMeshCoreBLE(context.Background())
 	default:
 		return
 	}
 	result := &cloudclient.MeshCoreBLEControlResult{Version: intent.Version, Operation: intent.Operation, State: "applied"}
 	if err != nil {
-		result.State, result.ErrorCode = "failed", "receiver_operation_failed"
+		result.State, result.ErrorCode = "failed", meshcoreBLEControlErrorCode(err)
+		if s.container.Logger != nil {
+			s.container.Logger.Warn("MeshCore BLE control operation failed", "operation", intent.Operation, "version", intent.Version, "device_address", intent.DeviceAddress, "error_code", result.ErrorCode)
+		}
 	}
 	s.meshcoreBLEControl.mu.Lock()
 	if err == nil {
 		s.meshcoreBLEControl.appliedVersion = intent.Version
 	}
 	s.meshcoreBLEControl.result = result
+	if discovery != nil {
+		s.meshcoreBLEControl.discovery = discovery
+	}
 	s.meshcoreBLEControl.mu.Unlock()
+}
+
+func meshcoreBLEControlErrorCode(err error) string {
+	var diagnostic *meshcore.BLEPairingDiagnostic
+	if errors.As(err, &diagnostic) && diagnostic.Operation == "peer_selection" && diagnostic.Code == "unavailable" {
+		return "pairing_peer_selection_unavailable"
+	}
+	return "receiver_operation_failed"
+}
+
+func meshcoreBLEDiscoveryResult(version string, devices []meshcore.BLEDevice, err error) *cloudclient.MeshCoreBLEDiscoveryResult {
+	result := &cloudclient.MeshCoreBLEDiscoveryResult{Version: version, State: "completed", Devices: make([]cloudclient.MeshCoreBLEDiscoveryDevice, 0, len(devices))}
+	if err != nil {
+		result.State, result.ErrorCode = "failed", "receiver_operation_failed"
+		return result
+	}
+	for _, device := range devices {
+		result.Devices = append(result.Devices, cloudclient.MeshCoreBLEDiscoveryDevice{Address: device.Address, Name: device.Name, RSSI: device.RSSI, Bonded: device.Bonded, Connected: device.Connected, Configured: device.Configured})
+	}
+	return result
 }
 
 func (s *Service) meshcoreSessionManaged() bool {

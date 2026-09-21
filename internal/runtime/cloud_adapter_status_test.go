@@ -15,7 +15,7 @@ func TestCloudAdapterStatusesProjectOnlySafeFacts(t *testing.T) {
 		t.Fatalf("expected independent adapters, got %#v", adapters)
 	}
 	meshcore := adapters[0]
-	if meshcore.Protocol != "meshcore" || !meshcore.Ready || !meshcore.Connected || meshcore.ConnectionState != "connected" || meshcore.Transport != "ble" || meshcore.Delivery == nil || meshcore.Delivery.PendingCount != 2 || meshcore.ProfileState != "matched" {
+	if meshcore.Protocol != "meshcore" || !meshcore.Ready || !meshcore.Connected || meshcore.ConnectionState != "connected" || meshcore.Transport != "ble" || meshcore.ConfiguredDevice != "FD:B5:13:6A:44:54" || meshcore.ConnectedDevice != "FD:B5:13:6A:44:54" || meshcore.Delivery == nil || meshcore.Delivery.PendingCount != 2 || meshcore.ProfileState != "matched" {
 		t.Fatalf("unexpected MeshCore cloud status: %#v", meshcore)
 	}
 	if meshcore.Delivery.FailureCode != "queue_full" {
@@ -33,9 +33,16 @@ func TestCloudAdapterStatusesPreserveReadyRawCaptureState(t *testing.T) {
 	}
 }
 
-func TestCloudAdapterStatusesMarksIntentionalBLEReleaseWithoutDeviceIdentity(t *testing.T) {
+func TestCloudAdapterStatusesMarksIntentionalBLEReleaseWithSafeDeviceIdentity(t *testing.T) {
 	items := cloudAdapterStatuses([]status.AdapterStatus{{Protocol: "meshcore", Enabled: true, Configured: true, Lifecycle: "released", ConnectionState: "disconnected", Transport: "ble", ReleasedByUser: true, ConfiguredDevice: "AA:BB:CC:DD:EE:FF"}})
-	if len(items) != 1 || !items[0].IntentionalRelease || items[0].Lifecycle != "released" || items[0].Connected {
+	if len(items) != 1 || !items[0].IntentionalRelease || items[0].Lifecycle != "released" || items[0].Connected || items[0].ConfiguredDevice != "AA:BB:CC:DD:EE:FF" {
 		t.Fatalf("unexpected released cloud status: %#v", items)
+	}
+}
+
+func TestCloudAdapterStatusesRejectsLocalPathAsDeviceIdentity(t *testing.T) {
+	items := cloudAdapterStatuses([]status.AdapterStatus{{Protocol: "meshcore", Enabled: true, Configured: true, Lifecycle: "connected", ConnectionState: "connected", Ready: true, Transport: "physical_serial", ConfiguredDevice: "/dev/ttyACM0"}})
+	if len(items) != 1 || items[0].ConfiguredDevice != "" {
+		t.Fatalf("unsafe configured device projection: %#v", items)
 	}
 }

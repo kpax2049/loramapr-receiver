@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 )
 
 const (
@@ -16,11 +17,40 @@ const (
 )
 
 var (
-	ErrBLEUnsupported   = errors.New("meshcore BLE transport is unsupported on this platform")
-	ErrBLEConfiguration = errors.New("meshcore BLE transport configuration error")
-	ErrBLEFrameInvalid  = errors.New("invalid meshcore BLE Companion frame")
-	ErrBLEPairingFailed = errors.New("meshcore BLE pairing failed")
+	ErrBLEUnsupported     = errors.New("meshcore BLE transport is unsupported on this platform")
+	ErrBLEConfiguration   = errors.New("meshcore BLE transport configuration error")
+	ErrBLEFrameInvalid    = errors.New("invalid meshcore BLE Companion frame")
+	ErrBLEPairingFailed   = errors.New("meshcore BLE pairing failed")
+	errBLEPeerUnavailable = errors.New("selected BLE peer is unavailable")
 )
+
+const pairDiscoveryTimeout = 8 * time.Second
+
+// resolveBLEPairTarget makes one bounded attempt to repopulate BlueZ's
+// transient Device1 cache when a selected peer is no longer present. The
+// caller continues to match the exact requested address; discovery never
+// chooses a substitute based on name or another property.
+func resolveBLEPairTarget[T any](ctx context.Context, find func() (T, error), discover func(context.Context) error) (T, error) {
+	target, err := find()
+	if err == nil || !errors.Is(err, errBLEPeerUnavailable) {
+		return target, err
+	}
+	if err := discover(ctx); err != nil {
+		var zero T
+		return zero, err
+	}
+	return find()
+}
+
+// runBoundedBLEDiscovery guarantees that every successful discovery start is
+// followed by a stop, including cancellation and timeout paths.
+func runBoundedBLEDiscovery(ctx context.Context, start func(context.Context) error, stop func() error, wait func(context.Context) error) error {
+	if err := start(ctx); err != nil {
+		return err
+	}
+	defer stop()
+	return wait(ctx)
+}
 
 // BLEPairingDiagnostic is safe to retain in local operational diagnostics. It
 // intentionally contains no D-Bus body or pairing material.
@@ -67,10 +97,12 @@ func (c BLEConfig) validate() error {
 // transport selector only; callers must never treat display name or address as
 // MeshCore identity.
 type BLEDevice struct {
-	Address   string `json:"address"`
-	Name      string `json:"name,omitempty"`
-	Bonded    bool   `json:"bonded"`
-	Connected bool   `json:"connected"`
+	Address    string `json:"address"`
+	Name       string `json:"name,omitempty"`
+	RSSI       *int   `json:"rssi,omitempty"`
+	Bonded     bool   `json:"bonded"`
+	Connected  bool   `json:"connected"`
+	Configured bool   `json:"configured,omitempty"`
 }
 
 // BLEBackend isolates BlueZ/D-Bus from transport policy. Its production

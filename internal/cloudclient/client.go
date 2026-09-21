@@ -61,14 +61,15 @@ type ActivationResult struct {
 }
 
 type ReceiverHeartbeat struct {
-	RuntimeVersion           string
-	Platform                 string
-	Arch                     string
-	LocalNodeID              string
-	ObservedNodeIDs          []string
-	Status                   map[string]any
-	Adapters                 []ReceiverAdapterStatus
-	MeshCoreBLEControlResult *MeshCoreBLEControlResult
+	RuntimeVersion             string
+	Platform                   string
+	Arch                       string
+	LocalNodeID                string
+	ObservedNodeIDs            []string
+	Status                     map[string]any
+	Adapters                   []ReceiverAdapterStatus
+	MeshCoreBLEControlResult   *MeshCoreBLEControlResult
+	MeshCoreBLEDiscoveryResult *MeshCoreBLEDiscoveryResult
 }
 
 // ReceiverAdapterStatus is the deliberately small cloud-safe projection of a
@@ -89,6 +90,8 @@ type ReceiverAdapterStatus struct {
 	ProfileState       string                         `json:"profileState,omitempty"`
 	ErrorCode          string                         `json:"errorCode,omitempty"`
 	IntentionalRelease bool                           `json:"intentionalRelease,omitempty"`
+	ConfiguredDevice   string                         `json:"configuredDevice,omitempty"`
+	ConnectedDevice    string                         `json:"connectedDevice,omitempty"`
 	Delivery           *ReceiverAdapterDeliveryStatus `json:"delivery,omitempty"`
 }
 
@@ -97,6 +100,22 @@ type MeshCoreBLEControlResult struct {
 	Operation string `json:"operation"`
 	State     string `json:"state"`
 	ErrorCode string `json:"errorCode,omitempty"`
+}
+
+type MeshCoreBLEDiscoveryDevice struct {
+	Address    string `json:"address"`
+	Name       string `json:"name,omitempty"`
+	RSSI       *int   `json:"rssi,omitempty"`
+	Bonded     bool   `json:"bonded"`
+	Connected  bool   `json:"connected"`
+	Configured bool   `json:"configured"`
+}
+
+type MeshCoreBLEDiscoveryResult struct {
+	Version   string                       `json:"version"`
+	State     string                       `json:"state"`
+	ErrorCode string                       `json:"errorCode,omitempty"`
+	Devices   []MeshCoreBLEDiscoveryDevice `json:"devices"`
 }
 
 type ReceiverAdapterDeliveryStatus struct {
@@ -153,6 +172,8 @@ type MeshCoreBLEControlIntent struct {
 	ReceiverAgentID string `json:"receiverAgentId"`
 	InstallationID  string `json:"installationId"`
 	RequestedAt     string `json:"requestedAt"`
+	DeviceAddress   string `json:"deviceAddress,omitempty"`
+	PairingPIN      string `json:"pairingPin,omitempty"`
 }
 
 // MeshCoreTrackingIntent is a cloud-authoritative snapshot. It is not a
@@ -572,23 +593,25 @@ func (c *HTTPClient) SendReceiverHeartbeat(
 	}
 
 	request := struct {
-		RuntimeVersion           string                    `json:"runtimeVersion,omitempty"`
-		Platform                 string                    `json:"platform,omitempty"`
-		Arch                     string                    `json:"arch,omitempty"`
-		LocalNodeID              string                    `json:"localNodeId,omitempty"`
-		ObservedNodeIDs          []string                  `json:"observedNodeIds,omitempty"`
-		Status                   map[string]any            `json:"status,omitempty"`
-		Adapters                 []ReceiverAdapterStatus   `json:"adapters,omitempty"`
-		MeshCoreBLEControlResult *MeshCoreBLEControlResult `json:"meshcoreBleControlResult,omitempty"`
+		RuntimeVersion             string                      `json:"runtimeVersion,omitempty"`
+		Platform                   string                      `json:"platform,omitempty"`
+		Arch                       string                      `json:"arch,omitempty"`
+		LocalNodeID                string                      `json:"localNodeId,omitempty"`
+		ObservedNodeIDs            []string                    `json:"observedNodeIds,omitempty"`
+		Status                     map[string]any              `json:"status,omitempty"`
+		Adapters                   []ReceiverAdapterStatus     `json:"adapters,omitempty"`
+		MeshCoreBLEControlResult   *MeshCoreBLEControlResult   `json:"meshcoreBleControlResult,omitempty"`
+		MeshCoreBLEDiscoveryResult *MeshCoreBLEDiscoveryResult `json:"meshcoreBleDiscoveryResult,omitempty"`
 	}{
-		RuntimeVersion:           strings.TrimSpace(heartbeat.RuntimeVersion),
-		Platform:                 strings.TrimSpace(heartbeat.Platform),
-		Arch:                     strings.TrimSpace(heartbeat.Arch),
-		LocalNodeID:              strings.TrimSpace(heartbeat.LocalNodeID),
-		ObservedNodeIDs:          append([]string(nil), heartbeat.ObservedNodeIDs...),
-		Status:                   heartbeat.Status,
-		Adapters:                 append([]ReceiverAdapterStatus(nil), heartbeat.Adapters...),
-		MeshCoreBLEControlResult: heartbeat.MeshCoreBLEControlResult,
+		RuntimeVersion:             strings.TrimSpace(heartbeat.RuntimeVersion),
+		Platform:                   strings.TrimSpace(heartbeat.Platform),
+		Arch:                       strings.TrimSpace(heartbeat.Arch),
+		LocalNodeID:                strings.TrimSpace(heartbeat.LocalNodeID),
+		ObservedNodeIDs:            append([]string(nil), heartbeat.ObservedNodeIDs...),
+		Status:                     heartbeat.Status,
+		Adapters:                   append([]ReceiverAdapterStatus(nil), heartbeat.Adapters...),
+		MeshCoreBLEControlResult:   heartbeat.MeshCoreBLEControlResult,
+		MeshCoreBLEDiscoveryResult: heartbeat.MeshCoreBLEDiscoveryResult,
 	}
 
 	var response struct {
