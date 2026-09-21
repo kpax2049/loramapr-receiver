@@ -192,6 +192,24 @@ func TestMeshcoreBLEControlErrorCodeFallsBackForUnknownFailure(t *testing.T) {
 	}
 }
 
+func TestReceiverDiagnosticCodeProjectsOnlyAllowedSafeCodes(t *testing.T) {
+	for _, tc := range []struct {
+		input string
+		want  string
+	}{
+		{input: "cloud_config_incompatible", want: "cloud_config_incompatible"},
+		{input: "local_schema_incompatible", want: "local_schema_incompatible"},
+		{input: "receiver_auth_invalid", want: "receiver_auth_invalid"},
+		{input: "receiver_version_unsupported", want: "receiver_version_unsupported"},
+		{input: "dbus: org.bluez.Error.Failed", want: ""},
+		{input: "https://private.example/token", want: ""},
+	} {
+		if got := receiverDiagnosticCode(tc.input); got != tc.want {
+			t.Errorf("receiverDiagnosticCode(%q) = %q, want %q", tc.input, got, tc.want)
+		}
+	}
+}
+
 func TestPairMeshCoreBLERequiresReleaseAndBlocksResumeUntilPairCompletes(t *testing.T) {
 	t.Parallel()
 	adapter := meshcore.NewAdapter(meshcore.Config{Transport: "ble", BLE: meshcore.BLEConfig{PeerAddress: "AA:BB:CC:DD:EE:FF"}}, nil, nil)

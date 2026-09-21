@@ -243,6 +243,23 @@ func TestSendReceiverHeartbeat(t *testing.T) {
 			if payload["runtimeVersion"] != "dev" {
 				t.Fatalf("unexpected runtime version payload: %#v", payload)
 			}
+			if payload["receiverDiagnosticCode"] != "cloud_config_incompatible" {
+				t.Fatalf("unexpected diagnostic payload: %#v", payload)
+			}
+			if _, ok := payload["receiverDiagnosticMessage"]; ok {
+				t.Fatalf("unsafe diagnostic message payload: %#v", payload)
+			}
+			for _, field := range []string{
+				"receiverDiagnosticHint",
+				"receiverDiagnosticEndpoint",
+				"receiverDiagnosticToken",
+				"receiverDiagnosticCredential",
+				"receiverDiagnosticPairingPin",
+			} {
+				if _, ok := payload[field]; ok {
+					t.Fatalf("unsafe diagnostic field %q in payload: %#v", field, payload)
+				}
+			}
 			adapters, ok := payload["adapters"].([]any)
 			if !ok || len(adapters) != 1 {
 				t.Fatalf("unexpected adapter payload: %#v", payload)
@@ -275,12 +292,13 @@ func TestSendReceiverHeartbeat(t *testing.T) {
 	}
 
 	ack, err := client.SendReceiverHeartbeat(context.Background(), "/api/receiver/heartbeat", "ingest-secret", ReceiverHeartbeat{
-		RuntimeVersion:  "dev",
-		Platform:        "linux",
-		Arch:            "arm64",
-		LocalNodeID:     "!home",
-		ObservedNodeIDs: []string{"!node-1", "!node-2"},
-		Status:          map[string]any{"queueDepth": 1},
+		RuntimeVersion:         "dev",
+		Platform:               "linux",
+		Arch:                   "arm64",
+		LocalNodeID:            "!home",
+		ObservedNodeIDs:        []string{"!node-1", "!node-2"},
+		ReceiverDiagnosticCode: "cloud_config_incompatible",
+		Status:                 map[string]any{"queueDepth": 1},
 		Adapters: []ReceiverAdapterStatus{{
 			Protocol: "meshcore", Enabled: true, Configured: true, Lifecycle: "connected",
 			ConnectionState: "connected", Connected: true, Ready: true, Transport: "ble",

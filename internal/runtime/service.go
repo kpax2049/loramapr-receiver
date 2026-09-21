@@ -1623,6 +1623,7 @@ func (s *Service) sendHeartbeat(ctx context.Context, snapshot state.Data, meshSn
 		Arch:                       goruntime.GOARCH,
 		LocalNodeID:                meshSnap.LocalNodeID,
 		ObservedNodeIDs:            append([]string(nil), meshSnap.ObservedNodeIDs...),
+		ReceiverDiagnosticCode:     receiverDiagnosticCode(updateSnap.FailureCode),
 		Adapters:                   cloudAdapterStatuses(updateSnap.Adapters),
 		MeshCoreBLEControlResult:   s.meshcoreBLEControlResult(),
 		MeshCoreBLEDiscoveryResult: s.meshcoreBLEDiscoveryResult(),
@@ -1882,6 +1883,18 @@ func meshcoreBLEControlErrorCode(err error) string {
 		return "pairing_peer_selection_unavailable"
 	}
 	return "receiver_operation_failed"
+}
+
+// receiverDiagnosticCode is the deliberately tiny cloud-safe projection of
+// existing Receiver diagnostics. It carries no local message, endpoint, or
+// error detail; Cloud owns user-facing wording for these codes.
+func receiverDiagnosticCode(value string) string {
+	switch strings.TrimSpace(value) {
+	case "cloud_config_incompatible", "local_schema_incompatible", "receiver_auth_invalid", "receiver_version_unsupported":
+		return strings.TrimSpace(value)
+	default:
+		return ""
+	}
 }
 
 func meshcoreBLEDiscoveryResult(version string, devices []meshcore.BLEDevice, err error) *cloudclient.MeshCoreBLEDiscoveryResult {

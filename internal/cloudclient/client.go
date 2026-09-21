@@ -66,6 +66,7 @@ type ReceiverHeartbeat struct {
 	Arch                       string
 	LocalNodeID                string
 	ObservedNodeIDs            []string
+	ReceiverDiagnosticCode     string
 	Status                     map[string]any
 	Adapters                   []ReceiverAdapterStatus
 	MeshCoreBLEControlResult   *MeshCoreBLEControlResult
@@ -598,6 +599,7 @@ func (c *HTTPClient) SendReceiverHeartbeat(
 		Arch                       string                      `json:"arch,omitempty"`
 		LocalNodeID                string                      `json:"localNodeId,omitempty"`
 		ObservedNodeIDs            []string                    `json:"observedNodeIds,omitempty"`
+		ReceiverDiagnosticCode     string                      `json:"receiverDiagnosticCode,omitempty"`
 		Status                     map[string]any              `json:"status,omitempty"`
 		Adapters                   []ReceiverAdapterStatus     `json:"adapters,omitempty"`
 		MeshCoreBLEControlResult   *MeshCoreBLEControlResult   `json:"meshcoreBleControlResult,omitempty"`
@@ -608,6 +610,7 @@ func (c *HTTPClient) SendReceiverHeartbeat(
 		Arch:                       strings.TrimSpace(heartbeat.Arch),
 		LocalNodeID:                strings.TrimSpace(heartbeat.LocalNodeID),
 		ObservedNodeIDs:            append([]string(nil), heartbeat.ObservedNodeIDs...),
+		ReceiverDiagnosticCode:     strings.TrimSpace(heartbeat.ReceiverDiagnosticCode),
 		Status:                     heartbeat.Status,
 		Adapters:                   append([]ReceiverAdapterStatus(nil), heartbeat.Adapters...),
 		MeshCoreBLEControlResult:   heartbeat.MeshCoreBLEControlResult,
