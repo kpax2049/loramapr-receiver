@@ -28,7 +28,14 @@ var (
 	usedBytesKey            = []byte("used_bytes")
 	dispatchPauseKey        = []byte("dispatch_pause")
 	installationRotationKey = []byte("installation_rotation")
+	reconciledBindingKey    = []byte("reconciled_binding")
 )
+
+type reconciledBinding struct {
+	OwnerID         string `json:"ownerId"`
+	ReceiverAgentID string `json:"receiverAgentId"`
+	InstallationID  string `json:"installationId"`
+}
 
 type Store struct {
 	mu                   sync.RWMutex
@@ -124,6 +131,7 @@ func (s *Store) Enqueue(input Delivery) error {
 		if count+1 > s.cfg.MaxEvents || used+int64(len(encoded)) > s.cfg.MaxBytes {
 			return ErrOutboxFull
 		}
+		invalidateReconciledBinding(tx, input)
 		if err := deliveries.Put(key, encoded); err != nil {
 			return err
 		}
@@ -618,10 +626,16 @@ func (s *Store) ReconcileBinding(binding Binding) (BindingReconcileResult, error
 	if binding.OwnerID == "" || binding.ReceiverAgentID == "" || binding.InstallationID == "" {
 		return BindingReconcileResult{}, errors.New("complete outbox binding is required")
 	}
+	if s.bindingAlreadyReconciled(binding) {
+		return BindingReconcileResult{}, nil
+	}
 
 	now := s.cfg.Now().UTC()
 	result := BindingReconcileResult{}
 	err := s.update(func(tx *bolt.Tx) error {
+		if bindingAlreadyReconciled(tx, binding) {
+			return nil
+		}
 		deliveries := tx.Bucket(deliveriesBucket)
 		quarantine := tx.Bucket(quarantineBucket)
 		type matched struct {
@@ -684,9 +698,57 @@ func (s *Store) ReconcileBinding(binding Binding) (BindingReconcileResult, error
 				result.CredentialRebindQuarantined++
 			}
 		}
-		return writeCounters(tx, count, used)
+		if err := writeCounters(tx, count, used); err != nil {
+			return err
+		}
+		encodedBinding, err := json.Marshal(reconciledBindingFrom(binding))
+		if err != nil {
+			return err
+		}
+		return tx.Bucket(metaBucket).Put(reconciledBindingKey, encodedBinding)
 	})
 	return result, err
+}
+
+func (s *Store) bindingAlreadyReconciled(binding Binding) bool {
+	already := false
+	_ = s.view(func(tx *bolt.Tx) error {
+		already = bindingAlreadyReconciled(tx, binding)
+		return nil
+	})
+	return already
+}
+
+func bindingAlreadyReconciled(tx *bolt.Tx, binding Binding) bool {
+	raw := tx.Bucket(metaBucket).Get(reconciledBindingKey)
+	if len(raw) == 0 {
+		return false
+	}
+	var reconciled reconciledBinding
+	if err := json.Unmarshal(raw, &reconciled); err != nil {
+		return false
+	}
+	return reconciled == reconciledBindingFrom(binding)
+}
+
+func invalidateReconciledBinding(tx *bolt.Tx, delivery Delivery) {
+	meta := tx.Bucket(metaBucket)
+	raw := meta.Get(reconciledBindingKey)
+	if len(raw) == 0 {
+		return
+	}
+	var reconciled reconciledBinding
+	if err := json.Unmarshal(raw, &reconciled); err != nil || reconciled.OwnerID != strings.TrimSpace(delivery.OwnerID) || reconciled.ReceiverAgentID != strings.TrimSpace(delivery.ReceiverAgentIDSnapshot) || reconciled.InstallationID != strings.TrimSpace(delivery.InstallationID) {
+		_ = meta.Delete(reconciledBindingKey)
+	}
+}
+
+func reconciledBindingFrom(binding Binding) reconciledBinding {
+	return reconciledBinding{
+		OwnerID:         strings.TrimSpace(binding.OwnerID),
+		ReceiverAgentID: strings.TrimSpace(binding.ReceiverAgentID),
+		InstallationID:  strings.TrimSpace(binding.InstallationID),
+	}
 }
 
 func (s *Store) Delete(deliveryID string) error {
@@ -792,21 +854,8 @@ func (s *Store) Stats() (Stats, error) {
 			result.DispatchPause = &pause
 		}
 		result.TotalCount, result.UsedBytes = readCounters(tx)
-		result.PendingCount = tx.Bucket(deliveriesBucket).Stats().KeyN
 		result.QuarantinedCount = tx.Bucket(quarantineBucket).Stats().KeyN
-		if err := tx.Bucket(deliveriesBucket).ForEach(func(_, raw []byte) error {
-			record, err := decodeDelivery(raw)
-			if err != nil {
-				return err
-			}
-			if result.OldestPendingAt == nil || record.EnqueuedAt.Before(*result.OldestPendingAt) {
-				oldest := record.EnqueuedAt
-				result.OldestPendingAt = &oldest
-			}
-			return nil
-		}); err != nil {
-			return err
-		}
+		result.PendingCount = result.TotalCount - result.QuarantinedCount
 		return nil
 	})
 	return result, err

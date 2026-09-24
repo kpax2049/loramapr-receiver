@@ -113,6 +113,97 @@ func TestStoreBoundsNeverEvictPending(t *testing.T) {
 	}
 }
 
+func TestStoreStatsCountsDeliveriesWithoutDecodingTheirPayloads(t *testing.T) {
+	store := openTestStore(t, Config{Path: filepath.Join(t.TempDir(), "outbox.db")})
+	defer store.Close()
+	delivery := testDelivery("0198cafe-0000-7000-8000-000000000021", []byte(`{"pending":true}`))
+	if err := store.Enqueue(delivery); err != nil {
+		t.Fatal(err)
+	}
+
+	// Stats is a hot status path. Its counts come from durable metadata and
+	// bbolt bucket metadata; it must not deserialize every delivery just to
+	// answer a status request.
+	if err := store.update(func(tx *bolt.Tx) error {
+		return tx.Bucket(deliveriesBucket).Put([]byte(delivery.DeliveryID), []byte("not-json"))
+	}); err != nil {
+		t.Fatal(err)
+	}
+	stats, err := store.Stats()
+	if err != nil {
+		t.Fatalf("stats decoded delivery content: %v", err)
+	}
+	if stats.PendingCount != 1 || stats.TotalCount != 1 || stats.QuarantinedCount != 0 {
+		t.Fatalf("unexpected cheap stats: %#v", stats)
+	}
+}
+
+func TestStoreReconcileBindingSkipsUnchangedDurableBinding(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "outbox.db")
+	store := openTestStore(t, Config{Path: path})
+	binding := Binding{OwnerID: "owner-1", ReceiverAgentID: "agent-1", InstallationID: "installation-1"}
+	delivery := testDelivery("0198cafe-0000-7000-8000-000000000022", []byte(`{"pending":true}`))
+	delivery.OwnerID = binding.OwnerID
+	delivery.ReceiverAgentIDSnapshot = binding.ReceiverAgentID
+	delivery.InstallationID = binding.InstallationID
+	if err := store.Enqueue(delivery); err != nil {
+		t.Fatal(err)
+	}
+	first, err := store.ReconcileBinding(binding)
+	if err != nil || first.Kept != 1 {
+		t.Fatalf("initial reconciliation result=%#v err=%v", first, err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	store = openTestStore(t, Config{Path: path})
+	defer store.Close()
+
+	// An unchanged binding is the normal dispatch path. It must not inspect
+	// every pending delivery again once the durable marker proves compatibility.
+	if err := store.update(func(tx *bolt.Tx) error {
+		return tx.Bucket(deliveriesBucket).Put([]byte(delivery.DeliveryID), []byte("not-json"))
+	}); err != nil {
+		t.Fatal(err)
+	}
+	second, err := store.ReconcileBinding(binding)
+	if err != nil || second != (BindingReconcileResult{}) {
+		t.Fatalf("unchanged reconciliation result=%#v err=%v", second, err)
+	}
+}
+
+func TestStoreReconcileBindingInvalidatesMarkerForNewDifferentBinding(t *testing.T) {
+	store := openTestStore(t, Config{Path: filepath.Join(t.TempDir(), "outbox.db")})
+	defer store.Close()
+	binding := Binding{OwnerID: "owner-1", ReceiverAgentID: "agent-1", InstallationID: "installation-1"}
+	matching := testDelivery("0198cafe-0000-7000-8000-000000000023", []byte(`{"matching":true}`))
+	matching.OwnerID = binding.OwnerID
+	matching.ReceiverAgentIDSnapshot = binding.ReceiverAgentID
+	matching.InstallationID = binding.InstallationID
+	if err := store.Enqueue(matching); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.ReconcileBinding(binding); err != nil {
+		t.Fatal(err)
+	}
+
+	stale := testDelivery("0198cafe-0000-7000-8000-000000000024", []byte(`{"stale":true}`))
+	stale.OwnerID = binding.OwnerID
+	stale.ReceiverAgentIDSnapshot = "agent-old"
+	stale.InstallationID = binding.InstallationID
+	if err := store.Enqueue(stale); err != nil {
+		t.Fatal(err)
+	}
+	result, err := store.ReconcileBinding(binding)
+	if err != nil || result.CredentialRebindQuarantined != 1 || result.Kept != 1 {
+		t.Fatalf("reconciliation after changed delivery result=%#v err=%v", result, err)
+	}
+	got, err := store.Get(stale.DeliveryID)
+	if err != nil || got.State != StateQuarantined {
+		t.Fatalf("stale delivery=%#v err=%v", got, err)
+	}
+}
+
 func TestStoreQuarantineRetention(t *testing.T) {
 	now := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
 	store := openTestStore(t, Config{Path: filepath.Join(t.TempDir(), "outbox.db"), Now: func() time.Time { return now }})

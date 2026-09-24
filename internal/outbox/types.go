@@ -130,7 +130,6 @@ type Stats struct {
 	QuarantinedCount     int
 	TotalCount           int
 	UsedBytes            int64
-	OldestPendingAt      *time.Time
 	Recovered            bool
 	RecoveryCode         string
 	MaintenanceErrorCode string
