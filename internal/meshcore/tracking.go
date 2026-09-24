@@ -28,6 +28,18 @@ var (
 	ErrTrackingSessionManaged  = errors.New("MeshCore tracking is managed by an active LoRaMapr Session")
 )
 
+const (
+	// SessionTrackingDiagnosticUnavailable is the only cloud-safe diagnostic
+	// emitted for repeated Session-managed telemetry transport failures. It
+	// intentionally identifies neither the local transport nor its error text.
+	SessionTrackingDiagnosticUnavailable = "meshcore_tracking_unavailable"
+
+	// A second consecutive local-adapter failure confirms that this is not a
+	// one-off request interruption. The first retry is scheduled after the
+	// normal 30-second unknown-motion interval.
+	sessionTrackingUnavailableThreshold = 2
+)
+
 // TrackingPolicy centralizes the deliberately conservative M7A airtime policy.
 // It is receiver-local and can be replaced by a stricter policy later.
 type TrackingPolicy struct {
@@ -116,6 +128,8 @@ type TrackingStatus struct {
 	LastFailureScheduleSource   string      `json:"lastFailureScheduleSource,omitempty"`
 	NextRequestAt               *time.Time  `json:"nextRequestAt"`
 	ConsecutiveFailures         int         `json:"consecutiveFailures"`
+	ConsecutiveAdapterFailures  int         `json:"consecutiveAdapterFailures"`
+	SessionDiagnosticCode       string      `json:"sessionDiagnosticCode,omitempty"`
 	LastError                   *string     `json:"lastError"`
 	RouteRecoveryState          string      `json:"routeRecoveryState"`
 	LastRouteRecoveryEvent      string      `json:"lastRouteRecoveryEvent"`
@@ -329,7 +343,12 @@ func (c *TrackingController) Start(publicKey string) (TrackingStatus, error) {
 	c.pathResetAcknowledged = false
 	c.resetRouteFingerprint, c.pathUpdateGeneration, c.resetPathUpdateGen, c.floodObservedAfterReset = "", 0, 0, false
 	c.clearScheduleChangedLocked()
+	previousAdapterFailures, previousDiagnostic := c.status.ConsecutiveAdapterFailures, c.status.SessionDiagnosticCode
 	c.status = TrackingStatus{Active: true, TargetPublicKey: publicKey, MotionState: MotionUnknown, CurrentIntervalSeconds: int64(c.policy.UnknownInterval / time.Second), ControlSource: c.controlSource, RouteRecoveryState: "idle", StaleRouteFailureThreshold: staleRouteFailureThreshold, RecentPolls: []TrackingPoll{}}
+	if c.controlSource == "session" && previousDiagnostic == SessionTrackingDiagnosticUnavailable {
+		c.status.ConsecutiveAdapterFailures = previousAdapterFailures
+		c.status.SessionDiagnosticCode = previousDiagnostic
+	}
 	now := c.now().UTC()
 	c.status.NextRequestAt = timePtr(now)
 	c.logger.Info("MeshCore tracking started", "target_public_key", publicKey)
@@ -654,7 +673,7 @@ func (c *TrackingController) recordSuccess(target string, generation uint64, res
 	c.status.LastResponseAt = timePtr(result.ReceivedAt.UTC())
 	latest := copyTelemetryResult(result)
 	c.status.LatestTelemetry = &latest
-	c.status.ConsecutiveFailures, c.status.LastError = 0, nil
+	c.status.ConsecutiveFailures, c.status.ConsecutiveAdapterFailures, c.status.SessionDiagnosticCode, c.status.LastError = 0, 0, "", nil
 	c.clearStaleRouteFailuresLocked()
 	c.recordTelemetryDiagnosticsLocked(result, nil)
 	c.applyFixLocked(result)
@@ -697,6 +716,15 @@ func (c *TrackingController) recordFailure(target string, generation uint64, res
 	}
 	wasUnavailable := c.status.LastError != nil && *c.status.LastError == ErrTelemetryAdapterDisconnected.Error()
 	c.status.ConsecutiveFailures++
+	if c.controlSource == "session" && errors.Is(err, ErrTelemetryAdapterDisconnected) {
+		c.status.ConsecutiveAdapterFailures++
+		if c.status.ConsecutiveAdapterFailures >= sessionTrackingUnavailableThreshold {
+			c.status.SessionDiagnosticCode = SessionTrackingDiagnosticUnavailable
+		}
+	} else {
+		c.status.ConsecutiveAdapterFailures = 0
+		c.status.SessionDiagnosticCode = ""
+	}
 	message := err.Error()
 	c.status.LastError = &message
 	c.recordTelemetryDiagnosticsLocked(result, err)

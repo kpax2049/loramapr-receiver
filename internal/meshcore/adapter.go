@@ -80,6 +80,7 @@ type Adapter struct {
 	mu            sync.RWMutex
 	status        AdapterStatus
 	link          CompanionLink
+	bleState      func(context.Context) (BLEDevice, error)
 	cancel        context.CancelFunc
 	attemptCancel context.CancelFunc
 	closed        bool
@@ -328,6 +329,7 @@ func (a *Adapter) runBLE(ctx context.Context, sink protocoladapter.AdapterSink) 
 			continue
 		}
 		a.setLink(link)
+		a.setBLEConnectionStateReader(transport)
 		a.setStatus(func(status *AdapterStatus) { status.State = StateConnecting })
 		a.setAttemptCancel(cancelAttempt)
 		err = a.consume(attemptCtx, link, peer, sink)
@@ -904,8 +906,62 @@ func (a *Adapter) clearLink(link CompanionLink) {
 	a.mu.Lock()
 	if a.link == link {
 		a.link = nil
+		a.bleState = nil
 	}
 	a.mu.Unlock()
+}
+
+type bleConnectionStateReader interface {
+	BLEConnectionState(context.Context) (BLEDevice, error)
+}
+
+func (a *Adapter) setBLEConnectionStateReader(transport CompanionTransport) {
+	reader, ok := transport.(bleConnectionStateReader)
+	a.mu.Lock()
+	if ok {
+		a.bleState = reader.BLEConnectionState
+	} else {
+		a.bleState = nil
+	}
+	a.mu.Unlock()
+}
+
+// reconcileBLEConnectionAfterTransportFailure corrects only an already-ready
+// BLE snapshot when BlueZ itself says that the configured peer is gone. A NUS
+// write error alone is not sufficient to change connection state.
+func (a *Adapter) reconcileBLEConnectionAfterTransportFailure() {
+	if a == nil {
+		return
+	}
+	a.mu.RLock()
+	reader := a.bleState
+	configured := a.cfg.BLE.PeerAddress
+	active := a.status.State == StateConnected && !a.status.ReconnectSuppressed
+	a.mu.RUnlock()
+	if reader == nil || !active {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	device, err := reader(ctx)
+	if err != nil || device.Connected || !strings.EqualFold(device.Address, configured) {
+		return
+	}
+
+	a.mu.Lock()
+	if a.status.State != StateConnected || a.status.ReconnectSuppressed {
+		a.mu.Unlock()
+		return
+	}
+	a.status.State = StateDegraded
+	a.status.ConnectedDevice = ""
+	a.status.LastError = "meshcore BLE peer is disconnected"
+	a.status.UpdatedAt = time.Now().UTC()
+	attemptCancel := a.attemptCancel
+	a.mu.Unlock()
+	if attemptCancel != nil {
+		attemptCancel()
+	}
 }
 
 func (a *Adapter) setStatus(update func(*AdapterStatus)) {

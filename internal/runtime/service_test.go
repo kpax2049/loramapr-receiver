@@ -210,6 +210,18 @@ func TestReceiverDiagnosticCodeProjectsOnlyAllowedSafeCodes(t *testing.T) {
 	}
 }
 
+func TestHeartbeatReceiverDiagnosticCodeProjectsOnlySafeSessionTrackingState(t *testing.T) {
+	if got := heartbeatReceiverDiagnosticCode("", meshcore.TrackingStatus{SessionDiagnosticCode: meshcore.SessionTrackingDiagnosticUnavailable}); got != meshcore.SessionTrackingDiagnosticUnavailable {
+		t.Fatalf("session diagnostic=%q", got)
+	}
+	if got := heartbeatReceiverDiagnosticCode("", meshcore.TrackingStatus{ControlSource: "session", SessionDiagnosticCode: "dbus: org.bluez.Error.Failed"}); got != "" {
+		t.Fatalf("unsafe session diagnostic=%q", got)
+	}
+	if got := heartbeatReceiverDiagnosticCode("receiver_auth_invalid", meshcore.TrackingStatus{ControlSource: "session", SessionDiagnosticCode: meshcore.SessionTrackingDiagnosticUnavailable}); got != "receiver_auth_invalid" {
+		t.Fatalf("runtime diagnostic should take precedence, got %q", got)
+	}
+}
+
 func TestPairMeshCoreBLERequiresReleaseAndBlocksResumeUntilPairCompletes(t *testing.T) {
 	t.Parallel()
 	adapter := meshcore.NewAdapter(meshcore.Config{Transport: "ble", BLE: meshcore.BLEConfig{PeerAddress: "AA:BB:CC:DD:EE:FF"}}, nil, nil)

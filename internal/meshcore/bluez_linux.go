@@ -173,6 +173,23 @@ func (b *bluezBackend) Disconnect(ctx context.Context, cfg BLEConfig) error {
 	return nil
 }
 
+// ConnectionState performs one ObjectManager snapshot lookup. Unlike Connect
+// and Discover it does not change BlueZ state or start a discovery window.
+func (b *bluezBackend) ConnectionState(ctx context.Context, cfg BLEConfig) (BLEDevice, error) {
+	conn, err := b.system()
+	if err != nil {
+		return BLEDevice{}, err
+	}
+	if err := ctx.Err(); err != nil {
+		return BLEDevice{}, err
+	}
+	_, props, err := findBluezDevice(conn, cfg)
+	if err != nil {
+		return BLEDevice{}, err
+	}
+	return deviceFromProps(props), nil
+}
+
 func (b *bluezBackend) Pair(ctx context.Context, cfg BLEConfig, pin string) error {
 	conn, err := b.system()
 	if err != nil {

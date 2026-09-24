@@ -159,6 +159,73 @@ func TestTrackingStatusExposesTaggedTelemetryValidationDiagnostics(t *testing.T)
 	}
 }
 
+func TestSessionTrackingDiagnosticRequiresRepeatedAdapterFailureAndClearsOnSuccess(t *testing.T) {
+	controller := activeTrackingController()
+	controller.SetControlSource("session")
+
+	controller.recordFailure(trackingKey, 1, TelemetryResult{}, ErrTelemetryAdapterDisconnected)
+	status := controller.Status()
+	if status.SessionDiagnosticCode != "" || status.ConsecutiveAdapterFailures != 1 {
+		t.Fatalf("single adapter failure raised diagnostic: %#v", status)
+	}
+
+	controller.recordFailure(trackingKey, 1, TelemetryResult{}, ErrTelemetryAdapterDisconnected)
+	status = controller.Status()
+	if status.SessionDiagnosticCode != SessionTrackingDiagnosticUnavailable || status.ConsecutiveAdapterFailures != 2 {
+		t.Fatalf("repeated adapter failures did not raise safe diagnostic: %#v", status)
+	}
+	if status.LastError == nil || *status.LastError != ErrTelemetryAdapterDisconnected.Error() {
+		t.Fatalf("local diagnostic state lost adapter error: %#v", status)
+	}
+
+	controller.recordSuccess(trackingKey, 1, telemetryFix(52, 13, time.Now().UTC()))
+	status = controller.Status()
+	if status.SessionDiagnosticCode != "" || status.ConsecutiveAdapterFailures != 0 || status.ConsecutiveFailures != 0 {
+		t.Fatalf("successful poll did not clear session diagnostic: %#v", status)
+	}
+}
+
+func TestSessionTrackingDiagnosticPersistsAcrossSessionRestartUntilSuccess(t *testing.T) {
+	controller := activeTrackingController()
+	release := make(chan struct{})
+	controller.request = func(context.Context, string) (TelemetryResult, error) {
+		<-release
+		return TelemetryResult{}, ErrTelemetryAdapterDisconnected
+	}
+	controller.SetControlSource("session")
+	controller.recordFailure(trackingKey, 1, TelemetryResult{}, ErrTelemetryAdapterDisconnected)
+	controller.recordFailure(trackingKey, 1, TelemetryResult{}, ErrTelemetryAdapterDisconnected)
+	controller.Stop()
+	controller.SetControlSource("")
+	if status := controller.Status(); status.SessionDiagnosticCode != SessionTrackingDiagnosticUnavailable {
+		t.Fatalf("stopped session lost diagnostic: %#v", status)
+	}
+
+	controller.SetControlSource("session")
+	if _, err := controller.Start(trackingKey); err != nil {
+		t.Fatalf("restart tracking: %v", err)
+	}
+	defer func() {
+		controller.Stop()
+		close(release)
+	}()
+	if status := controller.Status(); status.SessionDiagnosticCode != SessionTrackingDiagnosticUnavailable || status.ConsecutiveAdapterFailures != 2 {
+		t.Fatalf("new Session lost unresolved diagnostic: %#v", status)
+	}
+}
+
+func TestSessionTrackingDiagnosticIgnoresTransientAndNonAdapterFailures(t *testing.T) {
+	controller := activeTrackingController()
+	controller.SetControlSource("session")
+
+	controller.recordFailure(trackingKey, 1, TelemetryResult{}, ErrTelemetryTimeout)
+	controller.recordFailure(trackingKey, 1, TelemetryResult{}, ErrTelemetryAdapterDisconnected)
+	status := controller.Status()
+	if status.SessionDiagnosticCode != "" || status.ConsecutiveAdapterFailures != 1 {
+		t.Fatalf("mixed failures raised adapter diagnostic: %#v", status)
+	}
+}
+
 func TestTrackingNewControllerDoesNotResume(t *testing.T) {
 	controller := NewTrackingController(func(context.Context, string) (TelemetryResult, error) {
 		t.Fatal("new controller polled without start")

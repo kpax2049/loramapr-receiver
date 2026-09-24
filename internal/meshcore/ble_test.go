@@ -63,6 +63,15 @@ func TestBLETransportUsesOneRawCompanionFramePerNotification(t *testing.T) {
 	}
 }
 
+func TestBLETransportReadsOptionalAuthoritativeConnectionState(t *testing.T) {
+	backend := &fakeBLEBackend{connectionState: BLEDevice{Address: "AA:BB:CC:DD:EE:FF", Bonded: true, Connected: false}}
+	transport := NewBLECompanionTransportWithBackend(BLEConfig{PeerAddress: "AA:BB:CC:DD:EE:FF"}, backend)
+	device, err := transport.BLEConnectionState(context.Background())
+	if err != nil || device.Connected || device.Address != "AA:BB:CC:DD:EE:FF" {
+		t.Fatalf("connection state=%#v err=%v", device, err)
+	}
+}
+
 func TestBLETransportCancellationAndReconnectHandshake(t *testing.T) {
 	t.Parallel()
 	connection := &fakeBLEConnection{device: BLEDevice{Address: "AA:BB:CC:DD:EE:FF", Bonded: true, Connected: true}, mtu: MinimumBLEMTU, nus: true, write: true, notify: true}
@@ -270,6 +279,8 @@ func TestBLERawSignedAdvertRetainsIndependentVerificationAndDelegatedAdvertFails
 type fakeBLEBackend struct {
 	connection                          *fakeBLEConnection
 	devices                             []BLEDevice
+	connectionState                     BLEDevice
+	connectionStateErr                  error
 	pairAddress, pairPin, forgetAddress string
 	disconnectAddress                   string
 	pairErr                             error
@@ -288,6 +299,9 @@ func (b *fakeBLEBackend) Connect(_ context.Context, _ BLEConfig) (BLEConnection,
 func (b *fakeBLEBackend) Disconnect(_ context.Context, cfg BLEConfig) error {
 	b.disconnectAddress = cfg.PeerAddress
 	return nil
+}
+func (b *fakeBLEBackend) ConnectionState(_ context.Context, _ BLEConfig) (BLEDevice, error) {
+	return b.connectionState, b.connectionStateErr
 }
 func (b *fakeBLEBackend) Pair(ctx context.Context, cfg BLEConfig, pin string) error {
 	b.pairAddress = cfg.PeerAddress

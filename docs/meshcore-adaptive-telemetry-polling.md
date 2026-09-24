@@ -238,6 +238,23 @@ Session-managed intent takes precedence and manual start/stop returns a
 conflict. Solicited telemetry continues through the normalized durable event
 path; it is operational request-correlated data, not signed position evidence.
 
+### Session tracking availability diagnostic
+
+Two consecutive Session-managed failures classified as local adapter transport
+loss raise the cloud-safe `meshcore_tracking_unavailable` diagnostic. The first
+failure remains a normal bounded adapter-recovery retry; the second confirms
+the condition and avoids warning on a single transient interruption. The
+diagnostic means that telemetry requests cannot currently reach the attached
+MeshCore device. It does not change Receiver lifecycle, heartbeat, Cloud
+reachability, or Session state. A successful telemetry response clears it.
+It remains visible across a later Session start in the same Receiver process,
+so an already-known transport problem is visible before the next Session is
+started; a Receiver restart clears this ephemeral observation.
+
+Only the fixed code reaches Cloud. Local BlueZ, NUS, and wrapped transport
+error text remain Receiver-local and are never included in the heartbeat or
+browser response.
+
 ### Session recovery cadence (M7A.4)
 
 An explicitly active Session is a coverage-discovery operation. A remote

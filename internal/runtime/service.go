@@ -1623,7 +1623,7 @@ func (s *Service) sendHeartbeat(ctx context.Context, snapshot state.Data, meshSn
 		Arch:                       goruntime.GOARCH,
 		LocalNodeID:                meshSnap.LocalNodeID,
 		ObservedNodeIDs:            append([]string(nil), meshSnap.ObservedNodeIDs...),
-		ReceiverDiagnosticCode:     receiverDiagnosticCode(updateSnap.FailureCode),
+		ReceiverDiagnosticCode:     heartbeatReceiverDiagnosticCode(updateSnap.FailureCode, s.meshcoreTrackingStatus()),
 		Adapters:                   cloudAdapterStatuses(updateSnap.Adapters),
 		MeshCoreBLEControlResult:   s.meshcoreBLEControlResult(),
 		MeshCoreBLEDiscoveryResult: s.meshcoreBLEDiscoveryResult(),
@@ -1895,6 +1895,19 @@ func receiverDiagnosticCode(value string) string {
 	default:
 		return ""
 	}
+}
+
+// heartbeatReceiverDiagnosticCode composes only vetted receiver-local state
+// into the heartbeat contract. Existing lifecycle/runtime failures retain
+// precedence over an operational Session tracking warning.
+func heartbeatReceiverDiagnosticCode(failureCode string, tracking meshcore.TrackingStatus) string {
+	if code := receiverDiagnosticCode(failureCode); code != "" {
+		return code
+	}
+	if tracking.SessionDiagnosticCode == meshcore.SessionTrackingDiagnosticUnavailable {
+		return meshcore.SessionTrackingDiagnosticUnavailable
+	}
+	return ""
 }
 
 func meshcoreBLEDiscoveryResult(version string, devices []meshcore.BLEDevice, err error) *cloudclient.MeshCoreBLEDiscoveryResult {

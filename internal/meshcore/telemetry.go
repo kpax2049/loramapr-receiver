@@ -272,6 +272,7 @@ func (a *Adapter) RequestTelemetry(ctx context.Context, publicKey string) (Telem
 	}
 	if err := link.WriteFrame(ctx, frame); err != nil {
 		wrapped := fmt.Errorf("%w: %v", ErrTelemetryAdapterDisconnected, err)
+		a.reconcileBLEConnectionAfterTransportFailure()
 		a.finishTelemetry(request, TelemetryResult{}, wrapped)
 		return TelemetryResult{}, wrapped
 	}

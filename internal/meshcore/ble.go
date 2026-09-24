@@ -116,6 +116,13 @@ type BLEBackend interface {
 	Forget(context.Context, BLEConfig) error
 }
 
+// BLEConnectionStateBackend is an optional, inexpensive authoritative read of
+// the configured BlueZ Device1 state. It deliberately does not initiate
+// discovery or a connection attempt.
+type BLEConnectionStateBackend interface {
+	ConnectionState(context.Context, BLEConfig) (BLEDevice, error)
+}
+
 // BLEConnection is a connected, bonded NUS view. Values are raw Companion
 // frames; this boundary intentionally has no serial marker or length framing.
 type BLEConnection interface {
@@ -171,6 +178,20 @@ func (t *BLECompanionTransport) Disconnect(ctx context.Context) error {
 		return ErrBLEUnsupported
 	}
 	return t.backend.Disconnect(ctx, t.cfg)
+}
+
+// BLEConnectionState reads the currently cached BlueZ Device1 properties for
+// this transport's configured peer. Backends that do not support BlueZ state
+// inspection remain usable for the normal transport lifecycle.
+func (t *BLECompanionTransport) BLEConnectionState(ctx context.Context) (BLEDevice, error) {
+	if t == nil || t.backend == nil {
+		return BLEDevice{}, ErrBLEUnsupported
+	}
+	reader, ok := t.backend.(BLEConnectionStateBackend)
+	if !ok {
+		return BLEDevice{}, ErrBLEUnsupported
+	}
+	return reader.ConnectionState(ctx, t.cfg)
 }
 
 func validateBLEConnection(cfg BLEConfig, connection BLEConnection) error {

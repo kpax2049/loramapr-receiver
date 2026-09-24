@@ -52,6 +52,46 @@ func TestAdapterTelemetryRequestFailsClosedWhenReleased(t *testing.T) {
 	}
 }
 
+func TestTelemetryWriteFailureReconcilesOnlyConfirmedBlueZDisconnect(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		bluezConnected bool
+		wantState      ConnectionState
+		wantCancelled  bool
+	}{
+		{name: "confirmed disconnect", bluezConnected: false, wantState: StateDegraded, wantCancelled: true},
+		{name: "still connected", bluezConnected: true, wantState: StateConnected, wantCancelled: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			adapter := NewAdapter(Config{Transport: "ble", BLE: BLEConfig{PeerAddress: "AA:BB:CC:DD:EE:FF"}}, nil, nil)
+			adapter.setLink(failingTelemetryWriteLink{})
+			adapter.setStatus(func(status *AdapterStatus) {
+				status.State = StateConnected
+				status.ConnectedDevice = "AA:BB:CC:DD:EE:FF"
+				status.Session.State = SessionReady
+			})
+			var cancelled bool
+			adapter.mu.Lock()
+			adapter.bleState = func(context.Context) (BLEDevice, error) {
+				return BLEDevice{Address: "AA:BB:CC:DD:EE:FF", Connected: tc.bluezConnected}, nil
+			}
+			adapter.attemptCancel = func() { cancelled = true }
+			adapter.mu.Unlock()
+
+			if _, err := adapter.RequestTelemetry(context.Background(), trackingKey); !errors.Is(err, ErrTelemetryAdapterDisconnected) {
+				t.Fatalf("telemetry error=%v", err)
+			}
+			status := adapter.DetailedSnapshot()
+			if status.State != tc.wantState || cancelled != tc.wantCancelled {
+				t.Fatalf("status=%#v cancelled=%t", status, cancelled)
+			}
+			if !tc.bluezConnected && status.ConnectedDevice != "" {
+				t.Fatalf("confirmed disconnect retained connected peer: %#v", status)
+			}
+		})
+	}
+}
+
 func TestPathResetUsesExactFullKeyAndRequiresCompanionAcknowledgement(t *testing.T) {
 	key := trackingKey
 	target := mustTelemetryTarget(t, key)
@@ -441,6 +481,17 @@ type telemetryTestLink struct {
 	writes chan []byte
 	mu     sync.Mutex
 }
+
+type failingTelemetryWriteLink struct{}
+
+func (failingTelemetryWriteLink) ReadFrame(context.Context) ([]byte, error) {
+	return nil, errors.New("not used")
+}
+func (failingTelemetryWriteLink) WriteFrame(context.Context, []byte) error {
+	return errors.New("write NUS request")
+}
+func (failingTelemetryWriteLink) Metadata() TransportMetadata { return TransportMetadata{Kind: "test"} }
+func (failingTelemetryWriteLink) Close() error                { return nil }
 
 func (l *telemetryTestLink) ReadFrame(context.Context) ([]byte, error) {
 	return nil, errors.New("not used")
