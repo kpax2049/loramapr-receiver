@@ -128,8 +128,10 @@ func defaultLinuxConfig() string {
 func defaultSystemdUnit(layout Layout, serviceUser, serviceGroup string) string {
 	return fmt.Sprintf(`[Unit]
 Description=LoRaMapr Receiver Service
-After=network-online.target
+After=network-online.target bluetooth.service
 Wants=network-online.target
+StartLimitIntervalSec=5min
+StartLimitBurst=5
 
 [Service]
 Type=simple
@@ -140,6 +142,7 @@ ExecStart=%s -config %s
 WorkingDirectory=%s
 Restart=on-failure
 RestartSec=5
+TimeoutStopSec=90s
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=full

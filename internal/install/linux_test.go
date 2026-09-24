@@ -59,6 +59,11 @@ func TestInstallLinuxSystemdWritesFiles(t *testing.T) {
 	if !strings.Contains(string(unitText), "SupplementaryGroups=dialout") {
 		t.Fatal("expected systemd unit to include SupplementaryGroups=dialout")
 	}
+	for _, expected := range []string{"After=network-online.target bluetooth.service", "StartLimitIntervalSec=5min", "StartLimitBurst=5", "Restart=on-failure", "TimeoutStopSec=90s"} {
+		if !strings.Contains(string(unitText), expected) {
+			t.Fatalf("expected systemd unit to include %q", expected)
+		}
+	}
 
 	cfg, err := config.Load(result.Layout.ConfigPath)
 	if err != nil {
@@ -75,6 +80,34 @@ func TestInstallLinuxSystemdWritesFiles(t *testing.T) {
 	}
 	if cfg.Cloud.BaseURL != "https://loramapr.com" {
 		t.Fatalf("expected packaged cloud base URL https://loramapr.com, got %q", cfg.Cloud.BaseURL)
+	}
+}
+
+func TestWorkspaceSystemdTemplateHasDurableReceiverPolicy(t *testing.T) {
+	t.Parallel()
+
+	unitPath := filepath.Join("..", "..", "packaging", "linux", "systemd", "loramapr-receiverd-workspace.service")
+	unitText, err := os.ReadFile(unitPath)
+	if err != nil {
+		t.Fatalf("read workspace systemd template: %v", err)
+	}
+	for _, expected := range []string{
+		"User=kpax",
+		"Group=kpax",
+		"WorkingDirectory=/home/kpax/m6/loramapr-receiver",
+		"ExecStart=/home/kpax/m6/loramapr-receiver/bin/loramapr-receiverd-current -config /home/kpax/m6/receiver-ble.json",
+		"After=network-online.target bluetooth.service",
+		"Wants=network-online.target",
+		"Restart=on-failure",
+		"RestartSec=5s",
+		"StartLimitIntervalSec=5min",
+		"StartLimitBurst=5",
+		"TimeoutStopSec=90s",
+		"WantedBy=multi-user.target",
+	} {
+		if !strings.Contains(string(unitText), expected) {
+			t.Fatalf("workspace systemd template missing %q", expected)
+		}
 	}
 }
 
