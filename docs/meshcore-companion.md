@@ -1,4 +1,4 @@
-# MeshCore Companion support for LoRaMapr 2.1.0
+# MeshCore Companion support for LoRaMapr 2.2.0
 
 LoRaMapr Receiver can connect to a MeshCore Companion over Bluetooth Low
 Energy (BLE). The intended baseline is stock/official MeshCore Companion
@@ -74,7 +74,7 @@ Cloud Session must be reaffirmed before Session-managed collection starts.
 
 ## What the data means
 
-MeshCore support is complete for LoRaMapr 2.1.0. Solicited telemetry creates
+MeshCore support is complete for LoRaMapr 2.2.0. Solicited telemetry creates
 valid observed position evidence in LoRaMapr Cloud. Together with signed
 adverts and other supported evidence, it is included in the complete Session
 point stream used for Session maps, history, distance, analytics, playback, and
@@ -110,7 +110,7 @@ extended Cloud outages. The supported Linux/systemd service restarts on failure
 and preserves configured state/outbox data. Mac sleep in local development is
 not a production Receiver defect.
 
-## Future work, not a 2.1.0 gap
+## Future work, not a 2.2.0 gap
 
 Repeater identity resolution, richer route/topology reconstruction,
 cross-Receiver semantic deduplication, Receiver handoff/pinning, raw

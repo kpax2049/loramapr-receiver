@@ -33,14 +33,14 @@ preserves the Bluetooth bond and returns the Companion to another client.
 After resume or a Receiver restart, Cloud reaffirms any active Session before
 Session-managed collection resumes.
 
-MeshCore support is complete for LoRaMapr 2.1.0. The Receiver provides
+MeshCore support is complete for LoRaMapr 2.2.0. The Receiver provides
 heartbeat/status/diagnostics, automatic BLE recovery, a durable normalized
 event outbox, and a durable Linux/systemd service path. Valid position-bearing
 observations are delivered with provenance for Cloud's unified Session and
 latest-observed Device workflows; coverage eligibility remains a separate
 Cloud policy.
 
-See [MeshCore Companion support for LoRaMapr 2.1.0](./docs/meshcore-companion.md) for
+See [MeshCore Companion support for LoRaMapr 2.2.0](./docs/meshcore-companion.md) for
 the BLE configuration, pairing flow, status meanings, and data limitations.
 
 ## Supported Install Path
