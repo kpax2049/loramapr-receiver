@@ -1,4 +1,4 @@
-# MeshCore Companion setup and operation
+# MeshCore Companion support for LoRaMapr 2.1.0
 
 LoRaMapr Receiver can connect to a MeshCore Companion over Bluetooth Low
 Energy (BLE). The intended baseline is stock/official MeshCore Companion
@@ -74,16 +74,45 @@ Cloud Session must be reaffirmed before Session-managed collection starts.
 
 ## What the data means
 
-Solicited MeshCore telemetry creates operational observations in LoRaMapr
-Cloud. It can show an Operational Trail, but it is not automatically a trusted
-track point or coverage sample. The request route can be Direct (zero-hop),
-Flood, or Explicit path; the response route is unknown. Route hashes are useful
-evidence, not device or repeater identities.
+MeshCore support is complete for LoRaMapr 2.1.0. Solicited telemetry creates
+valid observed position evidence in LoRaMapr Cloud. Together with signed
+adverts and other supported evidence, it is included in the complete Session
+point stream used for Session maps, history, distance, analytics, playback, and
+GeoJSON export. Evidence/trust/source metadata remains visible.
+
+Verified DeviceCurrentPosition remains signed-only. The normal Device map and
+history can use latest observed telemetry position without promoting it to a
+verified current position or a coverage sample. Coverage eligibility remains a
+separate strict Cloud policy.
+
+The request route can be Direct (zero-hop), Flood, or Explicit path; the
+response route is unknown. Route hashes are useful evidence, not device or
+repeater identities.
 
 Receiver-local RSSI/SNR can be correlated to tagged telemetry using ordered and
 temporal evidence. This association is heuristic rather than deterministic.
 Cloud currently uses only validated high-confidence persisted RF samples;
-other local confidence levels remain under physical validation.
+other local confidence levels are intentionally not projected.
 
-For Cloud map, trail, and trust details, see the Cloud repository's
+For Cloud map, Session, and trust details, see the Cloud repository's
 `docs/meshcore-session-tracking.md`.
+
+## Delivery and recovery
+
+Receiver persists normalized MeshCore observations to its durable outbox before
+Cloud delivery. Cloud deployments require RECEIVER_EVENTS_V1_ENABLED=true to
+accept that event contract. When disabled, the outbox remains durable/retryable
+and the Receiver reports a bounded Cloud-configuration diagnostic rather than
+a connectivity failure.
+
+The outbox is bounded to 10,000 events / 64 MiB; monitor backlog health during
+extended Cloud outages. The supported Linux/systemd service restarts on failure
+and preserves configured state/outbox data. Mac sleep in local development is
+not a production Receiver defect.
+
+## Future work, not a 2.1.0 gap
+
+Repeater identity resolution, richer route/topology reconstruction,
+cross-Receiver semantic deduplication, Receiver handoff/pinning, raw
+event/log viewing, solicited-telemetry trust promotion, and richer
+response-route reconstruction remain future enhancements.

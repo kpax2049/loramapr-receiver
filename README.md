@@ -12,7 +12,8 @@ portal, and forwards observations to Cloud after pairing.
 - **Meshtastic** — receiver-connected packet ingest and fixed-base coverage
   workflows.
 - **MeshCore** — a MeshCore Companion connected to Receiver over BLE for
-  Session-managed operational telemetry.
+  Session-managed telemetry, normal Device/Session position workflows, and
+  retained evidence provenance.
 - **LoRaWAN** — Cloud supports The Things Stack webhooks; it does not require
   a Receiver radio connection.
 
@@ -25,20 +26,21 @@ tab. Starting a selected MeshCore Session in Cloud then manages telemetry
 collection through that Receiver.
 
 The MeshCore tab shows the configured and connected device, connection state,
-session handshake state, and recent request-side route evidence. It also offers
-**Release device** when you need to return the Companion to another client and
-**Resume receiver connection** when the Receiver should reconnect. Releasing
-preserves the Bluetooth bond; after a resume or receiver restart, Cloud must
-reaffirm an active Session before Session-managed collection resumes.
+Session handshake state, and request-side route evidence. Cloud's Receiver
+panel provides Scan, Connect/Pair, Reconnect, Forget, Release, and Resume
+actions; the Receiver remains the authority for local BlueZ work. Releasing
+preserves the Bluetooth bond and returns the Companion to another client.
+After resume or a Receiver restart, Cloud reaffirms any active Session before
+Session-managed collection resumes.
 
-The current local portal exposes BLE discovery and pairing through its local
-Receiver API; the selected BLE peer remains explicit Receiver configuration.
-The portal does not yet provide a device-picker form. Pairing requires the
-Receiver connection to be released first, so it does not interrupt active radio
-use. The recently repaired pairing path is covered by software tests, but its
-destructive physical revalidation is still pending.
+MeshCore support is complete for LoRaMapr 2.1.0. The Receiver provides
+heartbeat/status/diagnostics, automatic BLE recovery, a durable normalized
+event outbox, and a durable Linux/systemd service path. Valid position-bearing
+observations are delivered with provenance for Cloud's unified Session and
+latest-observed Device workflows; coverage eligibility remains a separate
+Cloud policy.
 
-See [MeshCore Companion setup and operation](./docs/meshcore-companion.md) for
+See [MeshCore Companion support for LoRaMapr 2.1.0](./docs/meshcore-companion.md) for
 the BLE configuration, pairing flow, status meanings, and data limitations.
 
 ## Supported Install Path

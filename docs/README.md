@@ -20,7 +20,7 @@
 - [APT Hosting via GitHub Pages (Temporary)](./apt-pages-hosting.md)
 - [Pairing and Bootstrap Lifecycle](./pairing-lifecycle.md)
 - [Embedded Home Auto Session (Milestone 4)](./home-auto-session.md)
-- [MeshCore Companion setup and operation](./meshcore-companion.md)
+- [MeshCore Companion support for LoRaMapr 2.1.0](./meshcore-companion.md)
 - [MeshCore adaptive telemetry polling (developer reference)](./meshcore-adaptive-telemetry-polling.md)
 - [MeshCore BLE lifecycle](./meshcore-ble-lifecycle.md)
 - [Multi-Receiver Identity and Guidance](./multi-receiver-identity.md)
