@@ -44,7 +44,7 @@ func (s *Service) refreshAdapterStatuses() {
 			if stats, err := c.OutboxEngine.Stats(); err != nil {
 				adapters[i].Delivery = &status.AdapterDeliveryStatus{State: "unavailable", FailureCode: "status_unavailable"}
 			} else {
-				adapters[i].Delivery = deliveryStatus(stats)
+				adapters[i].Delivery = deliveryStatus(stats, s.normalizedEventsV1Disabled)
 			}
 		}
 	}
@@ -70,7 +70,7 @@ func statusFromAdapterSnapshot(snapshot protocoladapter.AdapterSnapshot) status.
 	}
 }
 
-func deliveryStatus(stats outbox.Stats) *status.AdapterDeliveryStatus {
+func deliveryStatus(stats outbox.Stats, normalizedEventsV1Disabled bool) *status.AdapterDeliveryStatus {
 	stateName := "ready"
 	if stats.PendingCount > 0 {
 		stateName = "pending"
@@ -84,9 +84,14 @@ func deliveryStatus(stats outbox.Stats) *status.AdapterDeliveryStatus {
 	if stats.DispatchPause != nil {
 		stateName = "paused"
 	}
+	failureCode := strings.TrimSpace(stats.MaintenanceErrorCode)
+	if normalizedEventsV1Disabled {
+		stateName = "degraded"
+		failureCode = "receiver_events_v1_disabled"
+	}
 	return &status.AdapterDeliveryStatus{
 		State: stateName, PendingCount: stats.PendingCount, QuarantinedCount: stats.QuarantinedCount,
 		UsedBytes: stats.UsedBytes, RecoveryCode: strings.TrimSpace(stats.RecoveryCode),
-		FailureCode: strings.TrimSpace(stats.MaintenanceErrorCode),
+		FailureCode: failureCode,
 	}
 }

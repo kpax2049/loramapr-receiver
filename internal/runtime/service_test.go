@@ -19,6 +19,7 @@ import (
 	"github.com/loramapr/loramapr-receiver/internal/outbox"
 	"github.com/loramapr/loramapr-receiver/internal/pairing"
 	"github.com/loramapr/loramapr-receiver/internal/protocoladapter"
+	"github.com/loramapr/loramapr-receiver/internal/receiverevents"
 	"github.com/loramapr/loramapr-receiver/internal/state"
 	"github.com/loramapr/loramapr-receiver/internal/status"
 )
@@ -211,14 +212,37 @@ func TestReceiverDiagnosticCodeProjectsOnlyAllowedSafeCodes(t *testing.T) {
 }
 
 func TestHeartbeatReceiverDiagnosticCodeProjectsOnlySafeSessionTrackingState(t *testing.T) {
-	if got := heartbeatReceiverDiagnosticCode("", meshcore.TrackingStatus{SessionDiagnosticCode: meshcore.SessionTrackingDiagnosticUnavailable}); got != meshcore.SessionTrackingDiagnosticUnavailable {
+	if got := heartbeatReceiverDiagnosticCode("", meshcore.TrackingStatus{SessionDiagnosticCode: meshcore.SessionTrackingDiagnosticUnavailable}, false); got != meshcore.SessionTrackingDiagnosticUnavailable {
 		t.Fatalf("session diagnostic=%q", got)
 	}
-	if got := heartbeatReceiverDiagnosticCode("", meshcore.TrackingStatus{ControlSource: "session", SessionDiagnosticCode: "dbus: org.bluez.Error.Failed"}); got != "" {
+	if got := heartbeatReceiverDiagnosticCode("", meshcore.TrackingStatus{ControlSource: "session", SessionDiagnosticCode: "dbus: org.bluez.Error.Failed"}, false); got != "" {
 		t.Fatalf("unsafe session diagnostic=%q", got)
 	}
-	if got := heartbeatReceiverDiagnosticCode("receiver_auth_invalid", meshcore.TrackingStatus{ControlSource: "session", SessionDiagnosticCode: meshcore.SessionTrackingDiagnosticUnavailable}); got != "receiver_auth_invalid" {
+	if got := heartbeatReceiverDiagnosticCode("receiver_auth_invalid", meshcore.TrackingStatus{ControlSource: "session", SessionDiagnosticCode: meshcore.SessionTrackingDiagnosticUnavailable}, true); got != "receiver_auth_invalid" {
 		t.Fatalf("runtime diagnostic should take precedence, got %q", got)
+	}
+	if got := heartbeatReceiverDiagnosticCode("", meshcore.TrackingStatus{}, true); got != "cloud_config_incompatible" {
+		t.Fatalf("normalized intake configuration diagnostic=%q", got)
+	}
+}
+
+func TestNormalizedDeliveryAvailabilityTracksOnlyKnownCloudConfigurationFailure(t *testing.T) {
+	svc := &Service{}
+	svc.observeNormalizedDeliveryAvailability(receiverevents.DispatchResult{
+		Disposition: receiverevents.Disposition{Action: receiverevents.ActionRetry, Reason: "receiver_events_v1_disabled"},
+	})
+	if !svc.normalizedEventsV1Disabled {
+		t.Fatal("known disabled intake response did not set configuration diagnostic state")
+	}
+	svc.observeNormalizedDeliveryAvailability(receiverevents.DispatchResult{
+		Disposition: receiverevents.Disposition{Action: receiverevents.ActionRetry, Reason: "cloud_service_unavailable"},
+	})
+	if !svc.normalizedEventsV1Disabled {
+		t.Fatal("unrelated retry cleared configuration diagnostic state")
+	}
+	svc.observeNormalizedDeliveryAvailability(receiverevents.DispatchResult{Acknowledged: true})
+	if svc.normalizedEventsV1Disabled {
+		t.Fatal("acknowledged normalized delivery did not clear configuration diagnostic state")
 	}
 }
 

@@ -3,6 +3,7 @@ package runtime
 import (
 	"testing"
 
+	"github.com/loramapr/loramapr-receiver/internal/outbox"
 	"github.com/loramapr/loramapr-receiver/internal/status"
 )
 
@@ -44,5 +45,12 @@ func TestCloudAdapterStatusesRejectsLocalPathAsDeviceIdentity(t *testing.T) {
 	items := cloudAdapterStatuses([]status.AdapterStatus{{Protocol: "meshcore", Enabled: true, Configured: true, Lifecycle: "connected", ConnectionState: "connected", Ready: true, Transport: "physical_serial", ConfiguredDevice: "/dev/ttyACM0"}})
 	if len(items) != 1 || items[0].ConfiguredDevice != "" {
 		t.Fatalf("unsafe configured device projection: %#v", items)
+	}
+}
+
+func TestDeliveryStatusMarksDisabledReceiverEventIntakeWithoutChangingBLEState(t *testing.T) {
+	delivery := deliveryStatus(outbox.Stats{PendingCount: 3}, true)
+	if delivery.State != "degraded" || delivery.FailureCode != "receiver_events_v1_disabled" || delivery.PendingCount != 3 {
+		t.Fatalf("delivery=%#v", delivery)
 	}
 }

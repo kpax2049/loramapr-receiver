@@ -89,17 +89,18 @@ type Service struct {
 	// meshcoreBLEMu makes release, pairing, and resume one local lifecycle
 	// transaction. Resume therefore cannot restart the receiver's BLE
 	// reconnect loop while a temporary BlueZ pairing agent is active.
-	meshcoreBLEMu      sync.Mutex
-	container          *Container
-	mode               config.RunMode
-	steady             steadyState
-	build              buildinfo.Info
-	updater            *update.Checker
-	ingestWake         chan struct{}
-	normalizedWake     chan struct{}
-	ingestTrace        bool
-	meshcoreControl    meshcoreTrackingControl
-	meshcoreBLEControl meshcoreBLEControl
+	meshcoreBLEMu              sync.Mutex
+	container                  *Container
+	mode                       config.RunMode
+	steady                     steadyState
+	build                      buildinfo.Info
+	updater                    *update.Checker
+	ingestWake                 chan struct{}
+	normalizedWake             chan struct{}
+	normalizedEventsV1Disabled bool
+	ingestTrace                bool
+	meshcoreControl            meshcoreTrackingControl
+	meshcoreBLEControl         meshcoreBLEControl
 }
 
 type meshcoreBLEControl struct {
@@ -1307,6 +1308,7 @@ func (s *Service) processNormalizedDispatch(ctx context.Context, trigger string)
 			s.refreshNormalizedOutboxStatus()
 			return
 		}
+		s.observeNormalizedDeliveryAvailability(result)
 		if result.Acknowledged {
 			s.recordClockAttestation(result.ClockAttestation)
 			s.observeAttestedHomeAutoPosition(result.DeliveryID, result.SessionEligiblePosition)
@@ -1330,6 +1332,16 @@ func (s *Service) processNormalizedDispatch(ctx context.Context, trigger string)
 			s.refreshNormalizedOutboxStatus()
 			return
 		}
+	}
+}
+
+func (s *Service) observeNormalizedDeliveryAvailability(result receiverevents.DispatchResult) {
+	if result.Acknowledged {
+		s.normalizedEventsV1Disabled = false
+		return
+	}
+	if result.Disposition.Action == receiverevents.ActionRetry && result.Disposition.Reason == "receiver_events_v1_disabled" {
+		s.normalizedEventsV1Disabled = true
 	}
 }
 
@@ -1407,6 +1419,10 @@ func (s *Service) refreshNormalizedOutboxStatus() {
 	}
 	if stats.MaintenanceErrorCode != "" {
 		c.Status.SetComponent("normalized_outbox", "degraded", stats.MaintenanceErrorCode+": "+stats.MaintenanceError)
+		return
+	}
+	if s.normalizedEventsV1Disabled {
+		c.Status.SetComponent("normalized_outbox", "configuration_incompatible", "receiver event intake is disabled by Cloud configuration; durable delivery will retry")
 		return
 	}
 	messageSuffix := ""
@@ -1623,7 +1639,7 @@ func (s *Service) sendHeartbeat(ctx context.Context, snapshot state.Data, meshSn
 		Arch:                       goruntime.GOARCH,
 		LocalNodeID:                meshSnap.LocalNodeID,
 		ObservedNodeIDs:            append([]string(nil), meshSnap.ObservedNodeIDs...),
-		ReceiverDiagnosticCode:     heartbeatReceiverDiagnosticCode(updateSnap.FailureCode, s.meshcoreTrackingStatus()),
+		ReceiverDiagnosticCode:     heartbeatReceiverDiagnosticCode(updateSnap.FailureCode, s.meshcoreTrackingStatus(), s.normalizedEventsV1Disabled),
 		Adapters:                   cloudAdapterStatuses(updateSnap.Adapters),
 		MeshCoreBLEControlResult:   s.meshcoreBLEControlResult(),
 		MeshCoreBLEDiscoveryResult: s.meshcoreBLEDiscoveryResult(),
@@ -1900,9 +1916,12 @@ func receiverDiagnosticCode(value string) string {
 // heartbeatReceiverDiagnosticCode composes only vetted receiver-local state
 // into the heartbeat contract. Existing lifecycle/runtime failures retain
 // precedence over an operational Session tracking warning.
-func heartbeatReceiverDiagnosticCode(failureCode string, tracking meshcore.TrackingStatus) string {
+func heartbeatReceiverDiagnosticCode(failureCode string, tracking meshcore.TrackingStatus, normalizedEventsV1Disabled bool) string {
 	if code := receiverDiagnosticCode(failureCode); code != "" {
 		return code
+	}
+	if normalizedEventsV1Disabled {
+		return "cloud_config_incompatible"
 	}
 	if tracking.SessionDiagnosticCode == meshcore.SessionTrackingDiagnosticUnavailable {
 		return meshcore.SessionTrackingDiagnosticUnavailable
