@@ -102,7 +102,7 @@ func TestLoadAcceptsBridgeMeshtasticTransport(t *testing.T) {
 	}
 }
 
-func TestLoadValidatesMeshCorePhysicalSerialConfig(t *testing.T) {
+func TestLoadNormalizesMeshCorePhysicalSerialAndAllowsUnconfiguredBLE(t *testing.T) {
 	t.Parallel()
 
 	path := filepath.Join(t.TempDir(), "receiver.json")
@@ -122,10 +122,14 @@ func TestLoadValidatesMeshCorePhysicalSerialConfig(t *testing.T) {
 	}
 
 	if err := os.WriteFile(path, []byte(`{"meshcore":{"transport":"ble"}}`), 0o600); err != nil {
-		t.Fatalf("write invalid config: %v", err)
+		t.Fatalf("write unconfigured BLE config: %v", err)
 	}
-	if _, err := Load(path); err == nil || !strings.Contains(err.Error(), "peer_address") {
-		t.Fatalf("expected BLE peer validation error, got %v", err)
+	cfg, err = Load(path)
+	if err != nil {
+		t.Fatalf("Load returned error for an intentionally unconfigured BLE peer: %v", err)
+	}
+	if cfg.MeshCore.Transport != "ble" || cfg.MeshCore.BLE.Adapter != "hci0" || cfg.MeshCore.BLE.PeerAddress != "" {
+		t.Fatalf("unexpected unconfigured BLE config: %#v", cfg.MeshCore)
 	}
 }
 
