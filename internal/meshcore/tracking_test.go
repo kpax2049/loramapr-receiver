@@ -278,7 +278,6 @@ func TestTrackingInfersSpeedAndMotionBands(t *testing.T) {
 		want     MotionState
 		min, max float64
 	}{
-		{"stationary", 52, 10 * time.Minute, MotionStationary, 0, .01},
 		{"slow", 52.009, 10 * time.Minute, MotionSlow, 5, 7},
 		{"fast", 52.009, time.Minute, MotionFast, 50, 70},
 	}
@@ -296,16 +295,41 @@ func TestTrackingInfersSpeedAndMotionBands(t *testing.T) {
 	}
 }
 
+func TestTrackingTreatsUnknownFreshnessAsUnknownMotion(t *testing.T) {
+	controller := sessionTrackingController(MotionFast)
+	at := time.Date(2026, 9, 13, 10, 0, 0, 0, time.UTC)
+
+	controller.recordSuccess(trackingKey, 1, telemetryFix(52, 13, at))
+	if status := controller.Status(); status.MotionState != MotionUnknown || status.EstimatedSpeedKmh != nil || status.CurrentIntervalSeconds != 30 {
+		t.Fatalf("first coordinate status=%#v", status)
+	}
+	controller.recordSuccess(trackingKey, 1, telemetryFix(52, 13, at.Add(time.Minute)))
+	if status := controller.Status(); status.MotionState != MotionUnknown || status.EstimatedSpeedKmh != nil || status.CurrentIntervalSeconds != 30 {
+		t.Fatalf("repeated coordinate status=%#v", status)
+	}
+	controller.recordSuccess(trackingKey, 1, TelemetryResult{ReceivedAt: at.Add(2 * time.Minute)})
+	if status := controller.Status(); status.MotionState != MotionUnknown || status.EstimatedSpeedKmh != nil || status.CurrentIntervalSeconds != 30 {
+		t.Fatalf("missing GPS status=%#v", status)
+	}
+	controller.recordSuccess(trackingKey, 1, telemetryFix(52.009, 13, at.Add(3*time.Minute)))
+	if status := controller.Status(); status.MotionState != MotionFast || status.EstimatedSpeedKmh == nil || status.CurrentIntervalSeconds != 15 {
+		t.Fatalf("changed coordinate did not restore movement evidence: %#v", status)
+	}
+}
+
 func TestTrackingHysteresisRequiresConfirmationForBandChanges(t *testing.T) {
 	controller := activeTrackingController()
 	at := time.Date(2026, 9, 13, 10, 0, 0, 0, time.UTC)
 	controller.recordSuccess(trackingKey, 1, telemetryFix(52, 13, at))
-	controller.recordSuccess(trackingKey, 1, telemetryFix(52, 13, at.Add(10*time.Minute)))
-	controller.recordSuccess(trackingKey, 1, telemetryFix(52.009, 13, at.Add(11*time.Minute)))
-	if got := controller.Status().MotionState; got != MotionStationary {
+	controller.recordSuccess(trackingKey, 1, telemetryFix(52.004, 13, at.Add(10*time.Minute)))
+	if got := controller.Status().MotionState; got != MotionSlow {
+		t.Fatalf("slow sample state=%q", got)
+	}
+	controller.recordSuccess(trackingKey, 1, telemetryFix(52.013, 13, at.Add(11*time.Minute)))
+	if got := controller.Status().MotionState; got != MotionSlow {
 		t.Fatalf("single fast sample changed state to %q", got)
 	}
-	controller.recordSuccess(trackingKey, 1, telemetryFix(52.018, 13, at.Add(12*time.Minute)))
+	controller.recordSuccess(trackingKey, 1, telemetryFix(52.022, 13, at.Add(12*time.Minute)))
 	if got := controller.Status().MotionState; got != MotionFast {
 		t.Fatalf("confirmed fast samples state=%q", got)
 	}
@@ -315,7 +339,7 @@ func TestTrackingIgnoresMissingInvalidAndAbsurdGPS(t *testing.T) {
 	controller := activeTrackingController()
 	at := time.Date(2026, 9, 13, 10, 0, 0, 0, time.UTC)
 	controller.recordSuccess(trackingKey, 1, TelemetryResult{ReceivedAt: at})
-	if status := controller.Status(); status.LastError == nil || status.EstimatedSpeedKmh != nil {
+	if status := controller.Status(); status.LastError == nil || status.EstimatedSpeedKmh != nil || status.MotionState != MotionUnknown {
 		t.Fatalf("missing GPS status=%#v", status)
 	}
 	badLat, lon := 91.0, 13.0

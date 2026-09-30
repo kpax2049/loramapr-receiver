@@ -1028,21 +1028,41 @@ func stringPtr(value string) *string { return &value }
 func (c *TrackingController) applyFixLocked(result TelemetryResult) {
 	lat, lon := result.Telemetry.Latitude, result.Telemetry.Longitude
 	if lat == nil || lon == nil {
+		c.status.EstimatedSpeedKmh = nil
+		c.setMotionLocked(MotionUnknown)
 		c.setOperationalErrorLocked("telemetry response has no usable GPS")
 		return
 	}
 	if !validCoordinate(*lat, *lon) {
+		c.status.EstimatedSpeedKmh = nil
+		c.setMotionLocked(MotionUnknown)
 		c.setOperationalErrorLocked("telemetry response GPS is invalid")
 		return
 	}
 	observedAt := result.ReceivedAt.UTC()
 	if observedAt.IsZero() {
+		c.status.EstimatedSpeedKmh = nil
+		c.setMotionLocked(MotionUnknown)
 		c.setOperationalErrorLocked("telemetry response timestamp is invalid")
 		return
 	}
 	current := trackingFix{latitude: *lat, longitude: *lon, observedAt: observedAt}
 	if c.fix == nil {
 		c.fix = &current
+		c.status.EstimatedSpeedKmh = nil
+		c.setMotionLocked(MotionUnknown)
+		c.status.LastError = nil
+		return
+	}
+	if c.fix.latitude == current.latitude && c.fix.longitude == current.longitude {
+		// Solicited telemetry has no source GPS fix timestamp or age. An exact
+		// repeat can be a cached node position, so it is not evidence that the
+		// device is stationary. Keep the freshest response as the baseline but
+		// return to the normal unknown-motion discovery cadence.
+		c.fix = &current
+		c.status.EstimatedSpeedKmh = nil
+		c.setMotionLocked(MotionUnknown)
+		c.status.LastError = nil
 		return
 	}
 	elapsed := current.observedAt.Sub(c.fix.observedAt)
