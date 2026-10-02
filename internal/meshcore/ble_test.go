@@ -145,6 +145,17 @@ func TestBLETransportDisconnectClosesTemporaryBackend(t *testing.T) {
 	}
 }
 
+func TestBLETransportStandaloneConnectionStateClosesTemporaryBackend(t *testing.T) {
+	backend := newOwnedTestBLEBackend(nil)
+	transport := NewBLECompanionTransportWithBackend(BLEConfig{PeerAddress: "AA:BB:CC:DD:EE:FF"}, backend)
+	if _, err := transport.BLEConnectionState(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if backend.opens != 1 || backend.closes != 1 {
+		t.Fatalf("standalone state ownership opens=%d closes=%d", backend.opens, backend.closes)
+	}
+}
+
 func TestBLETransportRepeatedConnectReleaseDoesNotAccumulateOwnedBackends(t *testing.T) {
 	var opens, closes int
 	for range 3 {
@@ -406,6 +417,11 @@ func (b *ownedTestBLEBackend) Connect(ctx context.Context, cfg BLEConfig) (BLECo
 func (b *ownedTestBLEBackend) Disconnect(ctx context.Context, cfg BLEConfig) error {
 	b.opens++
 	return b.fakeBLEBackend.Disconnect(ctx, cfg)
+}
+
+func (b *ownedTestBLEBackend) ConnectionState(ctx context.Context, cfg BLEConfig) (BLEDevice, error) {
+	b.opens++
+	return b.fakeBLEBackend.ConnectionState(ctx, cfg)
 }
 
 func (b *ownedTestBLEBackend) Close() error { b.closes++; return nil }

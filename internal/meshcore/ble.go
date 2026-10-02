@@ -137,8 +137,10 @@ type BLEConnection interface {
 }
 
 type BLECompanionTransport struct {
-	cfg     BLEConfig
-	backend BLEBackend
+	cfg      BLEConfig
+	backend  BLEBackend
+	mu       sync.Mutex
+	linkOpen bool
 }
 
 // bleBackendCloser is deliberately optional so existing non-BlueZ backends
@@ -180,7 +182,19 @@ func (t *BLECompanionTransport) Open(ctx context.Context) (CompanionLink, error)
 		_ = closeBLEBackend(t.backend)
 		return nil, err
 	}
-	return &bleCompanionLink{connection: connection, peer: t.cfg.PeerAddress, backend: t.backend}, nil
+	t.mu.Lock()
+	t.linkOpen = true
+	t.mu.Unlock()
+	return &bleCompanionLink{
+		connection: connection,
+		peer:       t.cfg.PeerAddress,
+		backend:    t.backend,
+		onClose: func() {
+			t.mu.Lock()
+			t.linkOpen = false
+			t.mu.Unlock()
+		},
+	}, nil
 }
 
 // Disconnect releases the configured BlueZ device without changing its
@@ -207,6 +221,12 @@ func (t *BLECompanionTransport) BLEConnectionState(ctx context.Context) (BLEDevi
 	reader, ok := t.backend.(BLEConnectionStateBackend)
 	if !ok {
 		return BLEDevice{}, ErrBLEUnsupported
+	}
+	t.mu.Lock()
+	linkOpen := t.linkOpen
+	t.mu.Unlock()
+	if !linkOpen {
+		defer closeBLEBackend(t.backend)
 	}
 	return reader.ConnectionState(ctx, t.cfg)
 }
@@ -237,6 +257,7 @@ type bleCompanionLink struct {
 	backend    BLEBackend
 	closeOnce  sync.Once
 	closeErr   error
+	onClose    func()
 }
 
 func (l *bleCompanionLink) ReadFrame(ctx context.Context) ([]byte, error) {
@@ -264,6 +285,9 @@ func (l *bleCompanionLink) Metadata() TransportMetadata {
 func (l *bleCompanionLink) Close() error {
 	l.closeOnce.Do(func() {
 		l.closeErr = errors.Join(l.connection.Close(), closeBLEBackend(l.backend))
+		if l.onClose != nil {
+			l.onClose()
+		}
 	})
 	return l.closeErr
 }
