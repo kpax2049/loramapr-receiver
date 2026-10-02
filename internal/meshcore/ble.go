@@ -141,6 +141,20 @@ type BLECompanionTransport struct {
 	backend BLEBackend
 }
 
+// bleBackendCloser is deliberately optional so existing non-BlueZ backends
+// remain usable. Production BlueZ backends own private D-Bus connections and
+// implement it; the transport closes that ownership when its operation ends.
+type bleBackendCloser interface {
+	Close() error
+}
+
+func closeBLEBackend(backend BLEBackend) error {
+	if closer, ok := backend.(bleBackendCloser); ok {
+		return closer.Close()
+	}
+	return nil
+}
+
 func NewBLECompanionTransport(cfg BLEConfig) *BLECompanionTransport {
 	return NewBLECompanionTransportWithBackend(cfg, newSystemBLEBackend())
 }
@@ -158,13 +172,15 @@ func (t *BLECompanionTransport) Open(ctx context.Context) (CompanionLink, error)
 	}
 	connection, err := t.backend.Connect(ctx, t.cfg)
 	if err != nil {
+		_ = closeBLEBackend(t.backend)
 		return nil, err
 	}
 	if err := validateBLEConnection(t.cfg, connection); err != nil {
 		_ = connection.Close()
+		_ = closeBLEBackend(t.backend)
 		return nil, err
 	}
-	return &bleCompanionLink{connection: connection, peer: t.cfg.PeerAddress}, nil
+	return &bleCompanionLink{connection: connection, peer: t.cfg.PeerAddress, backend: t.backend}, nil
 }
 
 // Disconnect releases the configured BlueZ device without changing its
@@ -177,6 +193,7 @@ func (t *BLECompanionTransport) Disconnect(ctx context.Context) error {
 	if t.backend == nil {
 		return ErrBLEUnsupported
 	}
+	defer closeBLEBackend(t.backend)
 	return t.backend.Disconnect(ctx, t.cfg)
 }
 
@@ -217,6 +234,9 @@ func validateBLEConnection(cfg BLEConfig, connection BLEConnection) error {
 type bleCompanionLink struct {
 	connection BLEConnection
 	peer       string
+	backend    BLEBackend
+	closeOnce  sync.Once
+	closeErr   error
 }
 
 func (l *bleCompanionLink) ReadFrame(ctx context.Context) ([]byte, error) {
@@ -241,33 +261,40 @@ func (l *bleCompanionLink) Metadata() TransportMetadata {
 	return TransportMetadata{Kind: "ble", DelegatedAdvertAllowed: false, PeerSelector: l.peer}
 }
 
-func (l *bleCompanionLink) Close() error { return l.connection.Close() }
+func (l *bleCompanionLink) Close() error {
+	l.closeOnce.Do(func() {
+		l.closeErr = errors.Join(l.connection.Close(), closeBLEBackend(l.backend))
+	})
+	return l.closeErr
+}
 
 // BLEPairingBackend exposes explicit local pairing actions for a later portal
 // UI. The six-digit PIN is passed only to the current call and is neither
 // stored here nor included in returned errors.
 type BLEPairingBackend struct {
-	backend BLEBackend
-	pairMu  sync.Mutex
+	newBackend func() BLEBackend
+	pairMu     sync.Mutex
 }
 
 func NewBLEPairingBackend() *BLEPairingBackend {
-	return &BLEPairingBackend{backend: newSystemBLEBackend()}
+	return &BLEPairingBackend{newBackend: newSystemBLEBackend}
 }
 
 func NewBLEPairingBackendWithBackend(backend BLEBackend) *BLEPairingBackend {
-	return &BLEPairingBackend{backend: backend}
+	return &BLEPairingBackend{newBackend: func() BLEBackend { return backend }}
 }
 
 func (p *BLEPairingBackend) Discover(ctx context.Context, adapter string) ([]BLEDevice, error) {
-	if p == nil || p.backend == nil {
+	backend := p.operationBackend()
+	if backend == nil {
 		return nil, ErrBLEUnsupported
 	}
-	return p.backend.Discover(ctx, BLEConfig{Adapter: adapter}.normalized().Adapter)
+	defer closeBLEBackend(backend)
+	return backend.Discover(ctx, BLEConfig{Adapter: adapter}.normalized().Adapter)
 }
 
 func (p *BLEPairingBackend) Pair(ctx context.Context, cfg BLEConfig, pin string) error {
-	if p == nil || p.backend == nil {
+	if p == nil || p.newBackend == nil {
 		return ErrBLEUnsupported
 	}
 	if err := cfg.validate(); err != nil {
@@ -288,7 +315,12 @@ func (p *BLEPairingBackend) Pair(ctx context.Context, cfg BLEConfig, pin string)
 		return newBLEPairingDiagnostic("pair", "busy")
 	}
 	defer p.pairMu.Unlock()
-	if err := p.backend.Pair(ctx, cfg, pin); err != nil {
+	backend := p.operationBackend()
+	if backend == nil {
+		return ErrBLEUnsupported
+	}
+	defer closeBLEBackend(backend)
+	if err := backend.Pair(ctx, cfg, pin); err != nil {
 		var diagnostic *BLEPairingDiagnostic
 		if errors.As(err, &diagnostic) {
 			return diagnostic
@@ -302,11 +334,23 @@ func (p *BLEPairingBackend) Pair(ctx context.Context, cfg BLEConfig, pin string)
 }
 
 func (p *BLEPairingBackend) Forget(ctx context.Context, cfg BLEConfig) error {
-	if p == nil || p.backend == nil {
+	if p == nil || p.newBackend == nil {
 		return ErrBLEUnsupported
 	}
 	if err := cfg.validate(); err != nil {
 		return err
 	}
-	return p.backend.Forget(ctx, cfg)
+	backend := p.operationBackend()
+	if backend == nil {
+		return ErrBLEUnsupported
+	}
+	defer closeBLEBackend(backend)
+	return backend.Forget(ctx, cfg)
+}
+
+func (p *BLEPairingBackend) operationBackend() BLEBackend {
+	if p == nil || p.newBackend == nil {
+		return nil
+	}
+	return p.newBackend()
 }

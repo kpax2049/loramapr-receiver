@@ -96,6 +96,100 @@ func TestBLETransportCancellationAndReconnectHandshake(t *testing.T) {
 	}
 }
 
+func TestBLETransportClosesOwnedBackendAcrossOpenLifecycles(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		connectErr error
+	}{
+		{name: "successful connect and release"},
+		{name: "failed connect", connectErr: errors.New("BlueZ unavailable")},
+		{name: "cancelled connect", connectErr: context.Canceled},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			backend := newOwnedTestBLEBackend(test.connectErr)
+			transport := NewBLECompanionTransportWithBackend(BLEConfig{PeerAddress: "AA:BB:CC:DD:EE:FF"}, backend)
+			link, err := transport.Open(context.Background())
+			if test.connectErr != nil {
+				if !errors.Is(err, test.connectErr) {
+					t.Fatalf("open error=%v, want %v", err, test.connectErr)
+				}
+				if backend.opens != 1 || backend.closes != 1 {
+					t.Fatalf("failed open ownership opens=%d closes=%d", backend.opens, backend.closes)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := link.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if err := link.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if backend.opens != 1 || backend.closes != 1 {
+				t.Fatalf("released link ownership opens=%d closes=%d", backend.opens, backend.closes)
+			}
+		})
+	}
+}
+
+func TestBLETransportDisconnectClosesTemporaryBackend(t *testing.T) {
+	backend := newOwnedTestBLEBackend(nil)
+	transport := NewBLECompanionTransportWithBackend(BLEConfig{PeerAddress: "AA:BB:CC:DD:EE:FF"}, backend)
+	if err := transport.Disconnect(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if backend.opens != 1 || backend.closes != 1 {
+		t.Fatalf("temporary disconnect ownership opens=%d closes=%d", backend.opens, backend.closes)
+	}
+}
+
+func TestBLETransportRepeatedConnectReleaseDoesNotAccumulateOwnedBackends(t *testing.T) {
+	var opens, closes int
+	for range 3 {
+		backend := newOwnedTestBLEBackend(nil)
+		link, err := NewBLECompanionTransportWithBackend(BLEConfig{PeerAddress: "AA:BB:CC:DD:EE:FF"}, backend).Open(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := link.Close(); err != nil {
+			t.Fatal(err)
+		}
+		opens += backend.opens
+		closes += backend.closes
+	}
+	if opens != closes {
+		t.Fatalf("repeated ownership opens=%d closes=%d", opens, closes)
+	}
+}
+
+func TestBLEPairingOperationsCloseTemporaryBackends(t *testing.T) {
+	var backends []*ownedTestBLEBackend
+	pairing := &BLEPairingBackend{newBackend: func() BLEBackend {
+		backend := newOwnedTestBLEBackend(nil)
+		backends = append(backends, backend)
+		return backend
+	}}
+	if _, err := pairing.Discover(context.Background(), "hci0"); err != nil {
+		t.Fatal(err)
+	}
+	if err := pairing.Pair(context.Background(), BLEConfig{PeerAddress: "AA:BB:CC:DD:EE:FF"}, "123456"); err != nil {
+		t.Fatal(err)
+	}
+	if err := pairing.Forget(context.Background(), BLEConfig{PeerAddress: "AA:BB:CC:DD:EE:FF"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(backends) != 3 {
+		t.Fatalf("temporary backend count=%d, want 3", len(backends))
+	}
+	for index, backend := range backends {
+		if backend.closes != 1 {
+			t.Fatalf("temporary backend %d closes=%d, want 1", index, backend.closes)
+		}
+	}
+}
+
 func TestBLEPairingIsExplicitAndDoesNotExposePIN(t *testing.T) {
 	t.Parallel()
 	backend := &fakeBLEBackend{devices: []BLEDevice{{Address: "AA:BB:CC:DD:EE:FF", Name: "MeshCore", Bonded: false}}}
@@ -286,6 +380,35 @@ type fakeBLEBackend struct {
 	pairErr                             error
 	pairFn                              func(context.Context, BLEConfig, string) error
 }
+
+type ownedTestBLEBackend struct {
+	fakeBLEBackend
+	connectErr error
+	opens      int
+	closes     int
+}
+
+func newOwnedTestBLEBackend(connectErr error) *ownedTestBLEBackend {
+	return &ownedTestBLEBackend{
+		fakeBLEBackend: fakeBLEBackend{connection: &fakeBLEConnection{device: BLEDevice{Address: "AA:BB:CC:DD:EE:FF", Bonded: true, Connected: true}, mtu: MinimumBLEMTU, nus: true, write: true, notify: true}},
+		connectErr:     connectErr,
+	}
+}
+
+func (b *ownedTestBLEBackend) Connect(ctx context.Context, cfg BLEConfig) (BLEConnection, error) {
+	b.opens++
+	if b.connectErr != nil {
+		return nil, b.connectErr
+	}
+	return b.fakeBLEBackend.Connect(ctx, cfg)
+}
+
+func (b *ownedTestBLEBackend) Disconnect(ctx context.Context, cfg BLEConfig) error {
+	b.opens++
+	return b.fakeBLEBackend.Disconnect(ctx, cfg)
+}
+
+func (b *ownedTestBLEBackend) Close() error { b.closes++; return nil }
 
 func (b *fakeBLEBackend) Discover(_ context.Context, _ string) ([]BLEDevice, error) {
 	return append([]BLEDevice(nil), b.devices...), nil

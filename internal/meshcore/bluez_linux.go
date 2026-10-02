@@ -24,7 +24,11 @@ const (
 	agentManagerInterface  = "org.bluez.AgentManager1"
 )
 
-type bluezBackend struct{ conn *dbus.Conn }
+type bluezBackend struct {
+	mu     sync.Mutex
+	conn   *dbus.Conn
+	closed bool
+}
 
 type bluezPairTarget struct {
 	path  dbus.ObjectPath
@@ -36,6 +40,11 @@ func newSystemBLEBackend() BLEBackend {
 }
 
 func (b *bluezBackend) system() (*dbus.Conn, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.closed {
+		return nil, fmt.Errorf("%w: BlueZ backend is closed", ErrBLEConfiguration)
+	}
 	if b.conn != nil {
 		return b.conn, nil
 	}
@@ -45,6 +54,29 @@ func (b *bluezBackend) system() (*dbus.Conn, error) {
 	}
 	b.conn = conn
 	return conn, nil
+}
+
+// Close releases this backend's private D-Bus connection. Every production
+// backend is operation-scoped or transferred to a CompanionLink, so closing
+// it also deterministically releases any D-Bus match rules owned by that
+// private connection.
+func (b *bluezBackend) Close() error {
+	if b == nil {
+		return nil
+	}
+	b.mu.Lock()
+	if b.closed {
+		b.mu.Unlock()
+		return nil
+	}
+	b.closed = true
+	conn := b.conn
+	b.conn = nil
+	b.mu.Unlock()
+	if conn == nil {
+		return nil
+	}
+	return conn.Close()
 }
 
 func (b *bluezBackend) Discover(ctx context.Context, adapter string) ([]BLEDevice, error) {
@@ -108,7 +140,12 @@ func waitForDiscovery(ctx context.Context) error {
 	}
 }
 
-func (b *bluezBackend) Connect(ctx context.Context, cfg BLEConfig) (BLEConnection, error) {
+func (b *bluezBackend) Connect(ctx context.Context, cfg BLEConfig) (_ BLEConnection, err error) {
+	defer func() {
+		if err != nil {
+			_ = b.Close()
+		}
+	}()
 	conn, err := b.system()
 	if err != nil {
 		return nil, err
@@ -148,8 +185,9 @@ func (b *bluezBackend) Connect(ctx context.Context, cfg BLEConfig) (BLEConnectio
 	if mtu == 0 {
 		return nil, fmt.Errorf("%w: BlueZ did not report negotiated characteristic MTU", ErrBLEConfiguration)
 	}
-	link := &bluezConnection{conn: conn, devicePath: path, device: deviceFromProps(props), rx: conn.Object(bluezName, rxPath), tx: conn.Object(bluezName, txPath), txPath: txPath, mtu: mtu, done: make(chan struct{})}
+	link := &bluezConnection{conn: conn, devicePath: path, device: deviceFromProps(props), rx: conn.Object(bluezName, rxPath), tx: conn.Object(bluezName, txPath), txPath: txPath, mtu: mtu, done: make(chan struct{}), closeBus: b.Close}
 	if err := link.startNotify(ctx); err != nil {
+		_ = link.Close()
 		return nil, err
 	}
 	return link, nil
@@ -159,6 +197,7 @@ func (b *bluezBackend) Connect(ctx context.Context, cfg BLEConfig) (BLEConnectio
 // shutdown can arrive while Connect is still resolving services and has not
 // yet produced a connection object to close.
 func (b *bluezBackend) Disconnect(ctx context.Context, cfg BLEConfig) error {
+	defer b.Close()
 	conn, err := b.system()
 	if err != nil {
 		return err
@@ -455,6 +494,7 @@ type bluezConnection struct {
 	signals    chan *dbus.Signal
 	closeOnce  sync.Once
 	done       chan struct{}
+	closeBus   func() error
 }
 
 func (c *bluezConnection) Device() BLEDevice   { return c.device }
@@ -531,6 +571,13 @@ func (c *bluezConnection) Close() error {
 		}
 		if c.signals != nil {
 			c.conn.RemoveSignal(c.signals)
+		}
+		// AddMatch rules are owned by this private D-Bus connection. Closing the
+		// connection immediately after local signal cleanup removes those rules
+		// server-side, without a second best-effort RemoveMatch call racing the
+		// release disconnect sequence.
+		if c.closeBus != nil {
+			err = errors.Join(err, c.closeBus())
 		}
 		close(c.done)
 	})
