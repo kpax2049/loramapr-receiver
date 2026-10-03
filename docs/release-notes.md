@@ -1,7 +1,7 @@
 # LoRaMapr Receiver Release Notes
 
-For MeshCore Companion support targeting `v2.17.0`, see
-`docs/release-notes-v2.17.0.md`.
+For MeshCore Companion support targeting `v3.4.0`, see
+`docs/release-notes-v3.4.0.md`.
 
 For Linux serial line-control hardening notes targeting `v3.3.1`, see
 `docs/release-notes-v3.3.1.md`.

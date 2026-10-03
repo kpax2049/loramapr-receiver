@@ -34,7 +34,7 @@
 - [Release Artifact Mapping](./release-artifacts.md)
 - [Publish Guide](./publish-guide.md)
 - [Release Notes Index](./release-notes.md)
-- [Release Notes v2.17.0](./release-notes-v2.17.0.md)
+- [Release Notes v3.4.0](./release-notes-v3.4.0.md)
 - [Release Notes v3.1.0](./release-notes-v3.1.0.md)
 - [Release Notes v3.0.3](./release-notes-v3.0.3.md)
 - [Release Notes v3.0.0](./release-notes-v3.0.0.md)

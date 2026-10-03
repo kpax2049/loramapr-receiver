@@ -1,4 +1,4 @@
-# LoRaMapr Receiver v2.17.0 - MeshCore Companion support
+# LoRaMapr Receiver v3.4.0 - MeshCore Companion support
 
 Date: 2026-09-26
 
@@ -17,7 +17,7 @@ Date: 2026-09-26
 
 ## Cloud compatibility
 
-v2.17.0 is the Receiver companion release for LoRaMapr Cloud 2.2.0.
+v3.4.0 is the Receiver companion release for LoRaMapr Cloud 2.2.0.
 
 Cloud deployments accepting normalized Receiver events must set:
 
