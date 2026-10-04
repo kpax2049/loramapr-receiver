@@ -45,13 +45,14 @@ When invoked through `packaging/distribution/publish.sh` (default
 ## Verify
 
 ```bash
-packaging/distribution/apt/verify-apt.sh <channel>
+VERSION=<version> packaging/distribution/apt/verify-apt.sh <channel>
 ```
 
 To require signatures during verification:
 
 ```bash
-SIGNING_REQUIRED=1 packaging/distribution/apt/verify-apt.sh <channel>
+VERSION=<version> SIGNING_REQUIRED=1 \
+  packaging/distribution/apt/verify-apt.sh <channel>
 ```
 
 Pages-tree verification:
@@ -79,3 +80,5 @@ sudo apt-get install -y loramapr-receiver
 - Signing keys are not stored in repository files.
 - If signing is optional/disabled, maintainers can still stage and inspect repo
   metadata before final signed publication.
+- `verify-apt.sh` validates every required architecture's non-empty Packages
+  index, package name, Debian version, architecture, and matching gzip index.

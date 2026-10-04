@@ -40,7 +40,7 @@ fi
 
 if [[ "${ENABLE_APT}" != "0" ]]; then
   APT_SUITE="${APT_SUITE}" SIGNING_REQUIRED="${SIGNING_REQUIRED}" \
-    "${ROOT_DIR}/packaging/distribution/apt/verify-apt.sh" "${CHANNEL}" "${PUBLISHED_ROOT}"
+    "${ROOT_DIR}/packaging/distribution/apt/verify-apt.sh" "${CHANNEL}" "${PUBLISHED_ROOT}" "${VERSION}"
 fi
 
 echo "Published distribution verified: ${TARGET_DIR}"

@@ -33,17 +33,43 @@ REQUIRED_DEBS=(
   "loramapr-receiver_${VERSION}_linux_armv7.deb"
 )
 
+debian_arch_for_release_artifact() {
+  case "$1" in
+    *"_linux_amd64.deb") printf '%s' "amd64" ;;
+    *"_linux_arm64.deb") printf '%s' "arm64" ;;
+    *"_linux_armv7.deb") printf '%s' "armhf" ;;
+    *)
+      echo "unsupported release deb artifact: $1" >&2
+      return 1
+      ;;
+  esac
+}
+
+apt_pool_filename() {
+  local artifact="$1"
+  # Release artifacts keep the cross-platform armv7 label. Debian's scanner
+  # selects armhf packages by filename, so normalize only the APT-pool copy.
+  printf '%s' "${artifact/_linux_armv7.deb/_linux_armhf.deb}"
+}
+
 REPO_ROOT="${OUTPUT_ROOT}/apt/${CHANNEL}"
 POOL_DIR="${REPO_ROOT}/pool/${APT_COMPONENT}/l/loramapr-receiver"
 DIST_DIR="${REPO_ROOT}/dists/${APT_SUITE}"
 mkdir -p "${POOL_DIR}" "${DIST_DIR}"
 
 for deb in "${REQUIRED_DEBS[@]}"; do
-  if [[ ! -f "${ARTIFACTS_DIR}/${deb}" ]]; then
-    echo "required deb artifact missing: ${ARTIFACTS_DIR}/${deb}" >&2
+  source_deb="${ARTIFACTS_DIR}/${deb}"
+  expected_arch="$(debian_arch_for_release_artifact "${deb}")"
+  if [[ ! -f "${source_deb}" ]]; then
+    echo "required deb artifact missing: ${source_deb}" >&2
     exit 1
   fi
-  cp -f "${ARTIFACTS_DIR}/${deb}" "${POOL_DIR}/${deb}"
+  actual_arch="$(dpkg-deb -f "${source_deb}" Architecture)"
+  if [[ "${actual_arch}" != "${expected_arch}" ]]; then
+    echo "unexpected Debian architecture for ${source_deb}: expected ${expected_arch}, got ${actual_arch}" >&2
+    exit 1
+  fi
+  cp -f "${source_deb}" "${POOL_DIR}/$(apt_pool_filename "${deb}")"
 done
 
 archs=(amd64 arm64 armhf)

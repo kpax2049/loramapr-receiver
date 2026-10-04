@@ -33,11 +33,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Go
-        uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-
       - name: Install Packaging Tools
         run: |
           sudo apt-get update
@@ -88,8 +83,50 @@ jobs:
 
           echo "key_id=${KEY_ID}" >> "$GITHUB_OUTPUT"
 
-      - name: Build Release Artifacts
-        run: packaging/release/build-artifacts.sh "${{ steps.release.outputs.version }}" "${{ steps.release.outputs.channel }}"
+      - name: Download Published Release Assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION="${{ steps.release.outputs.version }}"
+          CHANNEL="${{ steps.release.outputs.channel }}"
+          ARTIFACTS_DIR="${PWD}/dist/${VERSION}/artifacts"
+          mkdir -p "${ARTIFACTS_DIR}"
+
+          gh release download "${VERSION}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --dir "${ARTIFACTS_DIR}"
+
+          required_assets=(
+            "loramapr-receiver_${VERSION}_linux_amd64.tar.gz"
+            "loramapr-receiver_${VERSION}_linux_arm64.tar.gz"
+            "loramapr-receiver_${VERSION}_linux_armv7.tar.gz"
+            "loramapr-receiver_${VERSION}_darwin_amd64.tar.gz"
+            "loramapr-receiver_${VERSION}_darwin_arm64.tar.gz"
+            "loramapr-receiver_${VERSION}_windows_amd64.zip"
+            "loramapr-receiver_${VERSION}_linux_amd64_systemd.tar.gz"
+            "loramapr-receiver_${VERSION}_linux_arm64_systemd.tar.gz"
+            "loramapr-receiver_${VERSION}_linux_armv7_systemd.tar.gz"
+            "loramapr-receiver_${VERSION}_linux_amd64.deb"
+            "loramapr-receiver_${VERSION}_linux_arm64.deb"
+            "loramapr-receiver_${VERSION}_linux_armv7.deb"
+            "SHA256SUMS"
+            "cloud-manifest.fragment.json"
+            "release-metadata.json"
+          )
+          for asset in "${required_assets[@]}"; do
+            test -f "${ARTIFACTS_DIR}/${asset}"
+          done
+          test "$(find "${ARTIFACTS_DIR}" -maxdepth 1 -type f | wc -l | tr -d ' ')" = "${#required_assets[@]}"
+          (
+            cd "${ARTIFACTS_DIR}"
+            sha256sum -c SHA256SUMS
+          )
+          jq -e --arg version "${VERSION}" --arg channel "${CHANNEL}" \
+            '.receiverVersion == $version and .channel == $channel' \
+            "${ARTIFACTS_DIR}/release-metadata.json" >/dev/null
+          jq -e --arg version "${VERSION}" --arg channel "${CHANNEL}" \
+            '.receiverVersion == $version and .channel == $channel' \
+            "${ARTIFACTS_DIR}/cloud-manifest.fragment.json" >/dev/null
 
       - name: Publish Signed Distribution + Pages Tree
         env:
