@@ -7,11 +7,15 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
+
+	"github.com/loramapr/loramapr-receiver/internal/clockattestation"
 )
 
 type PairingClient interface {
@@ -57,12 +61,69 @@ type ActivationResult struct {
 }
 
 type ReceiverHeartbeat struct {
-	RuntimeVersion  string
-	Platform        string
-	Arch            string
-	LocalNodeID     string
-	ObservedNodeIDs []string
-	Status          map[string]any
+	RuntimeVersion             string
+	Platform                   string
+	Arch                       string
+	LocalNodeID                string
+	ObservedNodeIDs            []string
+	ReceiverDiagnosticCode     string
+	Status                     map[string]any
+	Adapters                   []ReceiverAdapterStatus
+	MeshCoreBLEControlResult   *MeshCoreBLEControlResult
+	MeshCoreBLEDiscoveryResult *MeshCoreBLEDiscoveryResult
+}
+
+// ReceiverAdapterStatus is the deliberately small cloud-safe projection of a
+// local adapter. It never carries device paths, raw evidence, credentials, or
+// arbitrary diagnostic strings.
+type ReceiverAdapterStatus struct {
+	Protocol   string `json:"protocol"`
+	Enabled    bool   `json:"enabled"`
+	Configured bool   `json:"configured"`
+	Lifecycle  string `json:"lifecycle"`
+	// ConnectionState is the Receiver-native connection authority. Connected
+	// remains on the wire for older Cloud deployments during the migration.
+	ConnectionState    string                         `json:"connectionState,omitempty"`
+	Connected          bool                           `json:"connected"`
+	Ready              bool                           `json:"ready"`
+	Transport          string                         `json:"transport,omitempty"`
+	ProtocolVersion    string                         `json:"protocolVersion,omitempty"`
+	ProfileState       string                         `json:"profileState,omitempty"`
+	ErrorCode          string                         `json:"errorCode,omitempty"`
+	IntentionalRelease bool                           `json:"intentionalRelease,omitempty"`
+	ConfiguredDevice   string                         `json:"configuredDevice,omitempty"`
+	ConnectedDevice    string                         `json:"connectedDevice,omitempty"`
+	Delivery           *ReceiverAdapterDeliveryStatus `json:"delivery,omitempty"`
+}
+
+type MeshCoreBLEControlResult struct {
+	Version   string `json:"version"`
+	Operation string `json:"operation"`
+	State     string `json:"state"`
+	ErrorCode string `json:"errorCode,omitempty"`
+}
+
+type MeshCoreBLEDiscoveryDevice struct {
+	Address    string `json:"address"`
+	Name       string `json:"name,omitempty"`
+	RSSI       *int   `json:"rssi,omitempty"`
+	Bonded     bool   `json:"bonded"`
+	Connected  bool   `json:"connected"`
+	Configured bool   `json:"configured"`
+}
+
+type MeshCoreBLEDiscoveryResult struct {
+	Version   string                       `json:"version"`
+	State     string                       `json:"state"`
+	ErrorCode string                       `json:"errorCode,omitempty"`
+	Devices   []MeshCoreBLEDiscoveryDevice `json:"devices"`
+}
+
+type ReceiverAdapterDeliveryStatus struct {
+	State            string `json:"state"`
+	PendingCount     int    `json:"pendingCount,omitempty"`
+	QuarantinedCount int    `json:"quarantinedCount,omitempty"`
+	FailureCode      string `json:"failureCode,omitempty"`
 }
 
 type HomeAutoSessionManagedGeofence struct {
@@ -92,18 +153,48 @@ type HomeAutoSessionManagedConfig struct {
 }
 
 type ReceiverHeartbeatAck struct {
-	ReceiverAgentID       string
-	OwnerID               string
-	ReceiverLabel         string
-	SiteLabel             string
-	GroupLabel            string
-	ConfigVersion         string
-	LastHeartbeatAt       time.Time
-	NodeCount             int
-	HomeAutoSessionConfig *HomeAutoSessionManagedConfig
+	ReceiverAgentID          string
+	OwnerID                  string
+	ReceiverLabel            string
+	SiteLabel                string
+	GroupLabel               string
+	ConfigVersion            string
+	LastHeartbeatAt          time.Time
+	NodeCount                int
+	HomeAutoSessionConfig    *HomeAutoSessionManagedConfig
+	MeshCoreTrackingIntent   *MeshCoreTrackingIntent
+	MeshCoreBLEControlIntent *MeshCoreBLEControlIntent
+	ClockAttestation         *clockattestation.Candidate
+}
+
+type MeshCoreBLEControlIntent struct {
+	Version         string `json:"version"`
+	Operation       string `json:"operation"`
+	ReceiverAgentID string `json:"receiverAgentId"`
+	InstallationID  string `json:"installationId"`
+	RequestedAt     string `json:"requestedAt"`
+	DeviceAddress   string `json:"deviceAddress,omitempty"`
+	PairingPIN      string `json:"pairingPin,omitempty"`
+}
+
+// MeshCoreTrackingIntent is a cloud-authoritative snapshot. It is not a
+// command queue: absence means no Session-managed automatic polling.
+type MeshCoreTrackingIntent struct {
+	Version         string `json:"version"`
+	SessionID       string `json:"sessionId"`
+	DeviceID        string `json:"deviceId"`
+	Protocol        string `json:"protocol"`
+	PublicKey       string `json:"publicKey"`
+	ReceiverAgentID string `json:"receiverAgentId"`
+	InstallationID  string `json:"installationId"`
+	UpdatedAt       string `json:"updatedAt"`
 }
 
 type HomeAutoSessionStartRequest struct {
+	// DeviceUID is an owner-scoped cloud lookup result carried by an attested
+	// position. It is not a protocol identity and is optional for legacy
+	// Meshtastic requests.
+	DeviceUID     string         `json:"deviceUid,omitempty"`
 	TriggerNodeID string         `json:"triggerNodeId,omitempty"`
 	DedupeKey     string         `json:"dedupeKey,omitempty"`
 	Reason        string         `json:"reason,omitempty"`
@@ -138,12 +229,46 @@ type HomeAutoSessionStopResult struct {
 
 type APIError struct {
 	StatusCode int
+	Code       string
 	Message    string
 	Retryable  bool
+	RetryAfter time.Duration
 	Route      string
 	RequestID  string
 	SessionID  string
 }
+
+type NormalizedDeliveryResult struct {
+	StatusCode              int
+	Duplicate               bool
+	DeliveryID              string
+	RequestID               string
+	ClockAttestation        *clockattestation.Candidate
+	SessionEligiblePosition *SessionEligiblePositionAssertion
+}
+
+// SubjectRef is a protocol-neutral canonical subject identity. It is internal
+// receiver/cloud contract data, never a display alias or short fingerprint.
+type SubjectRef struct {
+	Protocol    string
+	Namespace   string
+	CanonicalID string
+}
+
+// SessionEligiblePositionAssertion is an authenticated cloud assertion tied
+// to the exact normalized delivery. It is deliberately not consumed by HAS in
+// M4E1; M4E2 will consume it without inspecting MeshCore radio evidence.
+type SessionEligiblePositionAssertion struct {
+	DeliveryID     string
+	EligibilityRef string
+	DeviceUID      string
+	Subject        SubjectRef
+	Lat            float64
+	Lon            float64
+	CapturedAt     time.Time
+}
+
+type ClockAttestationCandidate = clockattestation.Candidate
 
 func (e *APIError) Error() string {
 	if e.Message == "" {
@@ -180,6 +305,7 @@ func IsRetryable(err error) bool {
 type HTTPClient struct {
 	baseURL string
 	client  *http.Client
+	now     func() time.Time
 }
 
 func NewHTTPClient(baseURL string, timeout time.Duration) *HTTPClient {
@@ -191,6 +317,7 @@ func NewHTTPClient(baseURL string, timeout time.Duration) *HTTPClient {
 		client: &http.Client{
 			Timeout: timeout,
 		},
+		now: time.Now,
 	}
 }
 
@@ -330,6 +457,131 @@ func (c *HTTPClient) PostIngestEvent(
 	return c.postJSON(ctx, ingestEndpoint, payload, headers, &response)
 }
 
+func (c *HTTPClient) PostNormalizedEvent(
+	ctx context.Context,
+	ingestEndpoint string,
+	apiKey string,
+	envelope []byte,
+	deliveryID string,
+	envelopeSHA256 string,
+) (NormalizedDeliveryResult, error) {
+	if strings.TrimSpace(apiKey) == "" {
+		return NormalizedDeliveryResult{}, errors.New("ingest API key is required")
+	}
+	if len(envelope) == 0 || strings.TrimSpace(deliveryID) == "" || strings.TrimSpace(envelopeSHA256) == "" {
+		return NormalizedDeliveryResult{}, errors.New("normalized delivery bytes, id, and hash are required")
+	}
+	ctx, requestID := EnsureRequestID(ctx)
+	requestURL, err := c.resolveURL(ingestEndpoint)
+	if err != nil {
+		return NormalizedDeliveryResult{}, err
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, requestURL, bytes.NewReader(envelope))
+	if err != nil {
+		return NormalizedDeliveryResult{}, err
+	}
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("x-api-key", strings.TrimSpace(apiKey))
+	request.Header.Set("x-idempotency-key", strings.TrimSpace(deliveryID))
+	request.Header.Set("x-loramapr-envelope-sha256", strings.TrimSpace(envelopeSHA256))
+	if requestID != "" {
+		request.Header.Set("X-Request-Id", requestID)
+	}
+
+	response, err := c.client.Do(request)
+	if err != nil {
+		return NormalizedDeliveryResult{}, err
+	}
+	defer response.Body.Close()
+	receivedAt := c.currentTime()
+	responseRequest := responseRequestID(response.Header)
+	if response.StatusCode != http.StatusOK && response.StatusCode != http.StatusAccepted {
+		decoded := decodeErrorPayload(response.Body)
+		return NormalizedDeliveryResult{}, &APIError{
+			StatusCode: response.StatusCode,
+			Code:       decoded.Code,
+			Message:    decoded.Message,
+			Retryable:  retryableStatus(response.StatusCode),
+			RetryAfter: parseRetryAfter(response.Header.Get("Retry-After"), time.Now().UTC()),
+			Route:      requestURL,
+			RequestID:  responseRequest,
+		}
+	}
+	var payload struct {
+		Accepted                bool            `json:"accepted"`
+		Duplicate               bool            `json:"duplicate"`
+		DeliveryID              string          `json:"deliveryId"`
+		ClockAttestation        json.RawMessage `json:"clockAttestation"`
+		SessionEligiblePosition *struct {
+			DeliveryID     string `json:"deliveryId"`
+			EligibilityRef string `json:"eligibilityRef"`
+			DeviceUID      string `json:"deviceUid"`
+			Subject        struct {
+				Protocol    string `json:"protocol"`
+				Namespace   string `json:"namespace"`
+				CanonicalID string `json:"canonicalId"`
+			} `json:"subject"`
+			Position struct {
+				Lat        float64 `json:"lat"`
+				Lon        float64 `json:"lon"`
+				CapturedAt string  `json:"capturedAt"`
+			} `json:"position"`
+		} `json:"sessionEligiblePosition"`
+	}
+	if err := json.NewDecoder(io.LimitReader(response.Body, 4096)).Decode(&payload); err != nil {
+		return NormalizedDeliveryResult{}, fmt.Errorf("decode normalized delivery response: %w", err)
+	}
+	if !payload.Accepted || payload.DeliveryID != deliveryID ||
+		(response.StatusCode == http.StatusOK && !payload.Duplicate) ||
+		(response.StatusCode == http.StatusAccepted && payload.Duplicate) {
+		return NormalizedDeliveryResult{}, errors.New("cloud returned an inconsistent normalized delivery acknowledgement")
+	}
+	result := NormalizedDeliveryResult{
+		StatusCode: response.StatusCode,
+		Duplicate:  payload.Duplicate,
+		DeliveryID: payload.DeliveryID,
+		RequestID:  responseRequest,
+	}
+	result.ClockAttestation = c.parseClockAttestation(decodeClockWire(payload.ClockAttestation), receivedAt, request, response)
+	if assertion := payload.SessionEligiblePosition; assertion != nil {
+		parsed, err := parseSessionEligiblePositionAssertion(deliveryID, assertion)
+		if err != nil {
+			return NormalizedDeliveryResult{}, err
+		}
+		result.SessionEligiblePosition = &parsed
+	}
+	return result, nil
+}
+
+func parseSessionEligiblePositionAssertion(deliveryID string, value *struct {
+	DeliveryID     string `json:"deliveryId"`
+	EligibilityRef string `json:"eligibilityRef"`
+	DeviceUID      string `json:"deviceUid"`
+	Subject        struct {
+		Protocol    string `json:"protocol"`
+		Namespace   string `json:"namespace"`
+		CanonicalID string `json:"canonicalId"`
+	} `json:"subject"`
+	Position struct {
+		Lat        float64 `json:"lat"`
+		Lon        float64 `json:"lon"`
+		CapturedAt string  `json:"capturedAt"`
+	} `json:"position"`
+}) (SessionEligiblePositionAssertion, error) {
+	if value == nil || value.DeliveryID != deliveryID || strings.TrimSpace(value.EligibilityRef) == "" || strings.TrimSpace(value.DeviceUID) == "" || strings.TrimSpace(value.Subject.Protocol) == "" || strings.TrimSpace(value.Subject.Namespace) == "" || strings.TrimSpace(value.Subject.CanonicalID) == "" || !finiteCoordinate(value.Position.Lat, value.Position.Lon) {
+		return SessionEligiblePositionAssertion{}, errors.New("cloud returned an invalid session eligible position assertion")
+	}
+	capturedAt, err := time.Parse(time.RFC3339Nano, value.Position.CapturedAt)
+	if err != nil || capturedAt.IsZero() {
+		return SessionEligiblePositionAssertion{}, errors.New("cloud returned an invalid session eligible position assertion time")
+	}
+	return SessionEligiblePositionAssertion{DeliveryID: value.DeliveryID, EligibilityRef: value.EligibilityRef, DeviceUID: value.DeviceUID, Subject: SubjectRef{Protocol: value.Subject.Protocol, Namespace: value.Subject.Namespace, CanonicalID: value.Subject.CanonicalID}, Lat: value.Position.Lat, Lon: value.Position.Lon, CapturedAt: capturedAt.UTC()}, nil
+}
+
+func finiteCoordinate(lat, lon float64) bool {
+	return !math.IsNaN(lat) && !math.IsInf(lat, 0) && !math.IsNaN(lon) && !math.IsInf(lon, 0) && lat >= -90 && lat <= 90 && lon >= -180 && lon <= 180
+}
+
 func (c *HTTPClient) SendReceiverHeartbeat(
 	ctx context.Context,
 	heartbeatEndpoint string,
@@ -342,33 +594,44 @@ func (c *HTTPClient) SendReceiverHeartbeat(
 	}
 
 	request := struct {
-		RuntimeVersion  string         `json:"runtimeVersion,omitempty"`
-		Platform        string         `json:"platform,omitempty"`
-		Arch            string         `json:"arch,omitempty"`
-		LocalNodeID     string         `json:"localNodeId,omitempty"`
-		ObservedNodeIDs []string       `json:"observedNodeIds,omitempty"`
-		Status          map[string]any `json:"status,omitempty"`
+		RuntimeVersion             string                      `json:"runtimeVersion,omitempty"`
+		Platform                   string                      `json:"platform,omitempty"`
+		Arch                       string                      `json:"arch,omitempty"`
+		LocalNodeID                string                      `json:"localNodeId,omitempty"`
+		ObservedNodeIDs            []string                    `json:"observedNodeIds,omitempty"`
+		ReceiverDiagnosticCode     string                      `json:"receiverDiagnosticCode,omitempty"`
+		Status                     map[string]any              `json:"status,omitempty"`
+		Adapters                   []ReceiverAdapterStatus     `json:"adapters,omitempty"`
+		MeshCoreBLEControlResult   *MeshCoreBLEControlResult   `json:"meshcoreBleControlResult,omitempty"`
+		MeshCoreBLEDiscoveryResult *MeshCoreBLEDiscoveryResult `json:"meshcoreBleDiscoveryResult,omitempty"`
 	}{
-		RuntimeVersion:  strings.TrimSpace(heartbeat.RuntimeVersion),
-		Platform:        strings.TrimSpace(heartbeat.Platform),
-		Arch:            strings.TrimSpace(heartbeat.Arch),
-		LocalNodeID:     strings.TrimSpace(heartbeat.LocalNodeID),
-		ObservedNodeIDs: append([]string(nil), heartbeat.ObservedNodeIDs...),
-		Status:          heartbeat.Status,
+		RuntimeVersion:             strings.TrimSpace(heartbeat.RuntimeVersion),
+		Platform:                   strings.TrimSpace(heartbeat.Platform),
+		Arch:                       strings.TrimSpace(heartbeat.Arch),
+		LocalNodeID:                strings.TrimSpace(heartbeat.LocalNodeID),
+		ObservedNodeIDs:            append([]string(nil), heartbeat.ObservedNodeIDs...),
+		ReceiverDiagnosticCode:     strings.TrimSpace(heartbeat.ReceiverDiagnosticCode),
+		Status:                     heartbeat.Status,
+		Adapters:                   append([]ReceiverAdapterStatus(nil), heartbeat.Adapters...),
+		MeshCoreBLEControlResult:   heartbeat.MeshCoreBLEControlResult,
+		MeshCoreBLEDiscoveryResult: heartbeat.MeshCoreBLEDiscoveryResult,
 	}
 
 	var response struct {
-		ReceiverAgentID       string                        `json:"receiverAgentId"`
-		OwnerID               string                        `json:"ownerId"`
-		ReceiverLabel         string                        `json:"receiverLabel"`
-		SiteLabel             string                        `json:"siteLabel"`
-		GroupLabel            string                        `json:"groupLabel"`
-		ConfigVersion         string                        `json:"configVersion"`
-		LastHeartbeatAt       string                        `json:"lastHeartbeatAt"`
-		NodeCount             int                           `json:"nodeCount"`
-		HomeAutoSessionConfig *HomeAutoSessionManagedConfig `json:"homeAutoSessionConfig"`
+		ReceiverAgentID          string                        `json:"receiverAgentId"`
+		OwnerID                  string                        `json:"ownerId"`
+		ReceiverLabel            string                        `json:"receiverLabel"`
+		SiteLabel                string                        `json:"siteLabel"`
+		GroupLabel               string                        `json:"groupLabel"`
+		ConfigVersion            string                        `json:"configVersion"`
+		LastHeartbeatAt          string                        `json:"lastHeartbeatAt"`
+		NodeCount                int                           `json:"nodeCount"`
+		HomeAutoSessionConfig    *HomeAutoSessionManagedConfig `json:"homeAutoSessionConfig"`
+		MeshCoreTrackingIntent   *MeshCoreTrackingIntent       `json:"meshcoreTrackingIntent"`
+		MeshCoreBLEControlIntent *MeshCoreBLEControlIntent     `json:"meshcoreBleControlIntent"`
+		ClockAttestation         json.RawMessage               `json:"clockAttestation"`
 	}
-	err := c.postJSON(ctx, heartbeatEndpoint, request, map[string]string{
+	meta, err := c.postJSONWithMeta(ctx, heartbeatEndpoint, request, map[string]string{
 		"x-api-key": trimmedKey,
 	}, &response)
 	if err != nil {
@@ -381,15 +644,18 @@ func (c *HTTPClient) SendReceiverHeartbeat(
 	}
 
 	return ReceiverHeartbeatAck{
-		ReceiverAgentID:       response.ReceiverAgentID,
-		OwnerID:               response.OwnerID,
-		ReceiverLabel:         strings.TrimSpace(response.ReceiverLabel),
-		SiteLabel:             strings.TrimSpace(response.SiteLabel),
-		GroupLabel:            strings.TrimSpace(response.GroupLabel),
-		ConfigVersion:         strings.TrimSpace(response.ConfigVersion),
-		LastHeartbeatAt:       lastHeartbeatAt,
-		NodeCount:             response.NodeCount,
-		HomeAutoSessionConfig: response.HomeAutoSessionConfig,
+		ReceiverAgentID:          response.ReceiverAgentID,
+		OwnerID:                  response.OwnerID,
+		ReceiverLabel:            strings.TrimSpace(response.ReceiverLabel),
+		SiteLabel:                strings.TrimSpace(response.SiteLabel),
+		GroupLabel:               strings.TrimSpace(response.GroupLabel),
+		ConfigVersion:            strings.TrimSpace(response.ConfigVersion),
+		LastHeartbeatAt:          lastHeartbeatAt,
+		NodeCount:                response.NodeCount,
+		HomeAutoSessionConfig:    response.HomeAutoSessionConfig,
+		MeshCoreTrackingIntent:   response.MeshCoreTrackingIntent,
+		MeshCoreBLEControlIntent: response.MeshCoreBLEControlIntent,
+		ClockAttestation:         c.parseClockAttestation(decodeClockWire(response.ClockAttestation), meta.ReceivedAt, meta.Request, meta.Response),
 	}, nil
 }
 
@@ -497,6 +763,9 @@ func (c *HTTPClient) postJSON(
 type postResponseMeta struct {
 	StatusCode int
 	RequestID  string
+	ReceivedAt time.Time
+	Request    *http.Request
+	Response   *http.Response
 }
 
 func (c *HTTPClient) postJSONWithMeta(
@@ -539,14 +808,19 @@ func (c *HTTPClient) postJSONWithMeta(
 	meta := postResponseMeta{
 		StatusCode: httpResp.StatusCode,
 		RequestID:  respRequestID,
+		ReceivedAt: c.currentTime(),
+		Request:    httpReq,
+		Response:   httpResp,
 	}
 
 	if httpResp.StatusCode < 200 || httpResp.StatusCode >= 300 {
 		decoded := decodeErrorPayload(httpResp.Body)
 		return meta, &APIError{
 			StatusCode: httpResp.StatusCode,
+			Code:       decoded.Code,
 			Message:    decoded.Message,
 			Retryable:  retryableStatus(httpResp.StatusCode),
+			RetryAfter: parseRetryAfter(httpResp.Header.Get("Retry-After"), time.Now().UTC()),
 			Route:      requestURL,
 			RequestID:  respRequestID,
 			SessionID:  decoded.SessionID,
@@ -562,6 +836,67 @@ func (c *HTTPClient) postJSONWithMeta(
 		return meta, err
 	}
 	return meta, nil
+}
+
+func (c *HTTPClient) parseClockAttestation(wire *clockattestation.Wire, receivedAt time.Time, request *http.Request, response *http.Response) *clockattestation.Candidate {
+	if wire == nil {
+		return nil
+	}
+	trusted := c.trustedClockTransport(request, response)
+	candidate, err := clockattestation.Parse(*wire, receivedAt, trusted)
+	if err != nil {
+		return nil
+	}
+	return candidate
+}
+
+func decodeClockWire(raw json.RawMessage) *clockattestation.Wire {
+	if len(raw) == 0 || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		return nil
+	}
+	var wire clockattestation.Wire
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&wire); err != nil {
+		return nil
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return nil
+	}
+	return &wire
+}
+
+func (c *HTTPClient) currentTime() time.Time {
+	if c.now != nil {
+		return c.now().UTC()
+	}
+	return time.Now().UTC()
+}
+
+func (c *HTTPClient) trustedClockTransport(request *http.Request, response *http.Response) bool {
+	if request == nil || request.URL == nil || response == nil || response.TLS == nil || !response.TLS.HandshakeComplete ||
+		response.Request == nil || response.Request.URL == nil || response.Request != request || response.Request.Response != nil {
+		return false
+	}
+	base, err := url.Parse(c.baseURL)
+	if err != nil || !sameHTTPSOrigin(base, request.URL) || !sameHTTPSOrigin(base, response.Request.URL) {
+		return false
+	}
+	return true
+}
+
+func sameHTTPSOrigin(left, right *url.URL) bool {
+	if left == nil || right == nil || !strings.EqualFold(left.Scheme, "https") || !strings.EqualFold(right.Scheme, "https") {
+		return false
+	}
+	return strings.EqualFold(left.Hostname(), right.Hostname()) && effectiveHTTPSPort(left) == effectiveHTTPSPort(right)
+}
+
+func effectiveHTTPSPort(value *url.URL) string {
+	if port := value.Port(); port != "" {
+		return port
+	}
+	return "443"
 }
 
 func (c *HTTPClient) resolveURL(pathOrURL string) (string, error) {
@@ -595,6 +930,7 @@ func retryableStatus(code int) bool {
 }
 
 type decodedError struct {
+	Code      string
 	Message   string
 	SessionID string
 }
@@ -602,6 +938,7 @@ type decodedError struct {
 func decodeErrorPayload(body io.Reader) decodedError {
 	result := decodedError{}
 	var payload struct {
+		Code      string         `json:"code"`
 		Message   any            `json:"message"`
 		Error     any            `json:"error"`
 		SessionID string         `json:"sessionId"`
@@ -613,6 +950,7 @@ func decodeErrorPayload(body io.Reader) decodedError {
 	}
 	result.Message = strings.TrimSpace(string(data))
 	if err := json.Unmarshal(data, &payload); err == nil {
+		result.Code = strings.TrimSpace(payload.Code)
 		if msg := normalizeErrorMessage(payload.Message); msg != "" {
 			result.Message = msg
 		} else if msg := normalizeErrorMessage(payload.Error); msg != "" {
@@ -628,6 +966,24 @@ func decodeErrorPayload(body io.Reader) decodedError {
 		}
 	}
 	return result
+}
+
+func parseRetryAfter(value string, now time.Time) time.Duration {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return 0
+	}
+	if seconds, err := strconv.Atoi(value); err == nil {
+		if seconds <= 0 {
+			return 0
+		}
+		return time.Duration(seconds) * time.Second
+	}
+	when, err := http.ParseTime(value)
+	if err != nil || !when.After(now) {
+		return 0
+	}
+	return when.Sub(now)
 }
 
 func normalizeErrorMessage(value any) string {

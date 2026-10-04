@@ -36,6 +36,23 @@ type mockSessionClient struct {
 	stopRequests  []cloudclient.HomeAutoSessionStopRequest
 }
 
+type lockedBuffer struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.b.Write(p)
+}
+
+func (b *lockedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.b.String()
+}
+
 func (m *mockSessionClient) StartHomeAutoSession(_ context.Context, _ string, _ string, request cloudclient.HomeAutoSessionStartRequest) (cloudclient.HomeAutoSessionStartResult, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -159,6 +176,122 @@ func TestStartupReconciliationCleanIdle(t *testing.T) {
 		snap := statusModel.Snapshot().HomeAutoSession
 		return snap.ReconciliationState == reconciliationCleanIdle
 	})
+}
+
+func TestAttestedMeshCorePositionStartsSessionAndIsIdempotent(t *testing.T) {
+	store, err := state.Open(filepath.Join(t.TempDir(), "receiver-state.json"))
+	if err != nil {
+		t.Fatalf("open state: %v", err)
+	}
+	if err := store.Update(func(data *state.Data) {
+		data.Pairing.Phase = state.PairingSteadyState
+		data.Cloud.IngestAPIKey = "secret"
+	}); err != nil {
+		t.Fatalf("seed state: %v", err)
+	}
+
+	canonicalID := strings.Repeat("a", 64)
+	cfg := homeAutoTestConfig(config.HomeAutoSessionModeControl)
+	cfg.TrackedNodeIDs = []string{"meshcore:ed25519:" + canonicalID}
+	statusModel := status.New()
+	cloud := &mockSessionClient{}
+	module := New(cfg, store, statusModel, nil, cloud)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer func() {
+		cancel()
+		time.Sleep(80 * time.Millisecond)
+	}()
+	module.Start(ctx)
+
+	now := time.Now().UTC()
+	inside := testAttestedMeshCorePosition(canonicalID, 37.3349, -122.0090, now.Add(-2*time.Second), "delivery-1:measurement-1")
+	outside := testAttestedMeshCorePosition(canonicalID, latOffsetMeters(37.3349, 260), -122.0090, now.Add(-time.Second), "delivery-1:measurement-1")
+	module.ObserveAttestedPosition(inside)
+	module.ObserveAttestedPosition(outside)
+	module.ObserveAttestedPosition(outside)
+
+	waitForCondition(t, 5*time.Second, func() bool {
+		starts, _ := cloud.calls()
+		return starts == 1
+	})
+	if request := cloud.lastStartRequest(); request.TriggerNodeID != "meshcore:ed25519:"+canonicalID || request.DeviceUID != "meshcore:"+canonicalID {
+		t.Fatalf("unexpected MeshCore start request: %#v", request)
+	}
+	if got := statusModel.Snapshot().HomeAutoSession.State; got != string(StateActive) {
+		t.Fatalf("expected active after eligible attested position, got %q", got)
+	}
+}
+
+func TestAttestedMeshCorePositionRejectsOutOfOrderCaptureTime(t *testing.T) {
+	store, err := state.Open(filepath.Join(t.TempDir(), "receiver-state.json"))
+	if err != nil {
+		t.Fatalf("open state: %v", err)
+	}
+	canonicalID := strings.Repeat("c", 64)
+	cfg := homeAutoTestConfig(config.HomeAutoSessionModeControl)
+	cfg.TrackedNodeIDs = []string{"meshcore:ed25519:" + canonicalID}
+	module := New(cfg, store, status.New(), nil, &mockSessionClient{})
+	now := time.Now().UTC()
+
+	module.mu.Lock()
+	module.consumePositionLocked(testAttestedMeshCorePosition(canonicalID, 37.3349, -122.0090, now.Add(-2*time.Second), "delivery-newer:measurement-inside"))
+	module.consumePositionLocked(testAttestedMeshCorePosition(canonicalID, latOffsetMeters(37.3349, 260), -122.0090, now.Add(-time.Second), "delivery-newer:measurement-outside"))
+	module.consumePositionLocked(testAttestedMeshCorePosition(canonicalID, 37.3349, -122.0090, now.Add(-3*time.Second), "delivery-delayed:measurement-inside"))
+	fact := module.nodeFacts["meshcore:ed25519:"+canonicalID]
+	startCandidate := module.startCandidate
+	stopCandidate := module.stopCandidate
+	module.mu.Unlock()
+
+	if !fact.HasPosition || fact.InsideGeofence || !fact.LastSeenAt.Equal(now.Add(-time.Second)) {
+		t.Fatalf("older assertion replaced newer MeshCore fact: %#v", fact)
+	}
+	if startCandidate == nil || stopCandidate != nil {
+		t.Fatalf("older assertion changed MeshCore transition candidates: start=%#v stop=%#v", startCandidate, stopCandidate)
+	}
+}
+
+func TestAttestedMeshCorePositionRejectsMalformedSubjectAndDoesNotCollideWithMeshtastic(t *testing.T) {
+	store, err := state.Open(filepath.Join(t.TempDir(), "receiver-state.json"))
+	if err != nil {
+		t.Fatalf("open state: %v", err)
+	}
+	cfg := homeAutoTestConfig(config.HomeAutoSessionModeObserve)
+	canonicalID := strings.Repeat("b", 64)
+	cfg.TrackedNodeIDs = []string{"!same", "meshcore:ed25519:" + canonicalID}
+	module := New(cfg, store, status.New(), nil, &mockSessionClient{})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer func() {
+		cancel()
+		time.Sleep(80 * time.Millisecond)
+	}()
+	module.Start(ctx)
+
+	now := time.Now().UTC()
+	module.ObserveAttestedPosition(PositionObservation{
+		Subject:     SubjectRef{Protocol: "meshcore", Namespace: "ed25519", CanonicalID: strings.Repeat("B", 64)},
+		DeviceUID:   "meshcore:" + strings.Repeat("b", 64),
+		Lat:         37.3349,
+		Lon:         -122.0090,
+		CapturedAt:  now,
+		EvidenceRef: "delivery-malformed:measurement-malformed",
+		HasPosition: true,
+	})
+	module.ObserveEvent(testPacket("!same", 37.3349, -122.0090, now))
+	module.ObserveAttestedPosition(testAttestedMeshCorePosition(canonicalID, 37.3349, -122.0090, now, "delivery-2:measurement-2"))
+
+	waitForCondition(t, 3*time.Second, func() bool {
+		module.mu.RLock()
+		defer module.mu.RUnlock()
+		return len(module.nodeFacts) == 2
+	})
+	module.mu.RLock()
+	defer module.mu.RUnlock()
+	if _, ok := module.nodeFacts["!same"]; !ok {
+		t.Fatal("Meshtastic fact missing")
+	}
+	if _, ok := module.nodeFacts["meshcore:ed25519:"+canonicalID]; !ok {
+		t.Fatal("MeshCore fact missing")
+	}
 }
 
 func TestStartupReconciliationInconsistentStateDegraded(t *testing.T) {
@@ -1297,7 +1430,7 @@ func TestCloudFailureLogIncludesRequestIDAndSessionFlag(t *testing.T) {
 		t.Fatalf("seed state: %v", err)
 	}
 
-	var out bytes.Buffer
+	var out lockedBuffer
 	logger := slog.New(slog.NewJSONHandler(&out, &slog.HandlerOptions{Level: slog.LevelDebug}))
 
 	statusModel := status.New()
@@ -1353,7 +1486,7 @@ func TestStartMissingSessionIDConflictLogIncludesClassAndRetryMetadata(t *testin
 		t.Fatalf("seed state: %v", err)
 	}
 
-	var out bytes.Buffer
+	var out lockedBuffer
 	logger := slog.New(slog.NewJSONHandler(&out, &slog.HandlerOptions{Level: slog.LevelDebug}))
 
 	statusModel := status.New()
@@ -1433,6 +1566,18 @@ func testPacket(nodeID string, lat, lon float64, at time.Time) meshtastic.Event 
 			},
 		},
 		Received: at,
+	}
+}
+
+func testAttestedMeshCorePosition(canonicalID string, lat, lon float64, at time.Time, evidenceRef string) PositionObservation {
+	return PositionObservation{
+		Subject:     SubjectRef{Protocol: "meshcore", Namespace: "ed25519", CanonicalID: canonicalID},
+		DeviceUID:   "meshcore:" + canonicalID,
+		Lat:         lat,
+		Lon:         lon,
+		CapturedAt:  at,
+		EvidenceRef: evidenceRef,
+		HasPosition: true,
 	}
 }
 

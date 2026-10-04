@@ -28,9 +28,9 @@ type OperationalSummary struct {
 }
 
 type OperationalInput struct {
-	Now                time.Time
-	Lifecycle          string
-	Ready              bool
+	Now                 time.Time
+	Lifecycle           string
+	Ready               bool
 	ReadyReason         string
 	PairingPhase        string
 	HasIngestCredential bool
@@ -202,6 +202,12 @@ func evaluateCloudReachability(input OperationalInput) OperationalCheck {
 func evaluateNodeConnection(input OperationalInput) OperationalCheck {
 	state := strings.ToLower(strings.TrimSpace(input.MeshtasticState))
 	switch state {
+	case "disabled":
+		return OperationalCheck{
+			ID:      "node_connection",
+			Level:   CheckOK,
+			Summary: "Meshtastic transport is intentionally disabled.",
+		}
 	case "connected":
 		return OperationalCheck{
 			ID:      "node_connection",

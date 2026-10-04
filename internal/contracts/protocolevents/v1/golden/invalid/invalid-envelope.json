@@ -1,0 +1,23 @@
+{
+  "contractVersion": "1.0",
+  "deliveryId": "not-a-uuidv7",
+  "eventType": "position",
+  "protocol": "meshcore",
+  "receiver": {
+    "installationId": "UPPERCASE-IS-NOT-VALID-00000000",
+    "adapter": "meshcore-companion",
+    "adapterVersion": "1.0.0",
+    "observedAt": "not-a-timestamp"
+  },
+  "position": {
+    "lat": 91,
+    "lon": 0,
+    "verification": "verified"
+  },
+  "capabilities": {},
+  "source": {
+    "rawEncoding": "base64",
+    "raw": "not base64",
+    "rawSha256": "bad"
+  }
+}

@@ -19,13 +19,19 @@ import (
 	"github.com/loramapr/loramapr-receiver/internal/buildinfo"
 	"github.com/loramapr/loramapr-receiver/internal/config"
 	"github.com/loramapr/loramapr-receiver/internal/diagnostics"
+	"github.com/loramapr/loramapr-receiver/internal/meshcore"
 	"github.com/loramapr/loramapr-receiver/internal/status"
 )
 
-//go:embed templates/*.tmpl
+// Keep this manifest explicit. A wildcard would silently omit a newly added
+// portal asset if it was not included in a source transfer; an explicit entry
+// makes that mistake a compile-time failure instead of a daemon startup panic.
+// The resulting embed.FS is self-contained and never resolves assets from cwd.
+//
+//go:embed templates/layout.tmpl templates/welcome.tmpl templates/pairing.tmpl templates/progress.tmpl templates/home_auto_session.tmpl templates/troubleshooting.tmpl templates/advanced.tmpl templates/meshcore.tmpl
 var portalTemplateFiles embed.FS
 
-//go:embed static/css/*.css static/js/*.js
+//go:embed static/css/tokens.css static/css/portal.css static/js/theme-toggle.js static/js/meshcore-dashboard.js
 var portalStaticFiles embed.FS
 
 type StatusProvider interface {
@@ -44,14 +50,62 @@ type HomeAutoSessionManager interface {
 	ResetHomeAutoSession(ctx context.Context) error
 }
 
+type NormalizedOutboxOperator interface {
+	ResolveNormalizedDeliveryCollision(ctx context.Context, deliveryID string) error
+}
+
+// MeshCoreBLEPairing is a local-only backend seam for a later portal UI.
+// It never writes receiver configuration; the selected address remains an
+// explicit transport setting owned by the operator.
+type MeshCoreBLEPairing interface {
+	DiscoverMeshCoreBLE(context.Context, string) ([]meshcore.BLEDevice, error)
+	PairMeshCoreBLE(context.Context, meshcore.BLEConfig, string) error
+	ForgetMeshCoreBLE(context.Context, meshcore.BLEConfig) error
+}
+
+// MeshCoreTelemetryRequester is intentionally local to the receiver portal.
+// It does not persist or forward returned telemetry.
+type MeshCoreTelemetryRequester interface {
+	RequestMeshCoreTelemetry(context.Context, string) (meshcore.TelemetryResult, error)
+}
+
+// MeshCoreTrackingController is an explicitly temporary local test harness.
+// Production ownership will move to LoRaMapr Session lifecycle in the next
+// milestone, while this interface keeps the portal out of radio scheduling.
+type MeshCoreTrackingController interface {
+	StartMeshCoreTracking(context.Context, string) (meshcore.TrackingStatus, error)
+	StopMeshCoreTracking(context.Context) (meshcore.TrackingStatus, error)
+	MeshCoreTrackingStatus(context.Context) (meshcore.TrackingStatus, error)
+}
+
+// MeshCoreBLELifecycle controls only the currently configured receiver BLE
+// adapter. It does not accept a peer address, preventing a portal action from
+// releasing an arbitrary paired device.
+type MeshCoreBLELifecycle interface {
+	ReleaseMeshCoreBLE(context.Context) (meshcore.AdapterStatus, error)
+	ResumeMeshCoreBLE(context.Context) (meshcore.AdapterStatus, error)
+}
+
+// MeshCoreAdapterStatusProvider supplies a direct, current adapter snapshot
+// for the portal while a BLE lifecycle transition is in flight.
+type MeshCoreAdapterStatusProvider interface {
+	MeshCoreAdapterStatus(context.Context) (meshcore.AdapterStatus, error)
+}
+
 type Server struct {
-	addr      string
-	status    StatusProvider
-	pairing   PairingCodeSubmitter
-	homeAuto  HomeAutoSessionManager
-	logger    *slog.Logger
-	templates map[string]*template.Template
-	httpSrv   *http.Server
+	addr              string
+	status            StatusProvider
+	pairing           PairingCodeSubmitter
+	homeAuto          HomeAutoSessionManager
+	outboxOps         NormalizedOutboxOperator
+	meshcoreBLE       MeshCoreBLEPairing
+	meshcoreTelemetry MeshCoreTelemetryRequester
+	meshcoreTracking  MeshCoreTrackingController
+	meshcoreLifecycle MeshCoreBLELifecycle
+	meshcoreStatus    MeshCoreAdapterStatusProvider
+	logger            *slog.Logger
+	templates         map[string]*template.Template
+	httpSrv           *http.Server
 }
 
 type pageData struct {
@@ -86,6 +140,9 @@ type pageData struct {
 	HomeAutoIdleTimeout  string
 	HomeAutoStateHint    string
 	HomeAutoConfigHint   string
+	MeshCoreAdapter      *status.AdapterStatus
+	MeshCoreTracking     *meshcore.TrackingStatus
+	MeshCoreTrackingOK   bool
 }
 
 func New(addr string, statusProvider StatusProvider, pairing PairingCodeSubmitter, logger *slog.Logger) *Server {
@@ -102,14 +159,44 @@ func New(addr string, statusProvider StatusProvider, pairing PairingCodeSubmitte
 	if manager, ok := pairing.(HomeAutoSessionManager); ok {
 		homeAuto = manager
 	}
+	var outboxOps NormalizedOutboxOperator
+	if operator, ok := pairing.(NormalizedOutboxOperator); ok {
+		outboxOps = operator
+	}
+	var meshcoreBLE MeshCoreBLEPairing
+	if backend, ok := pairing.(MeshCoreBLEPairing); ok {
+		meshcoreBLE = backend
+	}
+	var meshcoreTelemetry MeshCoreTelemetryRequester
+	if requester, ok := pairing.(MeshCoreTelemetryRequester); ok {
+		meshcoreTelemetry = requester
+	}
+	var meshcoreTracking MeshCoreTrackingController
+	if controller, ok := pairing.(MeshCoreTrackingController); ok {
+		meshcoreTracking = controller
+	}
+	var meshcoreLifecycle MeshCoreBLELifecycle
+	if lifecycle, ok := pairing.(MeshCoreBLELifecycle); ok {
+		meshcoreLifecycle = lifecycle
+	}
+	var meshcoreStatus MeshCoreAdapterStatusProvider
+	if provider, ok := pairing.(MeshCoreAdapterStatusProvider); ok {
+		meshcoreStatus = provider
+	}
 
 	s := &Server{
-		addr:      addr,
-		status:    statusProvider,
-		pairing:   pairing,
-		homeAuto:  homeAuto,
-		logger:    logger.With("component", "webportal"),
-		templates: templates,
+		addr:              addr,
+		status:            statusProvider,
+		pairing:           pairing,
+		homeAuto:          homeAuto,
+		outboxOps:         outboxOps,
+		meshcoreBLE:       meshcoreBLE,
+		meshcoreTelemetry: meshcoreTelemetry,
+		meshcoreTracking:  meshcoreTracking,
+		meshcoreLifecycle: meshcoreLifecycle,
+		meshcoreStatus:    meshcoreStatus,
+		logger:            logger.With("component", "webportal"),
+		templates:         templates,
 	}
 
 	mux := http.NewServeMux()
@@ -120,6 +207,16 @@ func New(addr string, statusProvider StatusProvider, pairing PairingCodeSubmitte
 	mux.HandleFunc("/api/ops", s.handleOps)
 	mux.HandleFunc("/api/pairing/code", s.handlePairingCode)
 	mux.HandleFunc("/api/lifecycle/reset", s.handleLifecycleReset)
+	mux.HandleFunc("/api/normalized-outbox/collision/resolve", s.handleNormalizedCollisionResolve)
+	mux.HandleFunc("/api/meshcore/ble/devices", s.handleMeshCoreBLEDevices)
+	mux.HandleFunc("/api/meshcore/ble/pair", s.handleMeshCoreBLEPair)
+	mux.HandleFunc("/api/meshcore/ble/forget", s.handleMeshCoreBLEForget)
+	mux.HandleFunc("/api/meshcore/telemetry/request", s.handleMeshCoreTelemetryRequest)
+	mux.HandleFunc("/api/meshcore/tracking/start", s.handleMeshCoreTrackingStart)
+	mux.HandleFunc("/api/meshcore/tracking/stop", s.handleMeshCoreTrackingStop)
+	mux.HandleFunc("/api/meshcore/tracking/status", s.handleMeshCoreTrackingStatus)
+	mux.HandleFunc("/api/meshcore/adapter/release", s.handleMeshCoreAdapterRelease)
+	mux.HandleFunc("/api/meshcore/adapter/resume", s.handleMeshCoreAdapterResume)
 	mux.Handle("/static/", http.StripPrefix("/static/", portalStaticHandler()))
 	mux.HandleFunc("/pairing", s.routePairing)
 	mux.HandleFunc("/reset", s.routeReset)
@@ -129,6 +226,7 @@ func New(addr string, statusProvider StatusProvider, pairing PairingCodeSubmitte
 	mux.HandleFunc("/home-auto-session/reset", s.handleHomeAutoReset)
 	mux.HandleFunc("/troubleshooting", s.handleTroubleshooting)
 	mux.HandleFunc("/advanced", s.handleAdvanced)
+	mux.HandleFunc("/meshcore", s.handleMeshCoreDashboard)
 	mux.HandleFunc("/", s.handleWelcome)
 
 	s.httpSrv = &http.Server{
@@ -137,6 +235,37 @@ func New(addr string, statusProvider StatusProvider, pairing PairingCodeSubmitte
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 	return s
+}
+
+func (s *Server) handleNormalizedCollisionResolve(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", http.MethodPost)
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.outboxOps == nil {
+		http.Error(w, "normalized outbox operator is not available", http.StatusServiceUnavailable)
+		return
+	}
+	var request struct {
+		DeliveryID string `json:"deliveryId"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		http.Error(w, "invalid JSON body", http.StatusBadRequest)
+		return
+	}
+	request.DeliveryID = strings.TrimSpace(request.DeliveryID)
+	if request.DeliveryID == "" {
+		http.Error(w, "deliveryId is required", http.StatusBadRequest)
+		return
+	}
+	if err := s.outboxOps.ResolveNormalizedDeliveryCollision(r.Context(), request.DeliveryID); err != nil {
+		http.Error(w, "collision resolution failed: "+err.Error(), http.StatusConflict)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusAccepted)
+	_, _ = w.Write([]byte(`{"accepted":true}`))
 }
 
 func (s *Server) Handler() http.Handler {
@@ -192,7 +321,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, _ *http.Request) {
 		http.Error(w, "status unavailable", http.StatusServiceUnavailable)
 		return
 	}
-	payload, err := json.Marshal(s.status.CurrentStatus())
+	payload, err := json.Marshal(s.currentSnapshot())
 	if err != nil {
 		s.logger.Error("status encoding failed", "err", err)
 		http.Error(w, "status encoding failed", http.StatusInternalServerError)
@@ -236,7 +365,7 @@ func (s *Server) handleStatusEvents(w http.ResponseWriter, r *http.Request) {
 		return true
 	}
 
-	initial := s.status.CurrentStatus()
+	initial := s.currentSnapshot()
 	lastUpdated := initial.UpdatedAt.UTC().Format(time.RFC3339Nano)
 	if !send(initial) {
 		return
@@ -252,7 +381,7 @@ func (s *Server) handleStatusEvents(w http.ResponseWriter, r *http.Request) {
 		case <-r.Context().Done():
 			return
 		case <-updateTicker.C:
-			snap := s.status.CurrentStatus()
+			snap := s.currentSnapshot()
 			nextUpdated := snap.UpdatedAt.UTC().Format(time.RFC3339Nano)
 			if nextUpdated == lastUpdated {
 				continue
@@ -323,6 +452,261 @@ func (s *Server) handlePairingCode(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusAccepted)
+	_, _ = w.Write(payload)
+}
+
+func (s *Server) handleMeshCoreBLEDevices(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", http.MethodGet)
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.meshcoreBLE == nil {
+		http.Error(w, "MeshCore BLE backend is not available", http.StatusServiceUnavailable)
+		return
+	}
+	devices, err := s.meshcoreBLE.DiscoverMeshCoreBLE(r.Context(), strings.TrimSpace(r.URL.Query().Get("adapter")))
+	if err != nil {
+		http.Error(w, "MeshCore BLE discovery failed", http.StatusBadGateway)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"devices": devices})
+}
+
+func (s *Server) handleMeshCoreBLEPair(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", http.MethodPost)
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.meshcoreBLE == nil {
+		http.Error(w, "MeshCore BLE backend is not available", http.StatusServiceUnavailable)
+		return
+	}
+	var request struct {
+		Adapter     string `json:"adapter"`
+		PeerAddress string `json:"peerAddress"`
+		PIN         string `json:"pin"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		http.Error(w, "invalid JSON body", http.StatusBadRequest)
+		return
+	}
+	if err := s.meshcoreBLE.PairMeshCoreBLE(r.Context(), meshcore.BLEConfig{Adapter: request.Adapter, PeerAddress: request.PeerAddress}, request.PIN); err != nil {
+		var diagnostic *meshcore.BLEPairingDiagnostic
+		if errors.As(err, &diagnostic) {
+			// BLEPairingDiagnostic is deliberately restricted to a safe operation
+			// and classification code. Do not add the PIN, D-Bus body, wrapped
+			// error, or request-supplied peer material to this response or log.
+			s.logger.Warn("MeshCore BLE pairing failed", "operation", diagnostic.Operation, "code", diagnostic.Code)
+			writeJSON(w, http.StatusBadRequest, map[string]string{
+				"error":     "MeshCore BLE pairing failed",
+				"operation": diagnostic.Operation,
+				"code":      diagnostic.Code,
+			})
+			return
+		}
+		// Deliberately omit the underlying error: it may contain sensitive agent
+		// material. The PIN exists only in this active method call.
+		http.Error(w, "MeshCore BLE pairing failed", http.StatusBadRequest)
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]any{"paired": true})
+}
+
+func (s *Server) handleMeshCoreBLEForget(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", http.MethodPost)
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.meshcoreBLE == nil {
+		http.Error(w, "MeshCore BLE backend is not available", http.StatusServiceUnavailable)
+		return
+	}
+	var request struct {
+		Adapter     string `json:"adapter"`
+		PeerAddress string `json:"peerAddress"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		http.Error(w, "invalid JSON body", http.StatusBadRequest)
+		return
+	}
+	if err := s.meshcoreBLE.ForgetMeshCoreBLE(r.Context(), meshcore.BLEConfig{Adapter: request.Adapter, PeerAddress: request.PeerAddress}); err != nil {
+		http.Error(w, "MeshCore BLE forget failed", http.StatusBadRequest)
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]any{"forgotten": true})
+}
+
+func (s *Server) handleMeshCoreTelemetryRequest(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", http.MethodPost)
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.meshcoreTelemetry == nil {
+		http.Error(w, "MeshCore telemetry backend is not available", http.StatusServiceUnavailable)
+		return
+	}
+	var request struct {
+		PublicKey string `json:"publicKey"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		http.Error(w, "invalid JSON body", http.StatusBadRequest)
+		return
+	}
+	// The adapter has a 45-second bounded watchdog. The small margin lets it
+	// return its specific timeout rather than replacing it with HTTP's context.
+	ctx, cancel := context.WithTimeout(r.Context(), 50*time.Second)
+	defer cancel()
+	result, err := s.meshcoreTelemetry.RequestMeshCoreTelemetry(ctx, request.PublicKey)
+	if err == nil {
+		writeJSON(w, http.StatusOK, result)
+		return
+	}
+
+	statusCode, outcome := http.StatusInternalServerError, "failed"
+	switch {
+	case errors.Is(err, meshcore.ErrInvalidTelemetryTarget):
+		statusCode, outcome = http.StatusBadRequest, "invalid_target"
+	case errors.Is(err, meshcore.ErrTelemetryRequestInFlight):
+		statusCode, outcome = http.StatusConflict, "request_in_flight"
+	case errors.Is(err, meshcore.ErrTelemetryAdapterDisconnected):
+		statusCode, outcome = http.StatusServiceUnavailable, "disconnected_adapter"
+	case errors.Is(err, meshcore.ErrTelemetryFirmware):
+		statusCode, outcome = http.StatusBadGateway, "firmware_error"
+	case errors.Is(err, meshcore.ErrTelemetryTimeout), errors.Is(err, context.DeadlineExceeded):
+		statusCode, outcome = http.StatusGatewayTimeout, "timeout"
+	case errors.Is(err, meshcore.ErrTelemetryMismatchedResponse):
+		statusCode, outcome = http.StatusBadGateway, "mismatched_response"
+	case errors.Is(err, meshcore.ErrInvalidTelemetryPayload):
+		statusCode, outcome = http.StatusBadGateway, "invalid_response"
+	}
+	writeJSON(w, statusCode, map[string]string{"outcome": outcome, "error": err.Error()})
+}
+
+func (s *Server) handleMeshCoreTrackingStart(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", http.MethodPost)
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.meshcoreTracking == nil {
+		http.Error(w, "MeshCore tracking backend is not available", http.StatusServiceUnavailable)
+		return
+	}
+	var request struct {
+		PublicKey string `json:"publicKey"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		http.Error(w, "invalid JSON body", http.StatusBadRequest)
+		return
+	}
+	tracking, err := s.meshcoreTracking.StartMeshCoreTracking(r.Context(), request.PublicKey)
+	if err == nil {
+		writeJSON(w, http.StatusAccepted, tracking)
+		return
+	}
+	if errors.Is(err, meshcore.ErrInvalidTelemetryTarget) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"outcome": "invalid_target", "error": err.Error()})
+		return
+	}
+	if errors.Is(err, meshcore.ErrTrackingAlreadyActive) || errors.Is(err, meshcore.ErrTrackingDifferentTarget) {
+		writeJSON(w, http.StatusConflict, map[string]any{"outcome": "tracking_active", "tracking": tracking, "error": err.Error()})
+		return
+	}
+	if errors.Is(err, meshcore.ErrTrackingSessionManaged) {
+		writeJSON(w, http.StatusConflict, map[string]any{"outcome": "session_managed", "tracking": tracking, "error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusServiceUnavailable, map[string]string{"outcome": "tracking_unavailable", "error": err.Error()})
+}
+
+func (s *Server) handleMeshCoreTrackingStop(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", http.MethodPost)
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.meshcoreTracking == nil {
+		http.Error(w, "MeshCore tracking backend is not available", http.StatusServiceUnavailable)
+		return
+	}
+	tracking, err := s.meshcoreTracking.StopMeshCoreTracking(r.Context())
+	if errors.Is(err, meshcore.ErrTrackingSessionManaged) {
+		writeJSON(w, http.StatusConflict, map[string]any{"outcome": "session_managed", "tracking": tracking, "error": err.Error()})
+		return
+	}
+	if err != nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"outcome": "tracking_unavailable", "error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, tracking)
+}
+
+func (s *Server) handleMeshCoreTrackingStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", http.MethodGet)
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.meshcoreTracking == nil {
+		http.Error(w, "MeshCore tracking backend is not available", http.StatusServiceUnavailable)
+		return
+	}
+	tracking, err := s.meshcoreTracking.MeshCoreTrackingStatus(r.Context())
+	if err != nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"outcome": "tracking_unavailable", "error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, tracking)
+}
+
+func (s *Server) handleMeshCoreAdapterRelease(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", http.MethodPost)
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.meshcoreLifecycle == nil {
+		http.Error(w, "MeshCore BLE lifecycle is not available", http.StatusServiceUnavailable)
+		return
+	}
+	adapter, err := s.meshcoreLifecycle.ReleaseMeshCoreBLE(r.Context())
+	if err != nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"outcome": "release_unavailable", "adapter": adapter, "error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, adapter)
+}
+
+func (s *Server) handleMeshCoreAdapterResume(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", http.MethodPost)
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.meshcoreLifecycle == nil {
+		http.Error(w, "MeshCore BLE lifecycle is not available", http.StatusServiceUnavailable)
+		return
+	}
+	adapter, err := s.meshcoreLifecycle.ResumeMeshCoreBLE(r.Context())
+	if err != nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"outcome": "resume_unavailable", "adapter": adapter, "error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, adapter)
+}
+
+func writeJSON(w http.ResponseWriter, status int, value any) {
+	payload, err := json.Marshal(value)
+	if err != nil {
+		http.Error(w, "encode response failed", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
 	_, _ = w.Write(payload)
 }
 
@@ -573,6 +957,25 @@ func (s *Server) handleAdvanced(w http.ResponseWriter, _ *http.Request) {
 	s.renderHTML(w, http.StatusOK, "advanced", data)
 }
 
+func (s *Server) handleMeshCoreDashboard(w http.ResponseWriter, r *http.Request) {
+	snap := s.currentSnapshot()
+	data := s.basePageData("MeshCore", snap)
+	for i := range snap.Adapters {
+		if strings.EqualFold(snap.Adapters[i].Protocol, "meshcore") {
+			adapter := snap.Adapters[i]
+			data.MeshCoreAdapter = &adapter
+			break
+		}
+	}
+	if s.meshcoreTracking != nil {
+		if tracking, err := s.meshcoreTracking.MeshCoreTrackingStatus(r.Context()); err == nil {
+			data.MeshCoreTracking = &tracking
+			data.MeshCoreTrackingOK = true
+		}
+	}
+	s.renderHTML(w, http.StatusOK, "meshcore", data)
+}
+
 func (s *Server) submitPairingCode(ctx context.Context, code string) error {
 	if s.pairing == nil {
 		return errors.New("pairing subsystem is not available")
@@ -584,7 +987,53 @@ func (s *Server) currentSnapshot() status.Snapshot {
 	if s.status == nil {
 		return status.Snapshot{}
 	}
-	return s.status.CurrentStatus()
+	snap := s.status.CurrentStatus()
+	if s.meshcoreStatus == nil {
+		return snap
+	}
+	adapter, err := s.meshcoreStatus.MeshCoreAdapterStatus(context.Background())
+	if err != nil {
+		return snap
+	}
+	return withLiveMeshCoreAdapter(snap, adapter)
+}
+
+func withLiveMeshCoreAdapter(snap status.Snapshot, adapter meshcore.AdapterStatus) status.Snapshot {
+	connectionState := "disconnected"
+	switch adapter.State {
+	case meshcore.StateDisabled:
+		connectionState = "disabled"
+	case meshcore.StateOpening, meshcore.StateHandshaking, meshcore.StateConnecting:
+		connectionState = "connecting"
+	case meshcore.StateConnected:
+		connectionState = "connected"
+	case meshcore.StateReleased:
+		connectionState = "released"
+	case meshcore.StateDegraded:
+		connectionState = "reconnecting"
+	case meshcore.StateConfigurationError, meshcore.StateIncompatible:
+		connectionState = "error"
+	}
+	replacement := status.AdapterStatus{
+		Name: meshcore.AdapterName, Protocol: "meshcore", Lifecycle: string(adapter.State), ConnectionState: connectionState,
+		Enabled: adapter.Transport != "disabled", Configured: (adapter.Transport == "physical_serial" || adapter.Transport == "ble") && strings.TrimSpace(adapter.Configured) != "",
+		Ready:     adapter.State == meshcore.StateConnected && adapter.Session.State == meshcore.SessionReady,
+		Transport: adapter.Transport, ConfiguredDevice: adapter.Configured, ConnectedDevice: adapter.ConnectedDevice, Device: adapter.Device,
+		ReconnectSuppressed: adapter.ReconnectSuppressed, ReleasedByUser: adapter.ReleasedByUser,
+		LastError: strings.TrimSpace(adapter.LastError), UpdatedAt: adapter.UpdatedAt,
+	}
+	if replacement.UpdatedAt.IsZero() {
+		replacement.UpdatedAt = time.Now().UTC()
+	}
+	for i := range snap.Adapters {
+		if strings.EqualFold(snap.Adapters[i].Protocol, "meshcore") {
+			replacement.Delivery = snap.Adapters[i].Delivery
+			snap.Adapters[i] = replacement
+			return snap
+		}
+	}
+	snap.Adapters = append(snap.Adapters, replacement)
+	return snap
 }
 
 func (s *Server) basePageData(title string, snap status.Snapshot) pageData {
@@ -648,7 +1097,7 @@ func (s *Server) renderHTML(w http.ResponseWriter, statusCode int, name string, 
 }
 
 func loadTemplates() (map[string]*template.Template, error) {
-	pages := []string{"welcome", "pairing", "progress", "home_auto_session", "troubleshooting", "advanced"}
+	pages := []string{"welcome", "pairing", "progress", "home_auto_session", "troubleshooting", "advanced", "meshcore"}
 	out := make(map[string]*template.Template, len(pages))
 	for _, page := range pages {
 		parsed, err := template.New(page).Funcs(template.FuncMap{
@@ -658,6 +1107,11 @@ func loadTemplates() (map[string]*template.Template, error) {
 			"lmrBoolTone":      lmrBoolTone,
 			"lmrCalloutClass":  lmrCalloutClass,
 			"lmrLevelTone":     lmrLevelTone,
+			"cloudSummary":     cloudSummary,
+			"meshcoreError":    meshcoreError,
+			"meshcoreSummary":  meshcoreSummary,
+			"meshcoreView":     meshcoreView,
+			"receiverSummary":  receiverSummary,
 			"lmrTone":          lmrTone,
 		}).ParseFS(
 			portalTemplateFiles,
@@ -670,6 +1124,126 @@ func loadTemplates() (map[string]*template.Template, error) {
 		out[page] = parsed
 	}
 	return out, nil
+}
+
+type meshcoreDashboardView struct {
+	Label   string
+	Detail  string
+	Tone    string
+	Release bool
+	Resume  bool
+}
+
+type portalStatusSummary struct {
+	Label  string
+	Detail string
+	Icon   string
+	Tone   string
+}
+
+func receiverSummary(snap status.Snapshot) portalStatusSummary {
+	lifecycle := strings.ToLower(strings.TrimSpace(string(snap.Lifecycle)))
+	if lifecycle == string(status.LifecycleFailed) {
+		return portalStatusSummary{Label: "Problem", Detail: "Receiver service has failed", Icon: "✕", Tone: "is-fail"}
+	}
+	attention := diagnostics.Attention{
+		State:   diagnostics.AttentionState(strings.TrimSpace(snap.AttentionState)),
+		Summary: strings.TrimSpace(snap.AttentionSummary),
+	}
+	if strings.TrimSpace(snap.FailureCode) != "" && (attention.State == "" || attention.State == diagnostics.AttentionNone) {
+		attention = deriveAttentionFromSnapshot(snap)
+	}
+	detail := strings.TrimSpace(attention.Summary)
+	if detail == "" {
+		detail = strings.TrimSpace(snap.FailureSummary)
+	}
+	if attention.State == diagnostics.AttentionUrgent {
+		if detail == "" {
+			detail = "Receiver needs attention"
+		}
+		return portalStatusSummary{Label: "Problem", Detail: detail, Icon: "✕", Tone: "is-fail"}
+	}
+	if attention.State == diagnostics.AttentionActionRequired || strings.TrimSpace(snap.FailureCode) != "" {
+		if detail == "" {
+			detail = "Receiver needs attention"
+		}
+		return portalStatusSummary{Label: "Degraded", Detail: detail, Icon: "!", Tone: "is-warn"}
+	}
+	if lifecycle == string(status.LifecycleStopped) || lifecycle == string(status.LifecycleStopping) || lifecycle == "" {
+		return portalStatusSummary{Label: "Offline", Detail: "Receiver service is unavailable", Icon: "○", Tone: "is-neutral"}
+	}
+	if lifecycle == string(status.LifecycleRunning) && snap.Ready {
+		return portalStatusSummary{Label: "Online", Detail: "Receiver service is ready", Icon: "✓", Tone: "is-ok"}
+	}
+	return portalStatusSummary{Label: "Degraded", Detail: "Receiver service is not ready", Icon: "!", Tone: "is-warn"}
+}
+
+func cloudSummary(snap status.Snapshot) portalStatusSummary {
+	state := strings.ToLower(strings.TrimSpace(snap.CloudStatus))
+	if snap.CloudReachable || state == "reachable" {
+		return portalStatusSummary{Label: "Cloud connected", Detail: "Cloud is reachable", Icon: "✓", Tone: "is-ok"}
+	}
+	if state == "unreachable" || state == "lifecycle_blocked" {
+		return portalStatusSummary{Label: "Cloud unreachable", Detail: "Cloud connection needs attention", Icon: "!", Tone: "is-warn"}
+	}
+	return portalStatusSummary{Label: "Cloud unavailable", Detail: "Cloud status is not available", Icon: "○", Tone: "is-neutral"}
+}
+
+func meshcoreSummary(adapter *status.AdapterStatus) portalStatusSummary {
+	view := meshcoreView(adapter)
+	switch view.Label {
+	case "Connected":
+		return portalStatusSummary{Label: "MeshCore connected", Detail: "Companion handshake ready", Icon: "✓", Tone: "is-ok"}
+	case "Connecting / reconnecting":
+		return portalStatusSummary{Label: "MeshCore reconnecting", Detail: "Restoring receiver connection", Icon: "!", Tone: "is-warn"}
+	case "Released for external use":
+		return portalStatusSummary{Label: "MeshCore released", Detail: "Available to another client", Icon: "○", Tone: "is-neutral"}
+	case "Error":
+		return portalStatusSummary{Label: "MeshCore error", Detail: view.Detail, Icon: "✕", Tone: "is-fail"}
+	default:
+		return portalStatusSummary{Label: "MeshCore unavailable", Detail: view.Detail, Icon: "○", Tone: "is-neutral"}
+	}
+}
+
+func meshcoreView(adapter *status.AdapterStatus) meshcoreDashboardView {
+	if adapter == nil {
+		return meshcoreDashboardView{Label: "Disconnected", Detail: "No MeshCore adapter status has been reported.", Tone: "is-neutral"}
+	}
+	state := strings.ToLower(strings.TrimSpace(adapter.ConnectionState))
+	lifecycle := strings.ToLower(strings.TrimSpace(adapter.Lifecycle))
+	if state == "" {
+		state = lifecycle
+	}
+	// A ready connected session is authoritative over a stale lifecycle flag.
+	// Release() transitions the adapter to StateReleased before setting the
+	// release gate, and Resume() clears both before reconnecting.
+	if state == string(meshcore.StateConnected) && adapter.Ready {
+		return meshcoreDashboardView{Label: "Connected", Detail: "Companion session handshake is ready.", Tone: "is-ok", Release: true}
+	}
+	if state == string(meshcore.StateReleased) || adapter.ReleasedByUser {
+		return meshcoreDashboardView{Label: "Released for external use", Detail: "Receiver reconnect is deliberately suppressed until resumed.", Tone: "is-warn", Resume: true}
+	}
+	if state == "connecting" || state == "reconnecting" || lifecycle == string(meshcore.StateOpening) || lifecycle == string(meshcore.StateHandshaking) || lifecycle == string(meshcore.StateConnecting) || lifecycle == string(meshcore.StateDetected) {
+		return meshcoreDashboardView{Label: "Connecting / reconnecting", Detail: "Receiver is establishing its configured MeshCore connection.", Tone: "is-warn"}
+	}
+	if adapter.Transport == "ble" && lifecycle == string(meshcore.StateNotPresent) {
+		return meshcoreDashboardView{Label: "Bluetooth unavailable", Detail: "The configured BLE device or Bluetooth service is not currently available.", Tone: "is-warn"}
+	}
+	if state == "error" || lifecycle == string(meshcore.StateConfigurationError) || lifecycle == string(meshcore.StateIncompatible) || lifecycle == string(meshcore.StateDegraded) || state == "failed" || strings.TrimSpace(adapter.LastError) != "" {
+		detail := strings.TrimSpace(adapter.LastError)
+		if detail == "" {
+			detail = "MeshCore adapter requires attention."
+		}
+		return meshcoreDashboardView{Label: "Error", Detail: detail, Tone: "is-fail"}
+	}
+	return meshcoreDashboardView{Label: "Disconnected", Detail: "The MeshCore adapter is not connected.", Tone: "is-neutral"}
+}
+
+func meshcoreError(adapter *status.AdapterStatus) string {
+	if adapter == nil {
+		return ""
+	}
+	return strings.TrimSpace(adapter.LastError)
 }
 
 func portalStaticHandler() http.Handler {

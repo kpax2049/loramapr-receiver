@@ -1,5 +1,5 @@
 {
-  "schema_version": 3,
+  "schema_version": 4,
   "service": {
     "mode": "auto",
     "heartbeat": "30s"
@@ -9,7 +9,8 @@
     "local_name": ""
   },
   "paths": {
-    "state_file": "./data/receiver-state.json"
+    "state_file": "./data/receiver-state.json",
+    "outbox_file": "./data/ingest-outbox.db"
   },
   "portal": {
     "bind_address": "127.0.0.1:8080"
@@ -27,6 +28,10 @@
   "meshtastic": {
     "transport": "serial",
     "device": "/dev/ttyUSB0"
+  },
+  "meshcore": {
+    "transport": "disabled",
+    "device": ""
   },
   "home_auto_session": {
     "enabled": false,

@@ -1,0 +1,20 @@
+[Unit]
+Description=LoRaMapr Receiver Service (workspace)
+Wants=network-online.target
+After=network-online.target bluetooth.service
+StartLimitIntervalSec=5min
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=kpax
+Group=kpax
+WorkingDirectory=/home/kpax/m6/loramapr-receiver
+ExecStart=/home/kpax/m6/loramapr-receiver/bin/loramapr-receiverd-current -config /home/kpax/m6/receiver-ble.json
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=90s
+KillMode=control-group
+
+[Install]
+WantedBy=multi-user.target

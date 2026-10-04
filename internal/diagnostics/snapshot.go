@@ -79,6 +79,7 @@ type SupportSnapshot struct {
 		Probe        NetworkProbe     `json:"probe"`
 		LocalRuntime LocalStatusProbe `json:"local_runtime"`
 	} `json:"network"`
+	Adapters   []status.AdapterStatus `json:"adapters,omitempty"`
 	Meshtastic struct {
 		Transport      string `json:"transport"`
 		ConfiguredPath string `json:"configured_path,omitempty"`
@@ -281,6 +282,9 @@ func CollectSupportSnapshot(cfg config.Config, data state.Data, finding Finding,
 	out.Network.PortalBind = strings.TrimSpace(cfg.Portal.BindAddress)
 	out.Network.Probe = networkProbe
 	out.Network.LocalRuntime = summarizeLocalProbe(localProbe)
+	if localProbe.Snapshot != nil {
+		out.Adapters = append([]status.AdapterStatus(nil), localProbe.Snapshot.Adapters...)
+	}
 
 	out.Meshtastic.Transport = strings.TrimSpace(cfg.Meshtastic.Transport)
 	out.Meshtastic.ConfiguredPath = strings.TrimSpace(cfg.Meshtastic.Device)

@@ -1,5 +1,5 @@
 {
-  "schema_version": 3,
+  "schema_version": 4,
   "service": {
     "mode": "auto",
     "heartbeat": "30s"
@@ -9,7 +9,8 @@
     "local_name": ""
   },
   "paths": {
-    "state_file": "/var/lib/loramapr/receiver-state.json"
+    "state_file": "/var/lib/loramapr/receiver-state.json",
+    "outbox_file": "/var/lib/loramapr/ingest-outbox.db"
   },
   "portal": {
     "bind_address": "0.0.0.0:8080"
@@ -30,6 +31,10 @@
     "bootstrap_write": false,
     "bridge_command": "",
     "bridge_args": []
+  },
+  "meshcore": {
+    "transport": "disabled",
+    "device": ""
   },
   "home_auto_session": {
     "enabled": false,

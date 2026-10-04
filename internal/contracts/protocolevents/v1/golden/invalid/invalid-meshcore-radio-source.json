@@ -1,0 +1,33 @@
+{
+  "contractVersion": "1.0",
+  "deliveryId": "018f47a2-7b3c-7def-b123-456789abcdef",
+  "eventType": "packet_observed",
+  "protocol": "meshcore",
+  "receiver": {
+    "installationId": "0123456789abcdef0123456789abcdef",
+    "adapter": "meshcore-companion",
+    "adapterVersion": "1.0.0",
+    "observedAt": "2026-08-19T12:34:56.789Z"
+  },
+  "radio": {
+    "metrics": [
+      {
+        "kind": "rssi",
+        "value": -100,
+        "unit": "dBm",
+        "origin": "receiver_local",
+        "source": {
+          "value": 18,
+          "unit": "dB_x4",
+          "encoding": "meshcore_snr_x4"
+        }
+      }
+    ]
+  },
+  "capabilities": {},
+  "source": {
+    "rawEncoding": "base64",
+    "raw": "",
+    "rawSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  }
+}

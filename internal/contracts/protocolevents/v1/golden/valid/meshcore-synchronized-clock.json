@@ -1,0 +1,36 @@
+{
+  "contractVersion": "1.1",
+  "deliveryId": "018f47a2-7b3c-7def-b123-456789abcdef",
+  "eventType": "packet_observed",
+  "protocol": "meshcore",
+  "receiver": {
+    "installationId": "0123456789abcdef0123456789abcdef",
+    "adapter": "meshcore-companion",
+    "adapterVersion": "1.0.0",
+    "observedAt": "2026-08-19T12:34:56.789Z",
+    "clock": {
+      "source": "cloud_attestation",
+      "state": "synchronized",
+      "samples": [
+        {
+          "token": "v1.fixture-payload-a.fixture-signature-a",
+          "receivedAt": "2026-08-19T12:32:56.789Z"
+        },
+        {
+          "token": "v1.fixture-payload-b.fixture-signature-b",
+          "receivedAt": "2026-08-19T12:33:56.789Z"
+        }
+      ]
+    }
+  },
+  "capabilities": {
+    "receiver_clock": "available"
+  },
+  "source": {
+    "protocolVersion": "13",
+    "nativeMessageType": 136,
+    "rawEncoding": "base64",
+    "raw": "AQIDBA==",
+    "rawSha256": "9f64a747e1b97f131fabb6b447296c9b6f0201e79fb3c5356e6c77e89b6a806a"
+  }
+}

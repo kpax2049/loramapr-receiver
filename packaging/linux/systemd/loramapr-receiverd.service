@@ -1,7 +1,9 @@
 [Unit]
 Description=LoRaMapr Receiver Service
-After=network-online.target
+After=network-online.target bluetooth.service
 Wants=network-online.target
+StartLimitIntervalSec=5min
+StartLimitBurst=5
 
 [Service]
 Type=simple
@@ -14,7 +16,7 @@ Restart=on-failure
 RestartSec=5
 RestartForceExitStatus=SIGHUP
 TimeoutStartSec=30
-TimeoutStopSec=30
+TimeoutStopSec=90s
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=full

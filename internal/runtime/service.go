@@ -15,15 +15,21 @@ import (
 	goruntime "runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/loramapr/loramapr-receiver/internal/buildinfo"
+	"github.com/loramapr/loramapr-receiver/internal/clockattestation"
 	"github.com/loramapr/loramapr-receiver/internal/cloudclient"
 	"github.com/loramapr/loramapr-receiver/internal/config"
 	"github.com/loramapr/loramapr-receiver/internal/diagnostics"
 	"github.com/loramapr/loramapr-receiver/internal/homeautosession"
+	"github.com/loramapr/loramapr-receiver/internal/meshcore"
 	"github.com/loramapr/loramapr-receiver/internal/meshtastic"
+	"github.com/loramapr/loramapr-receiver/internal/outbox"
 	"github.com/loramapr/loramapr-receiver/internal/pairing"
+	"github.com/loramapr/loramapr-receiver/internal/protocoladapter"
+	"github.com/loramapr/loramapr-receiver/internal/receiverevents"
 	"github.com/loramapr/loramapr-receiver/internal/state"
 	"github.com/loramapr/loramapr-receiver/internal/status"
 	"github.com/loramapr/loramapr-receiver/internal/update"
@@ -51,6 +57,14 @@ const (
 type CloudClient interface {
 	cloudclient.PairingClient
 	PostIngestEvent(ctx context.Context, ingestEndpoint string, apiKey string, payload map[string]any, idempotencyKey string) error
+	PostNormalizedEvent(
+		ctx context.Context,
+		endpoint string,
+		apiKey string,
+		envelope []byte,
+		deliveryID string,
+		envelopeSHA256 string,
+	) (cloudclient.NormalizedDeliveryResult, error)
 	SendReceiverHeartbeat(
 		ctx context.Context,
 		heartbeatEndpoint string,
@@ -72,26 +86,63 @@ type CloudClient interface {
 }
 
 type Service struct {
-	container   *Container
-	mode        config.RunMode
-	steady      steadyState
-	build       buildinfo.Info
-	updater     *update.Checker
-	ingestWake  chan struct{}
-	ingestTrace bool
+	// meshcoreBLEMu makes release, pairing, and resume one local lifecycle
+	// transaction. Resume therefore cannot restart the receiver's BLE
+	// reconnect loop while a temporary BlueZ pairing agent is active.
+	meshcoreBLEMu              sync.Mutex
+	container                  *Container
+	mode                       config.RunMode
+	steady                     steadyState
+	build                      buildinfo.Info
+	updater                    *update.Checker
+	ingestWake                 chan struct{}
+	normalizedWake             chan struct{}
+	normalizedEventsV1Disabled bool
+	ingestTrace                bool
+	meshcoreControl            meshcoreTrackingControl
+	meshcoreBLEControl         meshcoreBLEControl
+}
+
+type meshcoreBLEControl struct {
+	mu             sync.RWMutex
+	appliedVersion string
+	result         *cloudclient.MeshCoreBLEControlResult
+	discovery      *cloudclient.MeshCoreBLEDiscoveryResult
+}
+
+type meshcoreTrackingControl struct {
+	mu                sync.RWMutex
+	source            string
+	desired           bool
+	sessionID         string
+	deviceID          string
+	publicKey         string
+	intentVersion     string
+	lastReconciledAt  *time.Time
+	reconciliationErr string
 }
 
 type Container struct {
-	Config          config.Config
-	Logger          *slog.Logger
-	State           *state.Store
-	Status          *status.Model
-	Cloud           CloudClient
-	Pairing         *pairing.Manager
-	Meshtastic      meshtastic.Adapter
-	HomeAutoSession *homeautosession.Module
-	MeshEvents      <-chan meshtastic.Event
-	Portal          *webportal.Server
+	Config           config.Config
+	Logger           *slog.Logger
+	State            *state.Store
+	Status           *status.Model
+	Cloud            CloudClient
+	Pairing          *pairing.Manager
+	Meshtastic       meshtastic.Adapter
+	MeshCore         *meshcore.Adapter
+	MeshCoreBLE      *meshcore.BLEPairingBackend
+	MeshCoreTracking *meshcore.TrackingController
+	Adapters         *protocoladapter.Manager
+	SerialLeases     *protocoladapter.SerialLeaseRegistry
+	SerialReleases   []func()
+	HomeAutoSession  *homeautosession.Module
+	AdapterEvents    <-chan protocoladapter.Event
+	OutboxStore      *outbox.Store
+	OutboxEngine     *outbox.Engine
+	OutboxResults    <-chan outbox.StageResult
+	Normalized       *receiverevents.Dispatcher
+	Portal           *webportal.Server
 }
 
 type steadyState struct {
@@ -149,6 +200,26 @@ func New(cfg config.Config, logger *slog.Logger) (*Service, error) {
 		data.Runtime.InstallType = installType
 	}); err != nil {
 		return nil, fmt.Errorf("persist startup state: %w", err)
+	}
+	outboxStore, err := outbox.Open(outbox.Config{Path: cfg.Paths.OutboxFile})
+	if err != nil {
+		return nil, fmt.Errorf("open normalized event outbox: %w", err)
+	}
+	outboxEngine, err := outbox.NewEngine(outboxStore, outbox.EngineConfig{})
+	if err != nil {
+		_ = outboxStore.Close()
+		return nil, fmt.Errorf("start normalized event outbox: %w", err)
+	}
+	closeOutbox := func() {
+		closeCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		_ = outboxEngine.Close(closeCtx)
+		_ = outboxStore.Close()
+	}
+	rotator := newInstallationRotator(store, outboxEngine)
+	if _, err := rotator.Recover(); err != nil {
+		closeOutbox()
+		return nil, fmt.Errorf("recover installation rotation: %w", err)
 	}
 
 	current = store.Snapshot()
@@ -208,22 +279,68 @@ func New(cfg config.Config, logger *slog.Logger) (*Service, error) {
 		ingestQueue: make([]queuedIngestEvent, 0, 64),
 	}
 	svc.ingestWake = make(chan struct{}, 1)
+	svc.normalizedWake = make(chan struct{}, 1)
 	svc.ingestTrace = envFlagEnabled("LORAMAPR_INGEST_TRACE")
 
 	cloud := cloudclient.NewHTTPClient(cfg.Cloud.BaseURL, 10*time.Second)
-	mesh := meshtastic.NewAdapter(cfg.Meshtastic, logger.With("component", "meshtastic"))
+	serialLeases := protocoladapter.NewSerialLeaseRegistry()
+	serialReleases, err := reserveConfiguredSerialPaths(cfg, serialLeases)
+	if err != nil {
+		closeOutbox()
+		return nil, err
+	}
+	mesh := meshtastic.NewAdapterWithLeases(cfg.Meshtastic, logger.With("component", "meshtastic"), serialLeases)
+	radioAdapters := make([]protocoladapter.RadioAdapter, 0, 2)
+	var meshCoreAdapter *meshcore.Adapter
+	meshCoreTransport := strings.ToLower(strings.TrimSpace(cfg.MeshCore.Transport))
+	meshCoreEnabled := meshCoreTransport == "physical_serial" || meshCoreTransport == "ble"
+	if meshCoreEnabled {
+		meshCoreAdapter = meshcore.NewAdapter(meshcore.Config{
+			Transport: cfg.MeshCore.Transport,
+			Device:    cfg.MeshCore.Device,
+			BLE:       meshcore.BLEConfig{Adapter: cfg.MeshCore.BLE.Adapter, PeerAddress: cfg.MeshCore.BLE.PeerAddress},
+		}, logger.With("component", meshcore.AdapterName), serialLeases)
+		radioAdapters = append(radioAdapters, meshCoreAdapter)
+	}
+	radioAdapters = append(radioAdapters, newMeshtasticRadioAdapter(mesh))
+	adapters, err := protocoladapter.NewManager(radioAdapters...)
+	if err != nil {
+		releaseSerialReservations(serialReleases)
+		closeOutbox()
+		return nil, fmt.Errorf("configure protocol adapters: %w", err)
+	}
+
+	var normalizedDispatcher *receiverevents.Dispatcher
+	if meshCoreEnabled {
+		normalizedDispatcher = &receiverevents.Dispatcher{Outbox: outboxEngine, Client: cloud}
+	}
 	meshSnap := mesh.Snapshot()
 	statusModel.SetComponent("meshtastic", string(meshSnap.State), meshtasticStatusMessage(meshSnap))
+	if meshCoreEnabled {
+		statusModel.SetComponent(meshcore.AdapterName, string(meshcore.StateNotPresent), "MeshCore Companion adapter awaiting startup")
+		statusModel.SetComponent("normalized_outbox", "starting", "durable normalized event outbox opened")
+	} else {
+		statusModel.SetComponent(meshcore.AdapterName, string(meshcore.StateDisabled), "MeshCore transport disabled")
+		statusModel.SetComponent("normalized_outbox", "disabled", "MeshCore normalized intake disabled")
+	}
 	statusModel.SetMeshtasticConfig(mapMeshtasticConfigStatus(meshSnap))
 	statusModel.SetComponent("ingest", "idle", "no queued packets")
 
 	svc.container = &Container{
-		Config:     cfg,
-		Logger:     logger.With("component", "runtime"),
-		State:      store,
-		Status:     statusModel,
-		Cloud:      cloud,
-		Meshtastic: mesh,
+		Config:         cfg,
+		Logger:         logger.With("component", "runtime"),
+		State:          store,
+		Status:         statusModel,
+		Cloud:          cloud,
+		Meshtastic:     mesh,
+		MeshCore:       meshCoreAdapter,
+		MeshCoreBLE:    meshcore.NewBLEPairingBackend(),
+		Adapters:       adapters,
+		SerialLeases:   serialLeases,
+		SerialReleases: serialReleases,
+		OutboxStore:    outboxStore,
+		OutboxEngine:   outboxEngine,
+		Normalized:     normalizedDispatcher,
 		Pairing: pairing.NewManager(
 			store,
 			statusModel,
@@ -243,7 +360,13 @@ func New(cfg config.Config, logger *slog.Logger) (*Service, error) {
 					"installationId": current.Installation.ID,
 				},
 			},
+			rotator,
 		),
+	}
+	svc.refreshAdapterStatuses()
+	if meshCoreEnabled {
+		svc.container.OutboxResults = outboxEngine.Results()
+		svc.refreshNormalizedOutboxStatus()
 	}
 	svc.container.HomeAutoSession = homeautosession.New(
 		cfg.HomeAutoSession,
@@ -253,12 +376,20 @@ func New(cfg config.Config, logger *slog.Logger) (*Service, error) {
 		cloud,
 	)
 	svc.applyHomeAutoLocalFallbackConfig(homeAutoConfigApplyLocalStartup, "")
+	// Controller-owned polls stage through the same durable outbox as manual
+	// telemetry, but only after the controller snapshots recovery/path-update
+	// evidence for the successful request.
+	if meshCoreEnabled {
+		tracking := meshcore.NewTrackingControllerWithRouteRecovery(meshCoreAdapter.RequestTelemetry, meshCoreAdapter.ResetPath, meshcore.DefaultTrackingPolicy(), logger)
+		tracking.SetSuccessfulTelemetryStager(svc.stageMeshCoreTelemetry)
+		svc.container.MeshCoreTracking = tracking
+	}
 	svc.container.Portal = webportal.New(cfg.Portal.BindAddress, svc, svc, logger.With("component", "webportal"))
 	svc.configureInitialReadiness(current.Pairing.Phase)
 	return svc, nil
 }
 
-func (s *Service) Run(ctx context.Context) error {
+func (s *Service) Run(ctx context.Context) (runErr error) {
 	c := s.container
 	c.Logger.Info(
 		"starting loramapr-receiverd",
@@ -276,11 +407,26 @@ func (s *Service) Run(ctx context.Context) error {
 	c.Status.SetComponent("runtime", "running", "runtime loop active")
 	c.Status.SetComponent("portal", "starting", "local setup portal starting")
 
-	meshEvents, err := c.Meshtastic.Start(ctx)
+	adapterEvents, err := c.Adapters.Start(ctx)
 	if err != nil {
-		return err
+		releaseSerialReservations(c.SerialReleases)
+		return errors.Join(err, s.shutdownNormalizedOutbox())
 	}
-	c.MeshEvents = meshEvents
+	c.AdapterEvents = adapterEvents
+	defer func() {
+		if c.MeshCoreTracking != nil {
+			c.MeshCoreTracking.Stop()
+		}
+		if err := c.Adapters.Close(); err != nil {
+			c.Logger.Warn("protocol adapter shutdown failed", "err", err)
+			runErr = errors.Join(runErr, err)
+		}
+		releaseSerialReservations(c.SerialReleases)
+		if err := s.shutdownNormalizedOutbox(); err != nil {
+			c.Logger.Error("normalized outbox shutdown failed", "err", err)
+			runErr = errors.Join(runErr, err)
+		}
+	}()
 	if c.HomeAutoSession != nil {
 		c.HomeAutoSession.Start(ctx)
 	}
@@ -319,17 +465,26 @@ func (s *Service) Run(ctx context.Context) error {
 				return nil
 			}
 			return errors.New("portal exited unexpectedly")
-		case event, ok := <-c.MeshEvents:
+		case event, ok := <-c.AdapterEvents:
 			if !ok {
-				c.Logger.Warn("meshtastic event stream closed")
-				c.Status.SetComponent("meshtastic", "degraded", "meshtastic stream closed")
+				c.Logger.Warn("protocol adapter event stream closed")
+				c.AdapterEvents = nil
 				continue
 			}
-			s.onMeshtasticEvent(event)
+			s.onAdapterEvent(event)
+		case result, ok := <-c.OutboxResults:
+			if !ok {
+				c.OutboxResults = nil
+				continue
+			}
+			s.onOutboxStageResult(result)
 		case <-s.ingestWake:
 			s.processIngestDispatch(ctx, "event")
+		case <-s.normalizedWake:
+			s.processNormalizedDispatch(ctx, "event")
 		case <-ingestTicker.C:
 			s.processIngestDispatch(ctx, "interval")
+			s.processNormalizedDispatch(ctx, "interval")
 		case <-ticker.C:
 			s.tick(ctx)
 		}
@@ -346,6 +501,293 @@ func (s *Service) SubmitPairingCode(ctx context.Context, code string) error {
 
 func (s *Service) ResetPairing(_ context.Context, deauthorize bool) error {
 	return s.container.Pairing.ResetPairing(deauthorize)
+}
+
+// DiscoverMeshCoreBLE, PairMeshCoreBLE and ForgetMeshCoreBLE are local-only
+// operations. They deliberately do not select or persist a runtime peer;
+// transport selection remains ordinary receiver configuration.
+func (s *Service) DiscoverMeshCoreBLE(ctx context.Context, adapter string) ([]meshcore.BLEDevice, error) {
+	if s.container == nil || s.container.MeshCoreBLE == nil {
+		return nil, meshcore.ErrBLEUnsupported
+	}
+	return s.container.MeshCoreBLE.Discover(ctx, adapter)
+}
+
+func (s *Service) PairMeshCoreBLE(ctx context.Context, cfg meshcore.BLEConfig, pin string) error {
+	if s.container == nil || s.container.MeshCoreBLE == nil {
+		return meshcore.ErrBLEUnsupported
+	}
+	s.meshcoreBLEMu.Lock()
+	defer s.meshcoreBLEMu.Unlock()
+	if adapter := s.container.MeshCore; adapter != nil {
+		status := adapter.DetailedSnapshot()
+		if status.Transport == "ble" && !status.ReconnectSuppressed {
+			// Pairing must be performed after the operator has released the
+			// receiver-owned BLE loop. Silently releasing it here would interrupt
+			// active traffic, and a concurrent Resume would race BlueZ.
+			return &meshcore.BLEPairingDiagnostic{Operation: "pair", Code: "receiver_active"}
+		}
+	}
+	return s.container.MeshCoreBLE.Pair(ctx, cfg, pin)
+}
+
+func (s *Service) ForgetMeshCoreBLE(ctx context.Context, cfg meshcore.BLEConfig) error {
+	if s.container == nil || s.container.MeshCoreBLE == nil {
+		return meshcore.ErrBLEUnsupported
+	}
+	return s.container.MeshCoreBLE.Forget(ctx, cfg)
+}
+
+// ScanMeshCoreBLE performs a bounded Receiver-local discovery. It neither
+// changes the selected peer nor opens a browser-to-Receiver control path.
+func (s *Service) ScanMeshCoreBLE(ctx context.Context) ([]meshcore.BLEDevice, error) {
+	if s.container == nil || s.container.MeshCoreBLE == nil || s.container.MeshCore == nil {
+		return nil, meshcore.ErrBLEUnsupported
+	}
+	s.meshcoreBLEMu.Lock()
+	defer s.meshcoreBLEMu.Unlock()
+	if s.container.MeshCore.ReconnectSuppressed() {
+		return nil, meshcore.ErrBLEConfiguration
+	}
+	adapter := strings.TrimSpace(s.container.Config.MeshCore.BLE.Adapter)
+	scanCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
+	defer cancel()
+	devices, err := s.container.MeshCoreBLE.Discover(scanCtx, adapter)
+	if err != nil {
+		return nil, err
+	}
+	configured := strings.ToUpper(strings.TrimSpace(s.container.Config.MeshCore.BLE.PeerAddress))
+	for index := range devices {
+		devices[index].Configured = configured != "" && strings.EqualFold(devices[index].Address, configured)
+	}
+	return devices, nil
+}
+
+// ConfigureMeshCoreBLE persists the selected BlueZ peer using the normal
+// Receiver configuration model, then lets the existing adapter reconnect to
+// it. With an optional PIN, it delegates OS-level pairing to the existing
+// BlueZ integration; otherwise BlueZ must already have a usable bond for the
+// Companion transport to complete its handshake.
+func (s *Service) ConfigureMeshCoreBLE(ctx context.Context, deviceAddress, pairingPIN string) error {
+	if s.container == nil || s.container.MeshCore == nil || s.container.MeshCoreBLE == nil {
+		return meshcore.ErrBLEUnsupported
+	}
+	s.meshcoreBLEMu.Lock()
+	defer s.meshcoreBLEMu.Unlock()
+	if s.container.MeshCore.ReconnectSuppressed() {
+		return meshcore.ErrBLEConfiguration
+	}
+	next := s.container.Config
+	next.MeshCore.Transport = "ble"
+	next.MeshCore.BLE.PeerAddress = strings.ToUpper(strings.TrimSpace(deviceAddress))
+	if strings.TrimSpace(pairingPIN) != "" {
+		// Pairing is the one operation that requires temporary exclusive BlueZ
+		// ownership. The PIN is provided only in this command and never enters
+		// Receiver configuration or status reporting.
+		if err := s.container.MeshCore.Release(); err != nil {
+			return err
+		}
+		if err := s.container.MeshCoreBLE.Pair(ctx, meshcore.BLEConfig{Adapter: next.MeshCore.BLE.Adapter, PeerAddress: next.MeshCore.BLE.PeerAddress}, pairingPIN); err != nil {
+			_ = s.container.MeshCore.Resume()
+			return err
+		}
+	}
+	if err := persistMeshCoreBLEConfig(&next); err != nil {
+		if strings.TrimSpace(pairingPIN) != "" {
+			_ = s.container.MeshCore.Resume()
+		}
+		return err
+	}
+	if s.container.MeshCoreTracking != nil {
+		s.container.MeshCoreTracking.Stop()
+	}
+	if err := s.container.MeshCore.ConfigureBLE(meshcore.BLEConfig{Adapter: next.MeshCore.BLE.Adapter, PeerAddress: next.MeshCore.BLE.PeerAddress}); err != nil {
+		return err
+	}
+	s.container.Config = next
+	s.refreshAdapterStatuses()
+	return nil
+}
+
+// ForgetConfiguredMeshCoreBLE removes exactly the current configured BlueZ
+// peer and leaves MeshCore BLE enabled with no selected target.
+func (s *Service) ForgetConfiguredMeshCoreBLE(ctx context.Context) error {
+	if s.container == nil || s.container.MeshCore == nil || s.container.MeshCoreBLE == nil {
+		return meshcore.ErrBLEUnsupported
+	}
+	s.meshcoreBLEMu.Lock()
+	defer s.meshcoreBLEMu.Unlock()
+	if s.container.MeshCore.ReconnectSuppressed() {
+		return meshcore.ErrBLEConfiguration
+	}
+	current := s.container.Config.MeshCore.BLE
+	if strings.TrimSpace(current.PeerAddress) == "" {
+		return meshcore.ErrBLEConfiguration
+	}
+	if s.container.MeshCoreTracking != nil {
+		s.container.MeshCoreTracking.Stop()
+	}
+	if err := s.container.MeshCore.Release(); err != nil {
+		return err
+	}
+	if err := s.container.MeshCoreBLE.Forget(ctx, meshcore.BLEConfig{Adapter: current.Adapter, PeerAddress: current.PeerAddress}); err != nil {
+		_ = s.container.MeshCore.Resume()
+		return err
+	}
+	next := s.container.Config
+	next.MeshCore.BLE.PeerAddress = ""
+	if err := persistMeshCoreBLEConfig(&next); err != nil {
+		return err
+	}
+	if err := s.container.MeshCore.ClearBLEConfig(); err != nil {
+		return err
+	}
+	s.container.Config = next
+	s.refreshAdapterStatuses()
+	return nil
+}
+
+func (s *Service) ReconnectMeshCoreBLE(_ context.Context) error {
+	if s.container == nil || s.container.MeshCore == nil {
+		return meshcore.ErrBLEUnsupported
+	}
+	s.meshcoreBLEMu.Lock()
+	defer s.meshcoreBLEMu.Unlock()
+	if s.container.MeshCore.ReconnectSuppressed() {
+		return meshcore.ErrBLEConfiguration
+	}
+	err := s.container.MeshCore.ReconnectBLE()
+	s.refreshAdapterStatuses()
+	return err
+}
+
+func persistMeshCoreBLEConfig(cfg *config.Config) error {
+	if cfg == nil {
+		return errors.New("receiver configuration is unavailable")
+	}
+	if path := strings.TrimSpace(cfg.LoadedFromConfig); path != "" {
+		if err := config.Save(path, *cfg); err != nil {
+			return err
+		}
+		cfg.LoadedFromConfig = path
+	}
+	return nil
+}
+
+// ReleaseMeshCoreBLE stops receiver-owned tracking before releasing the
+// configured BLE Companion. The release is local to this process and is not
+// persisted, so a later receiver restart follows normal configured startup.
+func (s *Service) ReleaseMeshCoreBLE(_ context.Context) (meshcore.AdapterStatus, error) {
+	if s.container == nil || s.container.MeshCore == nil {
+		return meshcore.AdapterStatus{}, meshcore.ErrBLEUnsupported
+	}
+	s.meshcoreBLEMu.Lock()
+	defer s.meshcoreBLEMu.Unlock()
+	if s.container.MeshCoreTracking != nil {
+		s.container.MeshCoreTracking.Stop()
+	}
+	err := s.container.MeshCore.Release()
+	s.refreshAdapterStatuses()
+	return s.container.MeshCore.DetailedSnapshot(), err
+}
+
+// ResumeMeshCoreBLE restores the normal configured BLE reconnect lifecycle.
+func (s *Service) ResumeMeshCoreBLE(_ context.Context) (meshcore.AdapterStatus, error) {
+	if s.container == nil || s.container.MeshCore == nil {
+		return meshcore.AdapterStatus{}, meshcore.ErrBLEUnsupported
+	}
+	s.meshcoreBLEMu.Lock()
+	defer s.meshcoreBLEMu.Unlock()
+	err := s.container.MeshCore.Resume()
+	s.refreshAdapterStatuses()
+	return s.container.MeshCore.DetailedSnapshot(), err
+}
+
+// MeshCoreAdapterStatus returns the adapter's current in-memory lifecycle
+// facts. The portal uses this for short-lived lifecycle polling because the
+// normal receiver status tick follows the heartbeat interval.
+func (s *Service) MeshCoreAdapterStatus(_ context.Context) (meshcore.AdapterStatus, error) {
+	if s.container == nil || s.container.MeshCore == nil {
+		return meshcore.AdapterStatus{}, meshcore.ErrBLEUnsupported
+	}
+	return s.container.MeshCore.DetailedSnapshot(), nil
+}
+
+// RequestMeshCoreTelemetry sends one manual request and durably stages a
+// normalized observation only after its response is correlated to the full
+// requested public key. It never creates local position, track, or session
+// state; cloud decides only the read-model representation of the event.
+func (s *Service) RequestMeshCoreTelemetry(ctx context.Context, publicKey string) (meshcore.TelemetryResult, error) {
+	if s.container == nil || s.container.MeshCore == nil {
+		return meshcore.TelemetryResult{}, meshcore.ErrTelemetryAdapterDisconnected
+	}
+	result, err := s.container.MeshCore.RequestTelemetry(ctx, publicKey)
+	if err != nil {
+		return result, err
+	}
+	if err := s.stageMeshCoreTelemetry(result); err != nil {
+		return result, err
+	}
+	return result, nil
+}
+
+// StartMeshCoreTracking and StopMeshCoreTracking are a temporary local portal
+// harness for M7A. They deliberately delegate to an ephemeral controller so
+// the next milestone can bind the exact same lifecycle to cloud Session start
+// and stop; they are not an independent always-on tracking subsystem.
+func (s *Service) StartMeshCoreTracking(_ context.Context, publicKey string) (meshcore.TrackingStatus, error) {
+	if s.container == nil || s.container.MeshCoreTracking == nil {
+		return meshcore.TrackingStatus{}, meshcore.ErrTrackingUnavailable
+	}
+	if s.container.MeshCore != nil && s.container.MeshCore.ReconnectSuppressed() {
+		return s.container.MeshCoreTracking.Status(), meshcore.ErrTrackingUnavailable
+	}
+	if s.meshcoreSessionManaged() {
+		return s.meshcoreTrackingStatus(), meshcore.ErrTrackingSessionManaged
+	}
+	s.container.MeshCoreTracking.SetControlSource("manual")
+	status, err := s.container.MeshCoreTracking.Start(publicKey)
+	if err == nil || errors.Is(err, meshcore.ErrTrackingAlreadyActive) {
+		s.meshcoreControl.mu.Lock()
+		s.meshcoreControl.source, s.meshcoreControl.desired = "manual", true
+		s.meshcoreControl.reconciliationErr = ""
+		s.meshcoreControl.mu.Unlock()
+	}
+	return s.meshcoreTrackingStatusFrom(status), err
+}
+
+func (s *Service) StopMeshCoreTracking(_ context.Context) (meshcore.TrackingStatus, error) {
+	if s.container == nil || s.container.MeshCoreTracking == nil {
+		return meshcore.TrackingStatus{}, meshcore.ErrTrackingUnavailable
+	}
+	if s.meshcoreSessionManaged() {
+		return s.meshcoreTrackingStatus(), meshcore.ErrTrackingSessionManaged
+	}
+	status := s.container.MeshCoreTracking.Stop()
+	s.container.MeshCoreTracking.SetControlSource("")
+	s.meshcoreControl.mu.Lock()
+	s.meshcoreControl.source, s.meshcoreControl.desired = "", false
+	s.meshcoreControl.mu.Unlock()
+	return s.meshcoreTrackingStatusFrom(status), nil
+}
+
+func (s *Service) MeshCoreTrackingStatus(_ context.Context) (meshcore.TrackingStatus, error) {
+	if s.container == nil || s.container.MeshCoreTracking == nil {
+		return meshcore.TrackingStatus{}, meshcore.ErrTrackingUnavailable
+	}
+	return s.meshcoreTrackingStatus(), nil
+}
+
+func (s *Service) ResolveNormalizedDeliveryCollision(_ context.Context, deliveryID string) error {
+	if s.container == nil || s.container.OutboxEngine == nil {
+		return errors.New("normalized outbox is not available")
+	}
+	if err := s.container.OutboxEngine.ResolveDeliveryCollision(strings.TrimSpace(deliveryID)); err != nil {
+		return err
+	}
+	s.refreshNormalizedOutboxStatus()
+	s.signalNormalizedDrain()
+	return nil
 }
 
 func (s *Service) CurrentHomeAutoSessionConfig() config.HomeAutoSessionConfig {
@@ -441,8 +883,20 @@ func (s *Service) tick(ctx context.Context) {
 	)
 	c.Status.SetPairingPhase(string(snap.Pairing.Phase))
 	c.Status.SetCloud(c.Config.Cloud.BaseURL, pairingCloudStatus(snap.Pairing))
-	c.Status.SetComponent("meshtastic", string(meshSnap.State), meshtasticStatusMessage(meshSnap))
+	c.Status.SetComponent("meshtastic", meshtasticHealthState(meshSnap), meshtasticStatusMessage(meshSnap))
 	c.Status.SetMeshtasticConfig(mapMeshtasticConfigStatus(meshSnap))
+	for _, adapterSnapshot := range c.Adapters.Snapshots() {
+		if adapterSnapshot.Name == meshtasticAdapterName {
+			continue
+		}
+		message := adapterSnapshot.Summary
+		if message == "" {
+			message = adapterSnapshot.LastError
+		}
+		c.Status.SetComponent(adapterSnapshot.Name, adapterSnapshot.State, message)
+	}
+	s.refreshAdapterStatuses()
+	s.refreshNormalizedOutboxStatus()
 
 	s.processSteadyState(ctx, snap, meshSnap)
 	s.refreshUpdateStatus(ctx, snap)
@@ -531,6 +985,200 @@ func (s *Service) onMeshtasticEvent(event meshtastic.Event) {
 	}
 	if c.HomeAutoSession != nil {
 		c.HomeAutoSession.ObserveEvent(event)
+	}
+}
+
+func (s *Service) onAdapterEvent(event protocoladapter.Event) {
+	switch event.Adapter {
+	case meshtasticAdapterName:
+		meshEvent, ok := event.Value.(meshtastic.Event)
+		if !ok {
+			s.container.Logger.Warn(
+				"protocol adapter emitted unexpected event type",
+				"adapter", event.Adapter,
+			)
+			s.container.Status.SetComponent(event.Adapter, "degraded", "adapter emitted invalid event")
+			return
+		}
+		s.onMeshtasticEvent(meshEvent)
+	case meshcore.AdapterName:
+		meshEvent, ok := event.Value.(meshcore.AdapterEvent)
+		if !ok {
+			s.container.Logger.Warn("MeshCore adapter emitted unexpected event type")
+			s.container.Status.SetComponent(meshcore.AdapterName, "degraded", "adapter emitted invalid event")
+			return
+		}
+		s.onMeshCoreEvent(event, meshEvent)
+	default:
+		s.container.Logger.Warn("protocol adapter event has no runtime handler", "adapter", event.Adapter)
+	}
+}
+
+func (s *Service) onMeshCoreEvent(event protocoladapter.Event, meshEvent meshcore.AdapterEvent) {
+	c := s.container
+	if meshEvent.Frame.Opcode == meshcore.PushPathUpdated {
+		if c.MeshCoreTracking != nil {
+			if target, ok := meshcore.PathUpdatedTarget(meshEvent.Frame.Payload); ok {
+				c.MeshCoreTracking.HandlePathUpdated(target, meshEvent.ObservedAt)
+			}
+		}
+		// This key-only Companion control notice has no normalized observation
+		// contract. It is consumed locally to refresh later route evidence.
+		return
+	}
+	if c.OutboxEngine == nil {
+		c.Logger.Warn("MeshCore event rejected because durable outbox is unavailable")
+		c.Status.SetComponent("normalized_outbox", "unavailable", "MeshCore observation rejected: durable outbox unavailable")
+		return
+	}
+	snapshot := c.State.Snapshot()
+	binding, ok := normalizedBinding(snapshot)
+	if !ok {
+		c.Logger.Warn(
+			"MeshCore event rejected before acceptance because receiver binding is unavailable",
+			"pairing_phase", snapshot.Pairing.Phase,
+			"device", meshEvent.Device,
+		)
+		c.Status.SetComponent("normalized_outbox", "binding_required", "MeshCore observation not accepted until receiver owner/agent binding is ready")
+		return
+	}
+
+	normalized, err := meshcore.NormalizeAdapterEvent(protocoladapter.Event{
+		Adapter:    meshcore.AdapterName,
+		ObservedAt: event.ObservedAt,
+		Value:      meshEvent.Frame,
+	}, meshcore.ReceiverBinding{
+		ReceiverAgentID: binding.ReceiverAgentID,
+		InstallationID:  binding.InstallationID,
+		AdapterVersion:  s.build.Version,
+		Clock:           clockattestation.Envelope(snapshot.Cloud.ClockSamples, event.ObservedAt.UTC(), binding.ReceiverAgentID, binding.InstallationID),
+	}, meshEvent.Session)
+	if err != nil {
+		c.Logger.Warn("MeshCore event normalization rejected", "err", err, "device", meshEvent.Device)
+		c.Status.SetComponent("normalized_outbox", "normalize_rejected", "MeshCore observation failed normalized contract preparation")
+		return
+	}
+	prepared, err := receiverevents.Prepare(normalized, time.Now().UTC())
+	if err != nil {
+		c.Logger.Error("MeshCore normalized event failed contract validation", "err", err, "device", meshEvent.Device)
+		c.Status.SetComponent("normalized_outbox", "contract_rejected", "MeshCore observation failed vendored contract validation")
+		return
+	}
+	delivery := outbox.Delivery{
+		DeliveryID:              prepared.DeliveryID,
+		Envelope:                prepared.Envelope,
+		EnvelopeSHA256:          prepared.EnvelopeSHA256,
+		IdempotencyKey:          prepared.DeliveryID,
+		OwnerID:                 binding.OwnerID,
+		ReceiverAgentIDSnapshot: binding.ReceiverAgentID,
+		InstallationID:          binding.InstallationID,
+		CredentialGeneration:    binding.CredentialGeneration,
+		BindingGeneration:       binding.BindingGeneration,
+		Endpoint:                receiverevents.EndpointPath,
+		EnqueuedAt:              time.Now().UTC(),
+	}
+	if err := c.OutboxEngine.TryStage(delivery); err != nil {
+		c.Logger.Warn("MeshCore observation rejected by durable outbox backpressure", "delivery_id", prepared.DeliveryID, "err", err)
+		c.Status.SetComponent("normalized_outbox", "backpressure", "MeshCore observation rejected before acceptance: durable stage is full")
+		return
+	}
+	c.Status.SetComponent("normalized_outbox", "persisting", "MeshCore observation staged for durable persistence")
+}
+
+func (s *Service) stageMeshCoreTelemetry(result meshcore.TelemetryResult) error {
+	c := s.container
+	if c == nil || c.OutboxEngine == nil {
+		return errors.New("normalized outbox is unavailable")
+	}
+	snapshot := c.State.Snapshot()
+	binding, ok := normalizedBinding(snapshot)
+	if !ok {
+		return errors.New("receiver binding is unavailable for MeshCore telemetry")
+	}
+	normalized, err := meshcore.NormalizeTelemetryResult(result, meshcore.ReceiverBinding{
+		ReceiverAgentID: binding.ReceiverAgentID,
+		InstallationID:  binding.InstallationID,
+		AdapterVersion:  s.build.Version,
+		Clock:           clockattestation.Envelope(snapshot.Cloud.ClockSamples, result.ReceivedAt.UTC(), binding.ReceiverAgentID, binding.InstallationID),
+	})
+	if err != nil {
+		return fmt.Errorf("normalize MeshCore telemetry: %w", err)
+	}
+	prepared, err := receiverevents.Prepare(normalized, time.Now().UTC())
+	if err != nil {
+		return fmt.Errorf("prepare MeshCore telemetry event: %w", err)
+	}
+	delivery := outbox.Delivery{
+		DeliveryID:              prepared.DeliveryID,
+		Envelope:                prepared.Envelope,
+		EnvelopeSHA256:          prepared.EnvelopeSHA256,
+		IdempotencyKey:          prepared.DeliveryID,
+		OwnerID:                 binding.OwnerID,
+		ReceiverAgentIDSnapshot: binding.ReceiverAgentID,
+		InstallationID:          binding.InstallationID,
+		CredentialGeneration:    binding.CredentialGeneration,
+		BindingGeneration:       binding.BindingGeneration,
+		Endpoint:                receiverevents.EndpointPath,
+		EnqueuedAt:              time.Now().UTC(),
+	}
+	if err := c.OutboxEngine.TryStage(delivery); err != nil {
+		return fmt.Errorf("stage MeshCore telemetry event: %w", err)
+	}
+	c.Status.SetComponent("normalized_outbox", "persisting", "MeshCore solicited telemetry staged for durable persistence")
+	return nil
+}
+
+func (s *Service) onOutboxStageResult(result outbox.StageResult) {
+	c := s.container
+	if result.Err != nil {
+		c.Logger.Error("normalized event persistence failed", "delivery_id", result.DeliveryID, "err", result.Err)
+		c.Status.SetComponent("normalized_outbox", "write_failed", "normalized observation was not accepted because durable persistence failed")
+		c.Status.SetLastError("normalized outbox persistence failed")
+		return
+	}
+	c.Logger.Debug("normalized event persisted", "delivery_id", result.DeliveryID)
+	s.refreshNormalizedOutboxStatus()
+	s.signalNormalizedDrain()
+}
+
+func (s *Service) signalNormalizedDrain() {
+	if s.normalizedWake == nil {
+		return
+	}
+	select {
+	case s.normalizedWake <- struct{}{}:
+	default:
+	}
+}
+
+func normalizedBinding(snapshot state.Data) (outbox.Binding, bool) {
+	binding := outbox.Binding{
+		OwnerID:              strings.TrimSpace(snapshot.Cloud.OwnerID),
+		ReceiverAgentID:      strings.TrimSpace(snapshot.Cloud.ReceiverID),
+		InstallationID:       strings.TrimSpace(snapshot.Installation.ID),
+		CredentialGeneration: snapshot.Cloud.CredentialGeneration,
+		BindingGeneration:    snapshot.Cloud.BindingGeneration,
+	}
+	ready := credentialsReady(snapshot) && binding.OwnerID != "" && binding.ReceiverAgentID != "" && binding.InstallationID != ""
+	return binding, ready
+}
+
+func (s *Service) recordClockAttestation(candidate *clockattestation.Candidate) {
+	if candidate == nil || s == nil || s.container == nil || s.container.State == nil {
+		return
+	}
+	snapshot := s.container.State.Snapshot()
+	sample, err := candidate.BoundSample(snapshot.Cloud.ReceiverID, snapshot.Installation.ID)
+	if err != nil {
+		return
+	}
+	if err := s.container.State.Update(func(data *state.Data) {
+		if data.Cloud.ReceiverID != sample.ReceiverAgentID || data.Installation.ID != sample.InstallationID {
+			return
+		}
+		data.Cloud.ClockSamples = clockattestation.Add(data.Cloud.ClockSamples, sample)
+	}); err != nil {
+		s.container.Logger.Warn("persist cloud clock attestation failed", "err", err)
 	}
 }
 
@@ -627,6 +1275,199 @@ func (s *Service) processIngestDispatch(ctx context.Context, trigger string) {
 	} else {
 		c.Status.SetCloud(snapshot.Cloud.EndpointURL, "unreachable")
 	}
+}
+
+func (s *Service) processNormalizedDispatch(ctx context.Context, trigger string) {
+	c := s.container
+	if c == nil || c.Normalized == nil || c.OutboxEngine == nil {
+		return
+	}
+	snapshot := c.State.Snapshot()
+	binding, ready := normalizedBinding(snapshot)
+	if !ready {
+		return
+	}
+	for attempt := 0; attempt < maxIngestBatchTick; attempt++ {
+		result, err := c.Normalized.DispatchOnce(ctx, snapshot.Cloud.IngestAPIKey, binding, time.Now().UTC())
+		if err != nil {
+			c.Logger.Warn("normalized delivery dispatch failed", "trigger", trigger, "err", err)
+			c.Status.SetComponent("normalized_outbox", "delivery_failed", coarseCloudError(err))
+			return
+		}
+		if result.Reconciled.CredentialRebindQuarantined > 0 || result.Reconciled.InstallationResetQuarantined > 0 {
+			c.Logger.Warn(
+				"normalized outbox quarantined stale binding",
+				"credential_rebind", result.Reconciled.CredentialRebindQuarantined,
+				"installation_reset", result.Reconciled.InstallationResetQuarantined,
+			)
+		}
+		if !result.Attempted {
+			if result.Disposition.Action != "" {
+				s.handleNormalizedDisposition(result)
+			}
+			s.refreshNormalizedOutboxStatus()
+			return
+		}
+		s.observeNormalizedDeliveryAvailability(result)
+		if result.Acknowledged {
+			s.recordClockAttestation(result.ClockAttestation)
+			s.observeAttestedHomeAutoPosition(result.DeliveryID, result.SessionEligiblePosition)
+			c.Logger.Debug("normalized delivery acknowledged", "delivery_id", result.DeliveryID, "duplicate", result.Duplicate)
+			s.refreshNormalizedOutboxStatus()
+			continue
+		}
+
+		switch result.Disposition.Action {
+		case receiverevents.ActionPause, receiverevents.ActionRequirePairing, receiverevents.ActionStop:
+			s.handleNormalizedDisposition(result)
+			return
+		case receiverevents.ActionRetry:
+			s.refreshNormalizedOutboxStatus()
+			return
+		case receiverevents.ActionQuarantine:
+			c.Logger.Warn("normalized delivery quarantined", "delivery_id", result.DeliveryID, "reason", result.Disposition.Reason)
+			s.refreshNormalizedOutboxStatus()
+			continue
+		default:
+			s.refreshNormalizedOutboxStatus()
+			return
+		}
+	}
+}
+
+func (s *Service) observeNormalizedDeliveryAvailability(result receiverevents.DispatchResult) {
+	if result.Acknowledged {
+		s.normalizedEventsV1Disabled = false
+		return
+	}
+	if result.Disposition.Action == receiverevents.ActionRetry && result.Disposition.Reason == "receiver_events_v1_disabled" {
+		s.normalizedEventsV1Disabled = true
+	}
+}
+
+func (s *Service) observeAttestedHomeAutoPosition(deliveryID string, assertion *cloudclient.SessionEligiblePositionAssertion) {
+	if s == nil || s.container == nil || s.container.HomeAutoSession == nil || assertion == nil {
+		return
+	}
+	if assertion.DeliveryID != deliveryID || assertion.Subject.Protocol != "meshcore" || assertion.Subject.Namespace != "ed25519" {
+		return
+	}
+	canonicalID := strings.TrimSpace(assertion.Subject.CanonicalID)
+	if len(canonicalID) != 64 || canonicalID != strings.ToLower(canonicalID) || assertion.CapturedAt.IsZero() {
+		return
+	}
+	if _, err := hex.DecodeString(canonicalID); err != nil || strings.TrimSpace(assertion.EligibilityRef) == "" {
+		return
+	}
+	if strings.TrimSpace(assertion.DeviceUID) != "meshcore:"+canonicalID {
+		return
+	}
+	s.container.HomeAutoSession.ObserveAttestedPosition(homeautosession.PositionObservation{
+		Subject:     homeautosession.SubjectRef{Protocol: assertion.Subject.Protocol, Namespace: assertion.Subject.Namespace, CanonicalID: canonicalID},
+		DeviceUID:   assertion.DeviceUID,
+		Lat:         assertion.Lat,
+		Lon:         assertion.Lon,
+		CapturedAt:  assertion.CapturedAt,
+		EvidenceRef: assertion.DeliveryID + ":" + assertion.EligibilityRef,
+		HasPosition: true,
+	})
+}
+
+func (s *Service) handleNormalizedDisposition(result receiverevents.DispatchResult) {
+	c := s.container
+	if c == nil || c.Status == nil {
+		return
+	}
+	if result.Disposition.Action == receiverevents.ActionStop {
+		c.Status.SetComponent("normalized_outbox", "stopped", "delivery identity collision requires explicit local resolution; evidence retained")
+		c.Status.SetLastError("normalized delivery collision")
+		return
+	}
+	c.Status.SetComponent("normalized_outbox", "paused", "normalized delivery paused: "+result.Disposition.Reason)
+	if result.Disposition.PairingRequired {
+		c.Status.SetComponent("pairing", "required", "cloud rejected normalized delivery credentials or binding; local evidence retained")
+	}
+}
+
+func normalizedLifecycleChange(reason string) pairing.LifecycleChange {
+	switch strings.ToLower(strings.TrimSpace(reason)) {
+	case "receiver_disabled":
+		return pairing.LifecycleReceiverDisabled
+	case "receiver_replaced":
+		return pairing.LifecycleReceiverReplaced
+	default:
+		return pairing.LifecycleCredentialRevoked
+	}
+}
+
+func (s *Service) refreshNormalizedOutboxStatus() {
+	c := s.container
+	if c == nil || c.OutboxEngine == nil {
+		return
+	}
+	stats, err := c.OutboxEngine.Stats()
+	if err != nil {
+		c.Status.SetComponent("normalized_outbox", "error", "durable outbox status unavailable")
+		return
+	}
+	stateName := "ready"
+	if stats.PendingCount > 0 {
+		stateName = "pending"
+	}
+	if stats.Recovered {
+		stateName = "recovered"
+	}
+	if stats.MaintenanceErrorCode != "" {
+		c.Status.SetComponent("normalized_outbox", "degraded", stats.MaintenanceErrorCode+": "+stats.MaintenanceError)
+		return
+	}
+	if s.normalizedEventsV1Disabled {
+		c.Status.SetComponent("normalized_outbox", "configuration_incompatible", "receiver event intake is disabled by Cloud configuration; durable delivery will retry")
+		return
+	}
+	messageSuffix := ""
+	if stats.DispatchPause != nil && stats.DispatchPause.Kind == outbox.DispatchPauseCollision {
+		stateName = "stopped"
+		messageSuffix = " stopped=" + stats.DispatchPause.Reason
+	} else if stats.DispatchPause != nil {
+		stateName = "paused"
+		messageSuffix = " paused=" + stats.DispatchPause.Reason
+	}
+	c.Status.SetComponent(
+		"normalized_outbox",
+		stateName,
+		fmt.Sprintf("pending=%d quarantined=%d bytes=%d recovery=%s%s", stats.PendingCount, stats.QuarantinedCount, stats.UsedBytes, stats.RecoveryCode, messageSuffix),
+	)
+}
+
+func (s *Service) shutdownNormalizedOutbox() error {
+	c := s.container
+	if c == nil || c.OutboxEngine == nil {
+		return nil
+	}
+	drainDone := make(chan struct{})
+	go func() {
+		defer close(drainDone)
+		for result := range c.OutboxEngine.Results() {
+			s.onOutboxStageResult(result)
+		}
+	}()
+	closeCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := c.OutboxEngine.Close(closeCtx); err != nil {
+		return fmt.Errorf("drain durable normalized outbox: %w", err)
+	}
+	select {
+	case <-drainDone:
+	case <-closeCtx.Done():
+		return fmt.Errorf("drain normalized outbox results: %w", closeCtx.Err())
+	}
+	if c.OutboxStore != nil {
+		if err := c.OutboxStore.Close(); err != nil {
+			return fmt.Errorf("close durable normalized outbox: %w", err)
+		}
+	}
+	return nil
 }
 
 func (s *Service) processSteadyState(ctx context.Context, snapshot state.Data, meshSnap meshtastic.Snapshot) {
@@ -793,11 +1634,15 @@ func (s *Service) sendHeartbeat(ctx context.Context, snapshot state.Data, meshSn
 	receiverID := strings.TrimSpace(snapshot.Cloud.ReceiverID)
 
 	ack, err := s.container.Cloud.SendReceiverHeartbeat(callCtx, endpoint, apiKey, cloudclient.ReceiverHeartbeat{
-		RuntimeVersion:  s.build.Version,
-		Platform:        goruntime.GOOS,
-		Arch:            goruntime.GOARCH,
-		LocalNodeID:     meshSnap.LocalNodeID,
-		ObservedNodeIDs: append([]string(nil), meshSnap.ObservedNodeIDs...),
+		RuntimeVersion:             s.build.Version,
+		Platform:                   goruntime.GOOS,
+		Arch:                       goruntime.GOARCH,
+		LocalNodeID:                meshSnap.LocalNodeID,
+		ObservedNodeIDs:            append([]string(nil), meshSnap.ObservedNodeIDs...),
+		ReceiverDiagnosticCode:     heartbeatReceiverDiagnosticCode(updateSnap.FailureCode, s.meshcoreTrackingStatus(), s.normalizedEventsV1Disabled),
+		Adapters:                   cloudAdapterStatuses(updateSnap.Adapters),
+		MeshCoreBLEControlResult:   s.meshcoreBLEControlResult(),
+		MeshCoreBLEDiscoveryResult: s.meshcoreBLEDiscoveryResult(),
 		Status: map[string]any{
 			"installationId":         snapshot.Installation.ID,
 			"localName":              snapshot.Installation.LocalName,
@@ -933,6 +1778,7 @@ func (s *Service) sendHeartbeat(ctx context.Context, snapshot state.Data, meshSn
 			}
 		}
 	}
+	s.recordClockAttestation(ack.ClockAttestation)
 	latest := snapshot
 	if s.container.State != nil {
 		latest = s.container.State.Snapshot()
@@ -946,6 +1792,8 @@ func (s *Service) sendHeartbeat(ctx context.Context, snapshot state.Data, meshSn
 		latest.Cloud.GroupLabel,
 	)
 	s.applyHomeAutoCloudConfigFromAck(ack)
+	s.applyMeshCoreBLEControlIntent(ack.MeshCoreBLEControlIntent, latest, ack)
+	s.applyMeshCoreSessionIntent(ack.MeshCoreTrackingIntent, latest, ack)
 	s.steady.cloudReachable = true
 	s.container.Logger.Info(
 		"cloud outbound call succeeded",
@@ -968,6 +1816,225 @@ func (s *Service) sendHeartbeat(ctx context.Context, snapshot state.Data, meshSn
 		strings.TrimSpace(ack.ConfigVersion),
 	)
 	return nil
+}
+
+func (s *Service) meshcoreBLEControlResult() *cloudclient.MeshCoreBLEControlResult {
+	s.meshcoreBLEControl.mu.RLock()
+	defer s.meshcoreBLEControl.mu.RUnlock()
+	if s.meshcoreBLEControl.result == nil {
+		return nil
+	}
+	value := *s.meshcoreBLEControl.result
+	return &value
+}
+
+func (s *Service) meshcoreBLEDiscoveryResult() *cloudclient.MeshCoreBLEDiscoveryResult {
+	s.meshcoreBLEControl.mu.RLock()
+	defer s.meshcoreBLEControl.mu.RUnlock()
+	if s.meshcoreBLEControl.discovery == nil {
+		return nil
+	}
+	value := *s.meshcoreBLEControl.discovery
+	value.Devices = append([]cloudclient.MeshCoreBLEDiscoveryDevice(nil), value.Devices...)
+	return &value
+}
+
+// applyMeshCoreBLEControlIntent is the only Cloud-directed BLE executor. It
+// intentionally delegates to the portal lifecycle methods, which already own
+// the adapter lock, tracking shutdown, release gate, and reconnect lifecycle.
+func (s *Service) applyMeshCoreBLEControlIntent(intent *cloudclient.MeshCoreBLEControlIntent, snapshot state.Data, ack cloudclient.ReceiverHeartbeatAck) {
+	if s == nil || intent == nil || s.container == nil {
+		return
+	}
+	if strings.TrimSpace(intent.Version) == "" || intent.ReceiverAgentID != ack.ReceiverAgentID || intent.InstallationID != snapshot.Installation.ID {
+		return
+	}
+	s.meshcoreBLEControl.mu.RLock()
+	alreadyApplied := s.meshcoreBLEControl.appliedVersion == intent.Version
+	s.meshcoreBLEControl.mu.RUnlock()
+	if alreadyApplied {
+		return
+	}
+	var err error
+	var discovery *cloudclient.MeshCoreBLEDiscoveryResult
+	switch intent.Operation {
+	case "release_ble":
+		_, err = s.ReleaseMeshCoreBLE(context.Background())
+	case "resume_ble":
+		_, err = s.ResumeMeshCoreBLE(context.Background())
+	case "scan_ble":
+		var devices []meshcore.BLEDevice
+		devices, err = s.ScanMeshCoreBLE(context.Background())
+		discovery = meshcoreBLEDiscoveryResult(intent.Version, devices, err)
+	case "connect_ble":
+		err = s.ConfigureMeshCoreBLE(context.Background(), intent.DeviceAddress, intent.PairingPIN)
+	case "forget_ble":
+		err = s.ForgetConfiguredMeshCoreBLE(context.Background())
+	case "reconnect_ble":
+		err = s.ReconnectMeshCoreBLE(context.Background())
+	default:
+		return
+	}
+	result := &cloudclient.MeshCoreBLEControlResult{Version: intent.Version, Operation: intent.Operation, State: "applied"}
+	if err != nil {
+		result.State, result.ErrorCode = "failed", meshcoreBLEControlErrorCode(err)
+		if s.container.Logger != nil {
+			s.container.Logger.Warn("MeshCore BLE control operation failed", "operation", intent.Operation, "version", intent.Version, "device_address", intent.DeviceAddress, "error_code", result.ErrorCode)
+		}
+	}
+	s.meshcoreBLEControl.mu.Lock()
+	if err == nil {
+		s.meshcoreBLEControl.appliedVersion = intent.Version
+	}
+	s.meshcoreBLEControl.result = result
+	if discovery != nil {
+		s.meshcoreBLEControl.discovery = discovery
+	}
+	s.meshcoreBLEControl.mu.Unlock()
+}
+
+func meshcoreBLEControlErrorCode(err error) string {
+	var diagnostic *meshcore.BLEPairingDiagnostic
+	if errors.As(err, &diagnostic) && diagnostic.Operation == "peer_selection" && diagnostic.Code == "unavailable" {
+		return "pairing_peer_selection_unavailable"
+	}
+	return "receiver_operation_failed"
+}
+
+// receiverDiagnosticCode is the deliberately tiny cloud-safe projection of
+// existing Receiver diagnostics. It carries no local message, endpoint, or
+// error detail; Cloud owns user-facing wording for these codes.
+func receiverDiagnosticCode(value string) string {
+	switch strings.TrimSpace(value) {
+	case "cloud_config_incompatible", "local_schema_incompatible", "receiver_auth_invalid", "receiver_version_unsupported":
+		return strings.TrimSpace(value)
+	default:
+		return ""
+	}
+}
+
+// heartbeatReceiverDiagnosticCode composes only vetted receiver-local state
+// into the heartbeat contract. Existing lifecycle/runtime failures retain
+// precedence over an operational Session tracking warning.
+func heartbeatReceiverDiagnosticCode(failureCode string, tracking meshcore.TrackingStatus, normalizedEventsV1Disabled bool) string {
+	if code := receiverDiagnosticCode(failureCode); code != "" {
+		return code
+	}
+	if normalizedEventsV1Disabled {
+		return "cloud_config_incompatible"
+	}
+	if tracking.SessionDiagnosticCode == meshcore.SessionTrackingDiagnosticUnavailable {
+		return meshcore.SessionTrackingDiagnosticUnavailable
+	}
+	return ""
+}
+
+func meshcoreBLEDiscoveryResult(version string, devices []meshcore.BLEDevice, err error) *cloudclient.MeshCoreBLEDiscoveryResult {
+	result := &cloudclient.MeshCoreBLEDiscoveryResult{Version: version, State: "completed", Devices: make([]cloudclient.MeshCoreBLEDiscoveryDevice, 0, len(devices))}
+	if err != nil {
+		result.State, result.ErrorCode = "failed", "receiver_operation_failed"
+		return result
+	}
+	for _, device := range devices {
+		result.Devices = append(result.Devices, cloudclient.MeshCoreBLEDiscoveryDevice{Address: device.Address, Name: device.Name, RSSI: device.RSSI, Bonded: device.Bonded, Connected: device.Connected, Configured: device.Configured})
+	}
+	return result
+}
+
+func (s *Service) meshcoreSessionManaged() bool {
+	return s != nil && s.container != nil && s.container.MeshCoreTracking != nil && s.container.MeshCoreTracking.ControlSource() == "session"
+}
+
+func (s *Service) meshcoreTrackingStatus() meshcore.TrackingStatus {
+	if s == nil || s.container == nil || s.container.MeshCoreTracking == nil {
+		return meshcore.TrackingStatus{MotionState: meshcore.MotionUnknown}
+	}
+	return s.meshcoreTrackingStatusFrom(s.container.MeshCoreTracking.Status())
+}
+
+func (s *Service) meshcoreTrackingStatusFrom(status meshcore.TrackingStatus) meshcore.TrackingStatus {
+	s.meshcoreControl.mu.RLock()
+	defer s.meshcoreControl.mu.RUnlock()
+	status.SessionID = s.meshcoreControl.sessionID
+	status.DeviceID = s.meshcoreControl.deviceID
+	status.Desired = s.meshcoreControl.desired
+	status.IntentVersion = s.meshcoreControl.intentVersion
+	status.LastReconciledAt = s.meshcoreControl.lastReconciledAt
+	if s.meshcoreControl.reconciliationErr != "" {
+		value := s.meshcoreControl.reconciliationErr
+		status.ReconciliationError = &value
+	}
+	return status
+}
+
+// applyMeshCoreSessionIntent reconciles the ephemeral controller from an
+// authenticated cloud snapshot. It never restores a remembered target after
+// restart or BLE Resume: another heartbeat must affirm that the Session is
+// still open.
+func (s *Service) applyMeshCoreSessionIntent(intent *cloudclient.MeshCoreTrackingIntent, snapshot state.Data, ack cloudclient.ReceiverHeartbeatAck) {
+	if s == nil || s.container == nil || s.container.MeshCoreTracking == nil {
+		return
+	}
+	now := time.Now().UTC()
+	setState := func(source string, desired bool, sessionID, deviceID, publicKey, version, reconciliationErr string) {
+		// The controller owns the source that selects its scheduler policy and
+		// exports it directly in TrackingStatus. Keep runtime metadata aligned,
+		// but never decorate status with a second source of truth.
+		s.container.MeshCoreTracking.SetControlSource(source)
+		s.meshcoreControl.mu.Lock()
+		s.meshcoreControl.source = source
+		s.meshcoreControl.desired = desired
+		s.meshcoreControl.sessionID = sessionID
+		s.meshcoreControl.deviceID = deviceID
+		s.meshcoreControl.publicKey = publicKey
+		s.meshcoreControl.intentVersion = version
+		s.meshcoreControl.lastReconciledAt = &now
+		s.meshcoreControl.reconciliationErr = reconciliationErr
+		s.meshcoreControl.mu.Unlock()
+	}
+
+	if intent == nil {
+		if s.meshcoreSessionManaged() {
+			s.container.MeshCoreTracking.Stop()
+			setState("", false, "", "", "", "", "")
+		}
+		return
+	}
+	if intent.Protocol != "meshcore" || strings.TrimSpace(intent.SessionID) == "" || strings.TrimSpace(intent.DeviceID) == "" || strings.TrimSpace(intent.Version) == "" || intent.ReceiverAgentID != ack.ReceiverAgentID || intent.InstallationID != snapshot.Installation.ID {
+		if s.meshcoreSessionManaged() {
+			s.container.MeshCoreTracking.Stop()
+			setState("", false, "", "", "", "", "invalid MeshCore Session intent")
+		} else {
+			s.meshcoreControl.mu.Lock()
+			s.meshcoreControl.lastReconciledAt = &now
+			s.meshcoreControl.reconciliationErr = "invalid MeshCore Session intent"
+			s.meshcoreControl.mu.Unlock()
+		}
+		return
+	}
+	if s.container.MeshCore != nil && s.container.MeshCore.ReconnectSuppressed() {
+		setState("session", true, intent.SessionID, intent.DeviceID, intent.PublicKey, intent.Version, "MeshCore BLE is released")
+		return
+	}
+
+	// Set policy ownership before inspecting/reusing an active controller. If
+	// this Session takes over a same-target manual run, it wakes any pending
+	// manual failure delay and restores the motion-derived discovery cadence.
+	// Set controller ownership before Start: Start immediately issues a request
+	// and a short tagged timeout must already use Session motion cadence.
+	s.container.MeshCoreTracking.SetControlSource("session")
+	current := s.container.MeshCoreTracking.Status()
+	if current.Active && current.TargetPublicKey != intent.PublicKey {
+		s.container.MeshCoreTracking.Stop()
+		current = s.container.MeshCoreTracking.Status()
+	}
+	if !current.Active {
+		if _, err := s.container.MeshCoreTracking.Start(intent.PublicKey); err != nil && !errors.Is(err, meshcore.ErrTrackingAlreadyActive) {
+			setState("session", true, intent.SessionID, intent.DeviceID, intent.PublicKey, intent.Version, err.Error())
+			return
+		}
+	}
+	setState("session", true, intent.SessionID, intent.DeviceID, intent.PublicKey, intent.Version, "")
 }
 
 func (s *Service) applyHomeAutoCloudConfigFromAck(ack cloudclient.ReceiverHeartbeatAck) {
@@ -1843,7 +2910,7 @@ func (s *Service) updateFailureState(snapshot state.Data, meshSnap meshtastic.Sn
 		NetworkAvailable:      networkAvailable,
 		NetworkAvailableKnown: networkKnown,
 		CloudReachable:        s.steady.cloudReachable,
-		MeshtasticState:       string(meshSnap.State),
+		MeshtasticState:       meshtasticHealthState(meshSnap),
 		UpdateStatus:          current.UpdateStatus,
 		IngestQueueDepth:      len(s.steady.ingestQueue),
 		LastPacketQueued:      s.steady.lastPacketQueued,
@@ -1880,7 +2947,7 @@ func (s *Service) deriveOperational(current status.Snapshot, snapshot state.Data
 		HasIngestCredential: credentialsReady(snapshot),
 		CloudReachable:      s.steady.cloudReachable,
 		CloudProbeStatus:    current.CloudStatus,
-		MeshtasticState:     string(meshSnap.State),
+		MeshtasticState:     meshtasticHealthState(meshSnap),
 		IngestQueueDepth:    len(s.steady.ingestQueue),
 		LastPacketQueued:    s.steady.lastPacketQueued,
 		LastPacketAck:       s.steady.lastPacketAck,
@@ -1949,6 +3016,15 @@ func outboundCallResult(err error) (int, string) {
 func (s *Service) handleLifecycleCloudError(change pairing.LifecycleChange, err error) error {
 	c := s.container
 	reason := lifecycleChangeReason(err)
+	oldReceiverID := strings.TrimSpace(c.State.Snapshot().Cloud.ReceiverID)
+	if c.OutboxEngine != nil && oldReceiverID != "" {
+		if _, quarantineErr := c.OutboxEngine.QuarantineByReceiver(oldReceiverID, string(change), outbox.AttemptFailure{
+			ErrorCode: "RECEIVER_LIFECYCLE_CHANGED",
+			Message:   reason,
+		}); quarantineErr != nil {
+			return fmt.Errorf("quarantine normalized deliveries before receiver lifecycle transition: %w", quarantineErr)
+		}
+	}
 	if applyErr := c.Pairing.ApplyLifecycleChange(change, reason, true); applyErr != nil {
 		return applyErr
 	}

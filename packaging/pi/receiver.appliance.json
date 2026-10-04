@@ -1,5 +1,5 @@
 {
-  "schema_version": 3,
+  "schema_version": 4,
   "service": {
     "mode": "auto",
     "heartbeat": "30s"
@@ -8,7 +8,8 @@
     "profile": "appliance-pi"
   },
   "paths": {
-    "state_file": "/var/lib/loramapr/receiver-state.json"
+    "state_file": "/var/lib/loramapr/receiver-state.json",
+    "outbox_file": "/var/lib/loramapr/ingest-outbox.db"
   },
   "portal": {
     "bind_address": "0.0.0.0:8080"
@@ -25,6 +26,10 @@
   },
   "meshtastic": {
     "transport": "serial"
+  },
+  "meshcore": {
+    "transport": "disabled",
+    "device": ""
   },
   "home_auto_session": {
     "enabled": false,

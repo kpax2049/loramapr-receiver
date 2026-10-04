@@ -60,3 +60,18 @@ Raspberry Pi OS Lite:
 
 Custom receiver appliance image path is deprecated/paused and not part of the
 active supported release flow.
+
+## Workspace Receiver Service
+
+For a maintained workspace deployment on the established Pi, use the tracked
+`packaging/linux/systemd/loramapr-receiverd-workspace.service` template rather
+than a transient `systemd-run` unit. It preserves the workspace binary and
+normal configuration paths, waits for network and Bluetooth, restarts only on
+failure after five seconds, and limits restart bursts to five in five minutes.
+
+The template is intentionally not installed by the repository tooling: its
+paths and `kpax` account are specific to this workspace. Review and install it
+as `/etc/systemd/system/loramapr-m8-current.service`, then run
+`systemctl daemon-reload` and `systemctl enable --now loramapr-m8-current`.
+The unit uses `TimeoutStopSec=90s` so BLE cleanup has time to finish during a
+controlled stop.

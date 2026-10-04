@@ -17,7 +17,7 @@ const (
 	// DefaultPath is the local development fallback.
 	DefaultPath = "./receiver.json"
 
-	CurrentSchemaVersion = 3
+	CurrentSchemaVersion = 5
 )
 
 type RunMode string
@@ -37,6 +37,7 @@ type Config struct {
 	Cloud            CloudConfig           `json:"cloud"`
 	Update           UpdateConfig          `json:"update"`
 	Meshtastic       MeshtasticConfig      `json:"meshtastic"`
+	MeshCore         MeshCoreConfig        `json:"meshcore"`
 	HomeAutoSession  HomeAutoSessionConfig `json:"home_auto_session,omitempty"`
 	Logging          LoggingConfig         `json:"logging"`
 	LoadedFromConfig string                `json:"-"`
@@ -53,7 +54,8 @@ type RuntimeConfig struct {
 }
 
 type PathsConfig struct {
-	StateFile string `json:"state_file"`
+	StateFile  string `json:"state_file"`
+	OutboxFile string `json:"outbox_file"`
 }
 
 type PortalConfig struct {
@@ -79,6 +81,19 @@ type MeshtasticConfig struct {
 	BootstrapWrite bool     `json:"bootstrap_write,omitempty"`
 	BridgeCommand  string   `json:"bridge_command,omitempty"`
 	BridgeArgs     []string `json:"bridge_args,omitempty"`
+}
+
+type MeshCoreConfig struct {
+	Transport string            `json:"transport,omitempty"`
+	Device    string            `json:"device,omitempty"`
+	BLE       MeshCoreBLEConfig `json:"ble,omitempty"`
+}
+
+// MeshCoreBLEConfig selects a local BlueZ adapter and a bonded Companion.
+// PeerAddress is only a local transport locator; it is never MeshCore identity.
+type MeshCoreBLEConfig struct {
+	Adapter     string `json:"adapter,omitempty"`
+	PeerAddress string `json:"peer_address,omitempty"`
 }
 
 type HomeAutoSessionMode string
@@ -168,7 +183,8 @@ func Default() Config {
 			Profile: "auto",
 		},
 		Paths: PathsConfig{
-			StateFile: "./data/receiver-state.json",
+			StateFile:  "./data/receiver-state.json",
+			OutboxFile: "./data/ingest-outbox.db",
 		},
 		Portal: PortalConfig{
 			BindAddress: "127.0.0.1:8080",
@@ -183,6 +199,9 @@ func Default() Config {
 		},
 		Meshtastic: MeshtasticConfig{
 			Transport: "serial",
+		},
+		MeshCore: MeshCoreConfig{
+			Transport: "disabled",
 		},
 		HomeAutoSession: HomeAutoSessionConfig{
 			Enabled:          false,
@@ -274,6 +293,12 @@ func (c Config) Validate() error {
 	if strings.TrimSpace(c.Paths.StateFile) == "" {
 		return errors.New("paths.state_file is required")
 	}
+	if strings.TrimSpace(c.Paths.OutboxFile) == "" {
+		return errors.New("paths.outbox_file is required")
+	}
+	if err := validateDistinctStateAndOutboxPaths(c.Paths.StateFile, c.Paths.OutboxFile); err != nil {
+		return err
+	}
 
 	if _, _, err := net.SplitHostPort(c.Portal.BindAddress); err != nil {
 		return fmt.Errorf("invalid portal.bind_address %q: %w", c.Portal.BindAddress, err)
@@ -301,6 +326,25 @@ func (c Config) Validate() error {
 	case "serial", "bridge", "json_stream", "disabled":
 	default:
 		return fmt.Errorf("invalid meshtastic.transport %q", c.Meshtastic.Transport)
+	}
+	switch strings.ToLower(strings.TrimSpace(c.MeshCore.Transport)) {
+	case "physical_serial":
+		if strings.TrimSpace(c.MeshCore.Device) == "" {
+			return errors.New("meshcore.device is required when meshcore.transport is physical_serial")
+		}
+	case "ble":
+		// A BLE transport may intentionally have no selected peer after a
+		// Receiver-managed Forget. It remains enabled for a later Cloud-managed
+		// scan/use action, but cannot attempt a connection until configured.
+		if strings.TrimSpace(c.MeshCore.BLE.PeerAddress) != "" && !validBLEAddress(c.MeshCore.BLE.PeerAddress) {
+			return errors.New("meshcore.ble.peer_address must be a Bluetooth address")
+		}
+		if strings.TrimSpace(c.MeshCore.BLE.Adapter) == "" {
+			return errors.New("meshcore.ble.adapter is required when meshcore.transport is ble")
+		}
+	case "disabled":
+	default:
+		return fmt.Errorf("invalid meshcore.transport %q", c.MeshCore.Transport)
 	}
 	if err := c.validateHomeAutoSession(); err != nil {
 		return err
@@ -358,6 +402,9 @@ func (c *Config) applyDefaults() {
 	if c.Paths.StateFile == "" {
 		c.Paths.StateFile = defaults.Paths.StateFile
 	}
+	if c.Paths.OutboxFile == "" {
+		c.Paths.OutboxFile = defaults.Paths.OutboxFile
+	}
 	if c.Portal.BindAddress == "" {
 		c.Portal.BindAddress = defaults.Portal.BindAddress
 	}
@@ -375,6 +422,15 @@ func (c *Config) applyDefaults() {
 	}
 	c.Meshtastic.BridgeCommand = strings.TrimSpace(c.Meshtastic.BridgeCommand)
 	c.Meshtastic.BridgeArgs = normalizeStringSlice(c.Meshtastic.BridgeArgs)
+	if c.MeshCore.Transport == "" {
+		c.MeshCore.Transport = defaults.MeshCore.Transport
+	}
+	c.MeshCore.Device = strings.TrimSpace(c.MeshCore.Device)
+	c.MeshCore.BLE.Adapter = strings.TrimSpace(c.MeshCore.BLE.Adapter)
+	if c.MeshCore.BLE.Adapter == "" {
+		c.MeshCore.BLE.Adapter = "hci0"
+	}
+	c.MeshCore.BLE.PeerAddress = strings.ToUpper(strings.TrimSpace(c.MeshCore.BLE.PeerAddress))
 	if c.HomeAutoSession.Mode == "" {
 		c.HomeAutoSession.Mode = defaults.HomeAutoSession.Mode
 	}
@@ -416,12 +472,34 @@ func (c *Config) migrate() error {
 	if version <= 2 {
 		version = 3
 	}
+	if version <= 3 {
+		version = 4
+	}
+	if version <= 4 {
+		version = 5
+	}
 	if version > CurrentSchemaVersion {
 		return fmt.Errorf("config schema version %d is newer than runtime supports (%d)", version, CurrentSchemaVersion)
 	}
 
 	c.SchemaVersion = version
 	return nil
+}
+
+func validBLEAddress(value string) bool {
+	parts := strings.Split(strings.TrimSpace(value), ":")
+	if len(parts) != 6 {
+		return false
+	}
+	for _, part := range parts {
+		if len(part) != 2 {
+			return false
+		}
+		if _, err := strconv.ParseUint(part, 16, 8); err != nil {
+			return false
+		}
+	}
+	return true
 }
 
 func (c Config) validateHomeAutoSession() error {

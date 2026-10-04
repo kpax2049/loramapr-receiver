@@ -18,8 +18,9 @@ type mockCloudClient struct {
 	exchangeResult cloudclient.BootstrapExchange
 	exchangeErr    error
 
-	activateResult cloudclient.ActivationResult
-	activateErr    error
+	activateResult  cloudclient.ActivationResult
+	activateErr     error
+	activateRequest cloudclient.ActivationRequest
 }
 
 func (m *mockCloudClient) ExchangePairingCode(_ context.Context, _ string) (cloudclient.BootstrapExchange, error) {
@@ -33,9 +34,10 @@ func (m *mockCloudClient) ExchangePairingCode(_ context.Context, _ string) (clou
 func (m *mockCloudClient) ActivateReceiver(
 	_ context.Context,
 	_ string,
-	_ cloudclient.ActivationRequest,
+	request cloudclient.ActivationRequest,
 ) (cloudclient.ActivationResult, error) {
 	m.activateCalls++
+	m.activateRequest = request
 	if m.activateErr != nil {
 		return cloudclient.ActivationResult{}, m.activateErr
 	}
@@ -119,6 +121,9 @@ func TestPairingLifecycleProgression(t *testing.T) {
 	}
 	if snap.Cloud.SiteLabel != "Home" || snap.Cloud.GroupLabel != "Outdoor" {
 		t.Fatalf("expected cloud site/group labels to persist, got %q/%q", snap.Cloud.SiteLabel, snap.Cloud.GroupLabel)
+	}
+	if !snap.Installation.Bound || cloud.activateRequest.Metadata["installationId"] != snap.Installation.ID {
+		t.Fatalf("activation did not bind current installation: bound=%v metadata=%#v", snap.Installation.Bound, cloud.activateRequest.Metadata)
 	}
 
 	if err := manager.Process(context.Background()); err != nil {
@@ -346,7 +351,27 @@ func TestApplyLifecycleChangeClearsDurableCredentials(t *testing.T) {
 	}
 }
 
-func TestResetPairingPreservesInstallationID(t *testing.T) {
+type fakeInstallationRotator struct {
+	store   *state.Store
+	nextID  string
+	reasons []string
+}
+
+func (f *fakeInstallationRotator) RotateInstallation(reason string) (string, error) {
+	f.reasons = append(f.reasons, reason)
+	if err := f.store.Update(func(data *state.Data) {
+		data.Installation.ID = f.nextID
+		data.Installation.Bound = false
+		data.Cloud.OwnerID = ""
+		data.Cloud.ReceiverID = ""
+		data.Cloud.IngestAPIKey = ""
+	}); err != nil {
+		return "", err
+	}
+	return f.nextID, nil
+}
+
+func TestResetPairingRotatesBoundInstallationBeforeDeauthorization(t *testing.T) {
 	t.Parallel()
 
 	store, err := state.Open(filepath.Join(t.TempDir(), "receiver-state.json"))
@@ -357,6 +382,9 @@ func TestResetPairingPreservesInstallationID(t *testing.T) {
 
 	err = store.Update(func(data *state.Data) {
 		data.Pairing.Phase = state.PairingSteadyState
+		data.Installation.Bound = true
+		data.Cloud.OwnerID = "owner-1"
+		data.Cloud.ReceiverID = "agent-1"
 		data.Cloud.IngestAPIKey = "secret"
 		data.Cloud.IngestAPIKeyID = "key-1"
 	})
@@ -364,19 +392,70 @@ func TestResetPairingPreservesInstallationID(t *testing.T) {
 		t.Fatalf("seed state: %v", err)
 	}
 
-	manager := NewManager(store, status.New(), nil, nil, ActivationIdentity{})
+	rotator := &fakeInstallationRotator{store: store, nextID: "fedcba9876543210fedcba9876543210"}
+	manager := NewManager(store, status.New(), nil, nil, ActivationIdentity{}, rotator)
 	if err := manager.ResetPairing(true); err != nil {
 		t.Fatalf("ResetPairing: %v", err)
 	}
 
 	snap := store.Snapshot()
-	if snap.Installation.ID != initialInstallID {
-		t.Fatalf("expected installation ID to be preserved")
+	if snap.Installation.ID == initialInstallID || snap.Installation.ID != rotator.nextID || len(rotator.reasons) != 1 || rotator.reasons[0] != string(LifecycleLocalDeauthorized) {
+		t.Fatalf("installation was not rotated: old=%s snapshot=%#v reasons=%v", initialInstallID, snap.Installation, rotator.reasons)
 	}
 	if snap.Pairing.LastChange != string(LifecycleLocalDeauthorized) {
 		t.Fatalf("expected last_change %q, got %q", LifecycleLocalDeauthorized, snap.Pairing.LastChange)
 	}
 	if snap.Cloud.IngestAPIKey != "" {
 		t.Fatalf("expected ingest API key to be cleared")
+	}
+}
+
+func TestSubmitPairingCodeRotatesPreviouslyBoundInstallation(t *testing.T) {
+	store, err := state.Open(filepath.Join(t.TempDir(), "receiver-state.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Update(func(data *state.Data) {
+		data.Pairing.Phase = state.PairingUnpaired
+		data.Installation.Bound = true
+		data.Cloud.OwnerID = "owner-1"
+		data.Cloud.ReceiverID = "agent-1"
+		data.Cloud.IngestAPIKey = "old-secret"
+	}); err != nil {
+		t.Fatal(err)
+	}
+	rotator := &fakeInstallationRotator{store: store, nextID: "00112233445566778899aabbccddeeff"}
+	manager := NewManager(store, status.New(), nil, nil, ActivationIdentity{}, rotator)
+	if err := manager.SubmitPairingCode(context.Background(), "LMR-ROTATE01"); err != nil {
+		t.Fatal(err)
+	}
+	snapshot := store.Snapshot()
+	if snapshot.Installation.ID != rotator.nextID || snapshot.Installation.Bound || snapshot.Pairing.Phase != state.PairingCodeEntered || len(rotator.reasons) != 1 || rotator.reasons[0] != "re_pair" {
+		t.Fatalf("unexpected re-pair rotation state: snapshot=%#v reasons=%v", snapshot, rotator.reasons)
+	}
+}
+
+func TestReceiverReplacementRotatesInstallationImmediately(t *testing.T) {
+	store, err := state.Open(filepath.Join(t.TempDir(), "receiver-state.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Update(func(data *state.Data) {
+		data.Installation.Bound = true
+		data.Pairing.Phase = state.PairingSteadyState
+		data.Cloud.OwnerID = "owner-1"
+		data.Cloud.ReceiverID = "agent-old"
+		data.Cloud.IngestAPIKey = "old-secret"
+	}); err != nil {
+		t.Fatal(err)
+	}
+	rotator := &fakeInstallationRotator{store: store, nextID: "ffeeddccbbaa99887766554433221100"}
+	manager := NewManager(store, status.New(), nil, nil, ActivationIdentity{}, rotator)
+	if err := manager.ApplyLifecycleChange(LifecycleReceiverReplaced, "replaced", true); err != nil {
+		t.Fatal(err)
+	}
+	snapshot := store.Snapshot()
+	if snapshot.Installation.ID != rotator.nextID || snapshot.Installation.Bound || snapshot.Pairing.Phase != state.PairingUnpaired || len(rotator.reasons) != 1 || rotator.reasons[0] != string(LifecycleReceiverReplaced) {
+		t.Fatalf("replacement did not rotate installation: snapshot=%#v reasons=%v", snapshot, rotator.reasons)
 	}
 }

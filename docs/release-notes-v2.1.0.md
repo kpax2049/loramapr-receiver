@@ -2,8 +2,18 @@
 
 Date: 2026-03-11
 
+MeshCore support closeout update: 2026-09-26.
+
 ## Highlights
 
+- Completed MeshCore Companion support for LoRaMapr 2.1.0:
+  - Cloud-managed BLE scan, connect/pair, reconnect, forget, release, and
+    resume actions.
+  - Session-managed telemetry, BLE recovery, heartbeat/status diagnostics, and
+    durable normalized-event delivery.
+  - Capture-time delayed-event association, unified Session points, route and
+    Receiver provenance, playback/export support, and strict coverage
+    safeguards in Cloud.
 - Promoted Debian-family existing-OS install path to GA scope.
 - Added native `.deb` package generation for:
   - `linux/amd64`

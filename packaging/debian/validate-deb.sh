@@ -66,7 +66,7 @@ if ! grep -Fq 'SupplementaryGroups=dialout' "${UNIT_PATH}"; then
   echo "packaged systemd unit missing dialout supplementary group" >&2
   exit 1
 fi
-if ! grep -Fq 'TimeoutStopSec=30' "${UNIT_PATH}"; then
+if ! grep -Fq 'TimeoutStopSec=90s' "${UNIT_PATH}"; then
   echo "packaged systemd unit missing TimeoutStopSec hardening" >&2
   exit 1
 fi
