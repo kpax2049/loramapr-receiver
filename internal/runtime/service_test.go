@@ -127,6 +127,41 @@ func TestCloudBLEScanReconciliationReportsCurrentRevisionOnly(t *testing.T) {
 	}
 }
 
+func TestMeshCoreBLEDiscoveryResultPreservesEmptyDevicesAndCopiesDevices(t *testing.T) {
+	t.Parallel()
+
+	svc := &Service{}
+	svc.meshcoreBLEControl.discovery = &cloudclient.MeshCoreBLEDiscoveryResult{
+		Version: "ble:empty",
+		State:   "completed",
+		Devices: make([]cloudclient.MeshCoreBLEDiscoveryDevice, 0),
+	}
+	empty := svc.meshcoreBLEDiscoveryResult()
+	if empty == nil || empty.Devices == nil || len(empty.Devices) != 0 {
+		t.Fatalf("empty discovery=%#v, want a non-nil empty devices slice", empty)
+	}
+
+	source := &cloudclient.MeshCoreBLEDiscoveryResult{
+		Version: "ble:devices",
+		State:   "completed",
+		Devices: []cloudclient.MeshCoreBLEDiscoveryDevice{{Address: "11:22:33:44:55:66", Name: "Nearby", Bonded: true}},
+	}
+	svc.meshcoreBLEControl.mu.Lock()
+	svc.meshcoreBLEControl.discovery = source
+	svc.meshcoreBLEControl.mu.Unlock()
+	got := svc.meshcoreBLEDiscoveryResult()
+	if got == nil || len(got.Devices) != 1 || got.Devices[0] != source.Devices[0] {
+		t.Fatalf("non-empty discovery=%#v, want %#v", got, source)
+	}
+	if &got.Devices[0] == &source.Devices[0] {
+		t.Fatal("discovery devices share backing storage")
+	}
+	got.Devices[0].Name = "Changed"
+	if source.Devices[0].Name != "Nearby" {
+		t.Fatalf("source device changed through snapshot: %#v", source.Devices[0])
+	}
+}
+
 func TestCloudBLEConfigureForgetReconnectAndReleaseInteraction(t *testing.T) {
 	adapter := meshcore.NewAdapter(meshcore.Config{Transport: "ble", BLE: meshcore.BLEConfig{PeerAddress: "AA:BB:CC:DD:EE:FF"}}, nil, nil)
 	backend := &runtimePairingBackend{}

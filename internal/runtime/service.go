@@ -1835,7 +1835,8 @@ func (s *Service) meshcoreBLEDiscoveryResult() *cloudclient.MeshCoreBLEDiscovery
 		return nil
 	}
 	value := *s.meshcoreBLEControl.discovery
-	value.Devices = append([]cloudclient.MeshCoreBLEDiscoveryDevice(nil), value.Devices...)
+	value.Devices = make([]cloudclient.MeshCoreBLEDiscoveryDevice, len(value.Devices))
+	copy(value.Devices, s.meshcoreBLEControl.discovery.Devices)
 	return &value
 }
 

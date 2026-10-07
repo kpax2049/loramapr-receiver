@@ -268,6 +268,14 @@ func TestSendReceiverHeartbeat(t *testing.T) {
 			if !ok || adapter["connectionState"] != "connected" || adapter["connected"] != true || adapter["ready"] != true || adapter["transport"] != "ble" {
 				t.Fatalf("unexpected adapter status payload: %#v", adapters[0])
 			}
+			discovery, ok := payload["meshcoreBleDiscoveryResult"].(map[string]any)
+			if !ok {
+				t.Fatalf("missing MeshCore BLE discovery payload: %#v", payload)
+			}
+			devices, ok := discovery["devices"].([]any)
+			if !ok || len(devices) != 0 {
+				t.Fatalf("unexpected empty MeshCore BLE discovery devices payload: %#v", discovery)
+			}
 			return jsonResponse(http.StatusCreated, `{
 				"receiverAgentId":"agent-1",
 				"ownerId":"owner-1",
@@ -303,6 +311,11 @@ func TestSendReceiverHeartbeat(t *testing.T) {
 			Protocol: "meshcore", Enabled: true, Configured: true, Lifecycle: "connected",
 			ConnectionState: "connected", Connected: true, Ready: true, Transport: "ble",
 		}},
+		MeshCoreBLEDiscoveryResult: &MeshCoreBLEDiscoveryResult{
+			Version: "ble:empty",
+			State:   "completed",
+			Devices: make([]MeshCoreBLEDiscoveryDevice, 0),
+		},
 	})
 	if err != nil {
 		t.Fatalf("SendReceiverHeartbeat returned error: %v", err)
