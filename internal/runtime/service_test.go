@@ -188,6 +188,23 @@ func TestCloudBLEControlPreservesSafePairingFailureAndRestoresExistingPeer(t *te
 }
 
 func TestMeshcoreBLEControlErrorCodeFallsBackForUnknownFailure(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+		want string
+	}{
+		{name: "BlueZ authentication rejection", err: &meshcore.BLEPairingDiagnostic{Operation: "pair", Code: "authentication_rejected"}, want: "pairing_authentication_rejected"},
+		{name: "BlueZ busy", err: &meshcore.BLEPairingDiagnostic{Operation: "pair", Code: "busy"}, want: "pairing_busy"},
+		{name: "BlueZ connection failure", err: &meshcore.BLEPairingDiagnostic{Operation: "pair", Code: "connection_failed"}, want: "pairing_connection_failed"},
+		{name: "unknown diagnostic", err: &meshcore.BLEPairingDiagnostic{Operation: "pair", Code: "peer supplied details"}, want: "receiver_operation_failed"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := meshcoreBLEControlErrorCode(tc.err); got != tc.want {
+				t.Fatalf("error code=%q, want %q", got, tc.want)
+			}
+		})
+	}
+
 	if got := meshcoreBLEControlErrorCode(errors.New("unexpected receiver failure")); got != "receiver_operation_failed" {
 		t.Fatalf("error code=%q", got)
 	}

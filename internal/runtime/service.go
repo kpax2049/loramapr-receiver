@@ -1895,10 +1895,43 @@ func (s *Service) applyMeshCoreBLEControlIntent(intent *cloudclient.MeshCoreBLEC
 
 func meshcoreBLEControlErrorCode(err error) string {
 	var diagnostic *meshcore.BLEPairingDiagnostic
-	if errors.As(err, &diagnostic) && diagnostic.Operation == "peer_selection" && diagnostic.Code == "unavailable" {
-		return "pairing_peer_selection_unavailable"
+	if !errors.As(err, &diagnostic) {
+		return "receiver_operation_failed"
+	}
+	switch diagnostic.Operation {
+	case "system_bus":
+		if diagnostic.Code == "unavailable" {
+			return "pairing_system_bus_unavailable"
+		}
+	case "peer_selection":
+		if diagnostic.Code == "unavailable" {
+			return "pairing_peer_selection_unavailable"
+		}
+	case "agent_export":
+		if diagnostic.Code == "failed" {
+			return "pairing_agent_export_failed"
+		}
+	case "agent_register":
+		if code := safeBlueZPairingFailureCode(diagnostic.Code); code != "" {
+			return "pairing_agent_register_" + code
+		}
+	case "pair":
+		if diagnostic.Code == "bond_incomplete" {
+			return "pairing_bond_incomplete"
+		}
+		if code := safeBlueZPairingFailureCode(diagnostic.Code); code != "" {
+			return "pairing_" + code
+		}
 	}
 	return "receiver_operation_failed"
+}
+
+func safeBlueZPairingFailureCode(code string) string {
+	switch code {
+	case "failed", "agent_method_or_capability", "authentication_rejected", "busy", "connection_failed":
+		return code
+	}
+	return ""
 }
 
 // receiverDiagnosticCode is the deliberately tiny cloud-safe projection of
