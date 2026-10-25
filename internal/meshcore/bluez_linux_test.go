@@ -11,6 +11,9 @@ func TestBluezOperationInProgress(t *testing.T) {
 	if !bluezOperationInProgress(errors.New("org.bluez.Error.InProgress: operation already in progress")) {
 		t.Fatal("expected BlueZ InProgress error to be retried through readiness polling")
 	}
+	if !bluezOperationInProgress(errors.New("In Progress")) {
+		t.Fatal("expected the plain BlueZ In Progress response to be retried through readiness polling")
+	}
 	if bluezOperationInProgress(errors.New("org.bluez.Error.Failed: refused")) {
 		t.Fatal("unexpected retry classification for a non-InProgress error")
 	}

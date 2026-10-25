@@ -421,7 +421,12 @@ func waitDeviceReady(ctx context.Context, conn *dbus.Conn, path dbus.ObjectPath)
 // authoritative source of completion, so treating this as an immediate
 // failure only causes the Receiver to disconnect an otherwise healthy link.
 func bluezOperationInProgress(err error) bool {
-	return err != nil && strings.Contains(err.Error(), "org.bluez.Error.InProgress")
+	if err == nil {
+		return false
+	}
+
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "org.bluez.error.inprogress") || strings.Contains(message, "in progress")
 }
 
 func bluezRetryableNUSNotifyError(err error) bool {
