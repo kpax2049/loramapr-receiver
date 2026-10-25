@@ -90,7 +90,7 @@ func TestCompanionSessionRejectsOutOfOrderHandshake(t *testing.T) {
 func TestCompanionSessionRejectsWrongProtocolBeforeAppStart(t *testing.T) {
 	t.Parallel()
 	frame := readHexFixture(t, "device-info-v1.17.1.hex")
-	frame[1] = ProtocolVersion - 1
+	frame[1] = ProtocolVersionV14 + 1
 	session := NewCompanionSession("")
 	session.Begin()
 	result, err := session.Handle(frame)
@@ -100,6 +100,40 @@ func TestCompanionSessionRejectsWrongProtocolBeforeAppStart(t *testing.T) {
 	snapshot := session.Snapshot()
 	if snapshot.Trust.ProtocolCompatible || snapshot.Trust.ProfileMatched || snapshot.Trust.Trusted {
 		t.Fatalf("wrong protocol gained compatibility/trust: %#v", snapshot.Trust)
+	}
+}
+
+func TestCompanionSessionAcceptsProtocolV14AsRawCompatible(t *testing.T) {
+	t.Parallel()
+
+	frame := readHexFixture(t, "device-info-v1.17.1.hex")
+	frame[1] = ProtocolVersionV14
+	clear(frame[8:20])
+	copy(frame[8:20], []byte("31-5-Oct-26"))
+	clear(frame[60:80])
+	copy(frame[60:80], []byte("v1.18.0-test"))
+
+	session := NewCompanionSession("loramapr-receiver")
+	session.Begin()
+	result, err := session.Handle(frame)
+	if err != nil {
+		t.Fatalf("handle protocol-v14 DEVICE_INFO: %v", err)
+	}
+	if len(result.Outbound) < 8 || result.Outbound[0] != CommandAppStart || result.Outbound[1] != ProtocolVersion {
+		t.Fatalf("unexpected APP_START after protocol-v14 DEVICE_INFO: %x", result.Outbound)
+	}
+	negotiating := session.Snapshot()
+	if negotiating.State != SessionAwaitSelfInfo || !negotiating.Trust.ProtocolCompatible || negotiating.Trust.ProfileMatched || negotiating.Trust.ProtocolVersion != ProtocolVersionV14 {
+		t.Fatalf("unexpected protocol-v14 negotiating snapshot: %#v", negotiating)
+	}
+
+	result, err = session.Handle(readHexFixture(t, "self-info-v1.17.1.hex"))
+	if err != nil || !result.Ready {
+		t.Fatalf("protocol-v14 session did not reach ready state: result=%#v err=%v", result, err)
+	}
+	ready := session.Snapshot()
+	if ready.State != SessionReady || ready.Trust.Trusted || ready.Trust.ProfileMatched {
+		t.Fatalf("protocol-v14 session must remain raw-compatible only: %#v", ready)
 	}
 }
 

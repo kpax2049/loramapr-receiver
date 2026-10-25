@@ -346,6 +346,9 @@ func (a *Adapter) runBLE(ctx context.Context, sink protocoladapter.AdapterSink) 
 		if a.reconnectIsSuppressed() {
 			continue
 		}
+		if err != nil {
+			a.logger.Warn("MeshCore BLE session ended", "peer", peer, "err", err)
+		}
 		a.setStatus(func(status *AdapterStatus) { status.Reconnects++ })
 		a.degrade(err)
 		if !wait(ctx, a.reconnectDelay) {

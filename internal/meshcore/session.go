@@ -9,7 +9,8 @@ import (
 )
 
 const (
-	ProtocolVersion = byte(13)
+	ProtocolVersion    = byte(13)
+	ProtocolVersionV14 = byte(14)
 
 	CommandAppStart             = byte(0x01)
 	CommandResetPath            = byte(0x0d)
@@ -219,8 +220,8 @@ func (s *CompanionSession) Handle(payload []byte) (HandleResult, error) {
 		if err != nil {
 			return s.fail(err)
 		}
-		if device.ProtocolVersion != ProtocolVersion {
-			return s.fail(fmt.Errorf("%w: got %d, want %d", ErrUnsupportedProtocol, device.ProtocolVersion, ProtocolVersion))
+		if !isSupportedProtocolVersion(device.ProtocolVersion) {
+			return s.fail(fmt.Errorf("%w: got %d, supported %d and %d", ErrUnsupportedProtocol, device.ProtocolVersion, ProtocolVersion, ProtocolVersionV14))
 		}
 		profileMatched := device.FirmwareBuild == PinnedFirmwareBuild &&
 			device.FirmwareVersion == PinnedFirmwareVersion &&
@@ -300,6 +301,10 @@ func (s *CompanionSession) Handle(payload []byte) (HandleResult, error) {
 	default:
 		return s.fail(fmt.Errorf("invalid meshcore companion session state %q", s.state))
 	}
+}
+
+func isSupportedProtocolVersion(version byte) bool {
+	return version == ProtocolVersion || version == ProtocolVersionV14
 }
 
 func validateCommandResponse(payload []byte) error {
