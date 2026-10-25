@@ -107,23 +107,34 @@ func (b *bluezBackend) Discover(ctx context.Context, adapter string) ([]BLEDevic
 }
 
 func runBluezDiscovery(ctx context.Context, conn *dbus.Conn, adapter string) error {
+	stop, err := startBluezDiscovery(ctx, conn, adapter)
+	if err != nil {
+		return err
+	}
+	if stop == nil {
+		return waitForDiscovery(ctx)
+	}
+	return runBoundedBLEDiscovery(ctx, func(context.Context) error { return nil }, stop, waitForDiscovery)
+}
+
+// startBluezDiscovery begins a filtered discovery window and returns a cleanup
+// callback only when this caller owns that window. BlueZ reports InProgress
+// when another caller already has discovery running; in that case it is safe
+// to use the existing scan but not safe to stop it.
+func startBluezDiscovery(ctx context.Context, conn *dbus.Conn, adapter string) (func() error, error) {
 	adapterPath := bluezAdapterPath(adapter)
 	adapterObject := conn.Object(bluezName, adapterPath)
 	filter := map[string]dbus.Variant{"UUIDs": dbus.MakeVariant([]string{NUSServiceUUID})}
 	if call := adapterObject.CallWithContext(ctx, adapterInterface+".SetDiscoveryFilter", 0, filter); call.Err != nil {
-		return fmt.Errorf("%w: set NUS discovery filter", ErrBLEConfiguration)
+		return nil, fmt.Errorf("%w: set NUS discovery filter: %v", ErrBLEConfiguration, call.Err)
 	}
-	return runBoundedBLEDiscovery(
-		ctx,
-		func(ctx context.Context) error {
-			if call := adapterObject.CallWithContext(ctx, adapterInterface+".StartDiscovery", 0); call.Err != nil {
-				return fmt.Errorf("%w: start discovery", ErrBLEConfiguration)
-			}
-			return nil
-		},
-		func() error { return adapterObject.Call(adapterInterface+".StopDiscovery", 0).Err },
-		waitForDiscovery,
-	)
+	if call := adapterObject.CallWithContext(ctx, adapterInterface+".StartDiscovery", 0); call.Err != nil {
+		if bluezOperationInProgress(call.Err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("%w: start discovery: %v", ErrBLEConfiguration, call.Err)
+	}
+	return func() error { return adapterObject.Call(adapterInterface+".StopDiscovery", 0).Err }, nil
 }
 
 func waitForDiscovery(ctx context.Context) error {
@@ -156,6 +167,16 @@ func (b *bluezBackend) Connect(ctx context.Context, cfg BLEConfig) (_ BLEConnect
 	}
 	device := conn.Object(bluezName, path)
 	if !variantBool(props, "Connected") {
+		// BlueZ only completes an LE Device1.Connect request after it receives
+		// a current advertising report. Keep a NUS-filtered scan open while
+		// connecting rather than ending discovery before this call.
+		stopDiscovery, err := startBluezDiscovery(ctx, conn, cfg.Adapter)
+		if err != nil {
+			return nil, err
+		}
+		if stopDiscovery != nil {
+			defer func() { _ = stopDiscovery() }()
+		}
 		if call := device.CallWithContext(ctx, deviceInterface+".Connect", 0); call.Err != nil && !bluezOperationInProgress(call.Err) {
 			return nil, fmt.Errorf("%w: connect selected BLE peer: %v", ErrBLEConfiguration, call.Err)
 		}
