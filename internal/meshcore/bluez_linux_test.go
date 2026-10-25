@@ -2,7 +2,19 @@
 
 package meshcore
 
-import "testing"
+import (
+	"errors"
+	"testing"
+)
+
+func TestBluezOperationInProgress(t *testing.T) {
+	if !bluezOperationInProgress(errors.New("org.bluez.Error.InProgress: operation already in progress")) {
+		t.Fatal("expected BlueZ InProgress error to be retried through readiness polling")
+	}
+	if bluezOperationInProgress(errors.New("org.bluez.Error.Failed: refused")) {
+		t.Fatal("unexpected retry classification for a non-InProgress error")
+	}
+}
 
 func TestBluezConnectionCloseClosesPrivateBusExactlyOnce(t *testing.T) {
 	closes := 0

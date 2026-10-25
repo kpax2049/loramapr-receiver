@@ -156,8 +156,8 @@ func (b *bluezBackend) Connect(ctx context.Context, cfg BLEConfig) (_ BLEConnect
 	}
 	device := conn.Object(bluezName, path)
 	if !variantBool(props, "Connected") {
-		if call := device.CallWithContext(ctx, deviceInterface+".Connect", 0); call.Err != nil {
-			return nil, fmt.Errorf("%w: connect selected BLE peer", ErrBLEConfiguration)
+		if call := device.CallWithContext(ctx, deviceInterface+".Connect", 0); call.Err != nil && !bluezOperationInProgress(call.Err) {
+			return nil, fmt.Errorf("%w: connect selected BLE peer: %v", ErrBLEConfiguration, call.Err)
 		}
 	}
 	props, err = waitDeviceReady(ctx, conn, path)
@@ -388,6 +388,34 @@ func waitDeviceReady(ctx context.Context, conn *dbus.Conn, path dbus.ObjectPath)
 		}
 	}
 }
+
+// bluezOperationInProgress is returned when a previous asynchronous BlueZ
+// request is still being completed. The normal readiness waits below are the
+// authoritative source of completion, so treating this as an immediate
+// failure only causes the Receiver to disconnect an otherwise healthy link.
+func bluezOperationInProgress(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "org.bluez.Error.InProgress")
+}
+
+func waitNUSNotifications(ctx context.Context, conn *dbus.Conn, path dbus.ObjectPath) error {
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		objects, err := managedObjects(conn)
+		if err != nil {
+			return err
+		}
+		if variantBool(objects[path][gattCharInterface], "Notifying") {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+		}
+	}
+}
+
 func findNUSCharacteristics(objects managed, devicePath dbus.ObjectPath) (dbus.ObjectPath, dbus.ObjectPath, map[string]dbus.Variant, map[string]dbus.Variant, bool) {
 	var rx, tx dbus.ObjectPath
 	var rxProps, txProps map[string]dbus.Variant
@@ -510,7 +538,12 @@ func (c *bluezConnection) startNotify(ctx context.Context) error {
 		return call.Err
 	}
 	if call := c.tx.CallWithContext(ctx, gattCharInterface+".StartNotify", 0); call.Err != nil {
-		return fmt.Errorf("%w: start NUS notifications", ErrBLEConfiguration)
+		if !bluezOperationInProgress(call.Err) {
+			return fmt.Errorf("%w: start NUS notifications: %v", ErrBLEConfiguration, call.Err)
+		}
+		if err := waitNUSNotifications(ctx, c.conn, c.txPath); err != nil {
+			return fmt.Errorf("%w: wait for NUS notifications after an in-progress request: %v", ErrBLEConfiguration, err)
+		}
 	}
 	return nil
 }
