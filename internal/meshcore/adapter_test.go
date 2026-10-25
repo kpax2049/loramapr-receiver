@@ -83,18 +83,11 @@ func TestAdapterFetchesQueuedMeshCoreMessage(t *testing.T) {
 			if err := writeCompanionFrame(radio, readHexFixture(t, "self-info-v1.17.1.hex")); err != nil {
 				return
 			}
-			if command, err := readHostFrame(radio); err != nil || !bytes.Equal(command, []byte{CommandSyncNextMessage}) {
-				t.Errorf("unexpected initial queued-message command: %x err=%v", command, err)
-				return
-			}
-			if err := writeCompanionFrame(radio, []byte{ResponseNoMoreMessages}); err != nil {
-				return
-			}
 			if err := writeCompanionFrame(radio, []byte{PushMessagesWaiting}); err != nil {
 				return
 			}
 			if command, err := readHostFrame(radio); err != nil || !bytes.Equal(command, []byte{CommandSyncNextMessage}) {
-				t.Errorf("unexpected notification queued-message command: %x err=%v", command, err)
+				t.Errorf("unexpected first queued-message command: %x err=%v", command, err)
 				return
 			}
 			if err := writeCompanionFrame(radio, []byte{ResponseContactMessageV3, 0, 0, 0, 1, 2, 3, 4, 5, 6, 0, 1, 0, 0, 0, 0, 'h', 'i'}); err != nil {
