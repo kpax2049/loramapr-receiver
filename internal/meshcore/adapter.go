@@ -19,7 +19,8 @@ const (
 	AdapterName = "meshcore-companion"
 	// A first BLE connection may need a bounded scan window followed by GATT
 	// service resolution and notification setup.
-	defaultBLEOpenTimeout = 20 * time.Second
+	defaultBLEOpenTimeout   = 20 * time.Second
+	maxQueuedMessageFetches = 64
 )
 
 type ConnectionState string
@@ -627,6 +628,7 @@ func (a *Adapter) consume(ctx context.Context, link CompanionLink, device string
 	defer a.finishCurrentPathReset(ErrTelemetryAdapterDisconnected)
 
 	connected := false
+	queuedMessageFetches := 0
 	for {
 		payload, err := link.ReadFrame(ctx)
 		if err != nil {
@@ -667,12 +669,34 @@ func (a *Adapter) consume(ctx context.Context, link CompanionLink, device string
 				status.Session = session.Snapshot()
 				status.LastError = ""
 			})
+			queuedMessageFetches = maxQueuedMessageFetches
+			if err := link.WriteFrame(ctx, []byte{CommandSyncNextMessage}); err != nil {
+				return err
+			}
 		}
 		if result.Push == nil {
 			if result.Response != nil {
 				a.handleTelemetryCommandResponse(*result.Response)
 			}
 			continue
+		}
+		if result.Push.Opcode == PushMessagesWaiting {
+			if queuedMessageFetches == 0 {
+				queuedMessageFetches = maxQueuedMessageFetches
+				if err := link.WriteFrame(ctx, []byte{CommandSyncNextMessage}); err != nil {
+					return err
+				}
+			}
+			continue
+		}
+		if queuedMessageFetches > 0 {
+			if result.Push.Opcode == ResponseNoMoreMessages {
+				queuedMessageFetches = 0
+				continue
+			}
+			if isQueuedMessageResponse(result.Push.Opcode) {
+				queuedMessageFetches--
+			}
 		}
 		observedAt := time.Now().UTC()
 		if result.Push.Opcode == PushTelemetryResponse {
@@ -694,6 +718,7 @@ func (a *Adapter) consume(ctx context.Context, link CompanionLink, device string
 		})
 		if err != nil {
 			if errors.Is(err, protocoladapter.ErrEventBufferFull) {
+				queuedMessageFetches = 0
 				a.setStatus(func(status *AdapterStatus) {
 					status.State = StateDegraded
 					status.EventDrops++
@@ -713,6 +738,11 @@ func (a *Adapter) consume(ctx context.Context, link CompanionLink, device string
 			status.Session = session.Snapshot()
 			status.LastError = ""
 		})
+		if queuedMessageFetches > 0 && isQueuedMessageResponse(result.Push.Opcode) {
+			if err := link.WriteFrame(ctx, []byte{CommandSyncNextMessage}); err != nil {
+				return err
+			}
+		}
 	}
 }
 

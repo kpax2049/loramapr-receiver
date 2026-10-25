@@ -13,19 +13,27 @@ const (
 	ProtocolVersionV14 = byte(14)
 
 	CommandAppStart             = byte(0x01)
+	CommandSyncNextMessage      = byte(0x0A)
 	CommandResetPath            = byte(0x0d)
 	CommandDeviceQuery          = byte(0x16)
 	CommandGetContactByKey      = byte(0x1e)
 	CommandSendTelemetryRequest = byte(0x27)
 	CommandSendBinaryRequest    = byte(0x32)
 
-	ResponseOK         = byte(0x00)
-	ResponseError      = byte(0x01)
-	ResponseContact    = byte(0x03)
-	ResponseSelfInfo   = byte(0x05)
-	ResponseSent       = byte(0x06)
-	ResponseDeviceInfo = byte(0x0D)
+	ResponseOK               = byte(0x00)
+	ResponseError            = byte(0x01)
+	ResponseContact          = byte(0x03)
+	ResponseSelfInfo         = byte(0x05)
+	ResponseSent             = byte(0x06)
+	ResponseContactMessage   = byte(0x07)
+	ResponseChannelMessage   = byte(0x08)
+	ResponseNoMoreMessages   = byte(0x0A)
+	ResponseDeviceInfo       = byte(0x0D)
+	ResponseContactMessageV3 = byte(0x10)
+	ResponseChannelMessageV3 = byte(0x11)
+	ResponseChannelData      = byte(0x1B)
 
+	PushMessagesWaiting   = byte(0x83)
 	PushRawData           = byte(0x84)
 	PushPathUpdated       = byte(0x81)
 	PushLogRXData         = byte(0x88)
@@ -305,6 +313,15 @@ func (s *CompanionSession) Handle(payload []byte) (HandleResult, error) {
 
 func isSupportedProtocolVersion(version byte) bool {
 	return version == ProtocolVersion || version == ProtocolVersionV14
+}
+
+func isQueuedMessageResponse(opcode byte) bool {
+	switch opcode {
+	case ResponseContactMessage, ResponseChannelMessage, ResponseContactMessageV3, ResponseChannelMessageV3, ResponseChannelData:
+		return true
+	default:
+		return false
+	}
 }
 
 func validateCommandResponse(payload []byte) error {

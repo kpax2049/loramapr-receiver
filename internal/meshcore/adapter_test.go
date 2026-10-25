@@ -62,6 +62,79 @@ func TestAdapterNegotiatesPhysicalSerialAndPublishesRawFrame(t *testing.T) {
 	}
 }
 
+func TestAdapterFetchesQueuedMeshCoreMessage(t *testing.T) {
+	device := existingDeviceFixture(t)
+	drained := make(chan struct{})
+	adapter := NewAdapter(Config{Transport: "physical_serial", Device: device}, nil, protocoladapter.NewSerialLeaseRegistry())
+	adapter.openFn = func(string) (io.ReadWriteCloser, error) {
+		host, radio := net.Pipe()
+		go func() {
+			defer radio.Close()
+			defer close(drained)
+			if _, err := readHostFrame(radio); err != nil {
+				return
+			}
+			if err := writeCompanionFrame(radio, readHexFixture(t, "device-info-v1.17.1.hex")); err != nil {
+				return
+			}
+			if _, err := readHostFrame(radio); err != nil {
+				return
+			}
+			if err := writeCompanionFrame(radio, readHexFixture(t, "self-info-v1.17.1.hex")); err != nil {
+				return
+			}
+			if command, err := readHostFrame(radio); err != nil || !bytes.Equal(command, []byte{CommandSyncNextMessage}) {
+				t.Errorf("unexpected initial queued-message command: %x err=%v", command, err)
+				return
+			}
+			if err := writeCompanionFrame(radio, []byte{ResponseNoMoreMessages}); err != nil {
+				return
+			}
+			if err := writeCompanionFrame(radio, []byte{PushMessagesWaiting}); err != nil {
+				return
+			}
+			if command, err := readHostFrame(radio); err != nil || !bytes.Equal(command, []byte{CommandSyncNextMessage}) {
+				t.Errorf("unexpected notification queued-message command: %x err=%v", command, err)
+				return
+			}
+			if err := writeCompanionFrame(radio, []byte{ResponseContactMessageV3, 0, 0, 0, 1, 2, 3, 4, 5, 6, 0, 1, 0, 0, 0, 0, 'h', 'i'}); err != nil {
+				return
+			}
+			if command, err := readHostFrame(radio); err != nil || !bytes.Equal(command, []byte{CommandSyncNextMessage}) {
+				t.Errorf("unexpected follow-up queued-message command: %x err=%v", command, err)
+				return
+			}
+			_ = writeCompanionFrame(radio, []byte{ResponseNoMoreMessages})
+		}()
+		return host, nil
+	}
+	manager, err := protocoladapter.NewManager(adapter)
+	if err != nil {
+		t.Fatal(err)
+	}
+	events, err := manager.Start(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case event := <-events:
+		value, ok := event.Value.(AdapterEvent)
+		if !ok || value.Frame.Opcode != ResponseContactMessageV3 || string(value.Frame.Payload[len(value.Frame.Payload)-2:]) != "hi" {
+			t.Fatalf("unexpected queued message event: %#v", event)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for queued MeshCore message")
+	}
+	select {
+	case <-drained:
+	case <-time.After(time.Second):
+		t.Fatal("timed out draining queued MeshCore messages")
+	}
+	if err := manager.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestAdapterReconnectInvalidatesAndReestablishesProfile(t *testing.T) {
 	device := existingDeviceFixture(t)
 	adapter := NewAdapter(Config{Transport: "physical_serial", Device: device}, nil, protocoladapter.NewSerialLeaseRegistry())
