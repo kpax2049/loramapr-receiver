@@ -177,6 +177,12 @@ func (b *bluezBackend) Connect(ctx context.Context, cfg BLEConfig) (_ BLEConnect
 		if stopDiscovery != nil {
 			defer func() { _ = stopDiscovery() }()
 		}
+		// Device1.Connect requires an advertising report that arrived while
+		// scanning. Give the NUS-filtered scan its bounded report window before
+		// handing the connection request to BlueZ.
+		if err := waitForDiscovery(ctx); err != nil {
+			return nil, err
+		}
 		if call := device.CallWithContext(ctx, deviceInterface+".Connect", 0); call.Err != nil && !bluezOperationInProgress(call.Err) {
 			return nil, fmt.Errorf("%w: connect selected BLE peer: %v", ErrBLEConfiguration, call.Err)
 		}
