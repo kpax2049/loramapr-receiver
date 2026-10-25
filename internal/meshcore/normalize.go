@@ -43,6 +43,9 @@ func NormalizeAdapterEvent(event protocoladapter.Event, binding ReceiverBinding,
 	}
 
 	base := normalizedBase(event, binding, frame)
+	if session.Trust.ProtocolVersion != 0 {
+		base["source"].(map[string]any)["protocolVersion"] = fmt.Sprintf("%d", session.Trust.ProtocolVersion)
+	}
 	if err := validatePush(frame.Payload); err != nil {
 		return normalizeCapturedRaw(base, frame.Payload), nil
 	}
@@ -52,6 +55,12 @@ func NormalizeAdapterEvent(event protocoladapter.Event, binding ReceiverBinding,
 	// delegated Companion-only surface below, especially NEW_ADVERT (0x8A).
 	if frame.Opcode == PushLogRXData {
 		return normalizeLogRX(base, frame.Payload, event.ObservedAt), nil
+	}
+	// BLE exposes the Companion's contact summary rather than the signed
+	// on-air advert. It is useful for discovering a MeshCore public key, but
+	// cannot establish identity or position authenticity on its own.
+	if frame.Opcode == PushNewAdvert && eligibleBLEContactDiscovery(session) {
+		return normalizeBLEContactDiscovery(base, frame.Payload), nil
 	}
 	if !semanticProfileMatched(session) {
 		return normalizeCapturedRaw(base, frame.Payload), nil
@@ -311,6 +320,52 @@ func trustedDelegatedSession(session Snapshot) bool {
 		session.Trust.Transport == "physical_serial" &&
 		session.Trust.DelegatedAdvertAllowed &&
 		session.Trust.AllowlistCommit == PinnedSourceCommit
+}
+
+func eligibleBLEContactDiscovery(session Snapshot) bool {
+	return session.State == SessionReady &&
+		session.Trust.ProtocolCompatible &&
+		session.Trust.ProtocolVersion == ProtocolVersionV14 &&
+		session.Trust.Transport == "ble"
+}
+
+func normalizeBLEContactDiscovery(base map[string]any, payload []byte) map[string]any {
+	contact, err := parseDelegatedAdvert(payload)
+	if err != nil {
+		return normalizeCapturedRaw(base, payload)
+	}
+
+	publicKey := hex.EncodeToString(contact.publicKey)
+	rawSHA256 := sha256Hex(payload)
+	base["eventType"] = "device_advertisement"
+	base["subject"] = map[string]any{
+		"protocolNamespace": "ed25519",
+		"canonicalId":       publicKey,
+		"verification":      "unverified",
+	}
+	if contact.name != "" {
+		base["subject"].(map[string]any)["displayId"] = contact.name
+	}
+	base["contentKey"] = "meshcore:ble-contact-discovery:v1:" + rawSHA256
+	base["authenticity"] = map[string]any{
+		"state":  "unverified",
+		"method": "companion_contact_discovery",
+	}
+	capabilities := base["capabilities"].(map[string]any)
+	capabilities["sender_identity"] = "available"
+	capabilities["position_signed"] = "not_observable"
+	source := base["source"].(map[string]any)
+	source["evidence"] = map[string]any{
+		"kind":                  "meshcore_companion_ble_contact_discovery_v1",
+		"contactFrameSha256":    rawSHA256,
+		"publicKeyCanonical":    publicKey,
+		"onAirAdvertPresent":    false,
+		"signaturePresent":      false,
+		"transport":             "ble",
+		"deviceProtocol":        int(ProtocolVersionV14),
+		"identityTrustBoundary": "companion_reported_unverified",
+	}
+	return base
 }
 
 func parseDelegatedAdvert(payload []byte) (delegatedAdvert, error) {

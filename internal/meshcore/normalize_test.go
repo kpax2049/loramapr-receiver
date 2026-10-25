@@ -204,6 +204,50 @@ func TestNormalizeDelegatedAdvertRequiresExactPinnedTrustProfile(t *testing.T) {
 	}
 }
 
+func TestNormalizeBLEV14NewAdvertProjectsUnverifiedIdentityOnly(t *testing.T) {
+	payload := readNormalizeHexFixture(t, "new-advert-v1.17.1.hex")
+	observedAt := time.Date(2026, 10, 25, 22, 30, 0, 0, time.UTC)
+	bleV14 := pinnedReadySnapshot()
+	bleV14.Trust.Trusted = false
+	bleV14.Trust.ProfileMatched = false
+	bleV14.Trust.ProtocolVersion = ProtocolVersionV14
+	bleV14.Trust.FirmwareBuild = "15 Oct 2026"
+	bleV14.Trust.FirmwareVersion = "v1.18.0-81dbae5"
+	bleV14.Trust.Transport = "ble"
+	bleV14.Trust.DelegatedAdvertAllowed = false
+
+	event := normalizeFixture(t, payload, observedAt, bleV14)
+	if got := stringField(t, event, "eventType"); got != "device_advertisement" {
+		t.Fatalf("eventType = %q, want device_advertisement", got)
+	}
+	subject := mapField(t, event, "subject")
+	if got := stringField(t, subject, "verification"); got != "unverified" {
+		t.Fatalf("subject verification = %q, want unverified", got)
+	}
+	if _, ok := event["position"]; ok {
+		t.Fatal("BLE contact discovery must not project a position")
+	}
+	if _, ok := event["radio"]; ok {
+		t.Fatal("BLE contact discovery must not fabricate receiver-local RF")
+	}
+	authenticity := mapField(t, event, "authenticity")
+	if authenticity["state"] != "unverified" || authenticity["method"] != "companion_contact_discovery" {
+		t.Fatalf("unexpected BLE contact authenticity: %#v", authenticity)
+	}
+	source := mapField(t, event, "source")
+	if got := stringField(t, source, "protocolVersion"); got != "14" {
+		t.Fatalf("source protocolVersion = %q, want 14", got)
+	}
+	evidence := mapField(t, source, "evidence")
+	if evidence["kind"] != "meshcore_companion_ble_contact_discovery_v1" ||
+		evidence["transport"] != "ble" ||
+		evidence["deviceProtocol"] != int(ProtocolVersionV14) ||
+		evidence["publicKeyCanonical"] != subject["canonicalId"] {
+		t.Fatalf("unexpected BLE contact evidence: %#v", evidence)
+	}
+	assertContractValid(t, event)
+}
+
 func TestNormalizeDelegatedAdvertMalformedIsRawOnlyWithoutRF(t *testing.T) {
 	payload := readNormalizeHexFixture(t, "new-advert-v1.17.1.hex")[:20]
 	event := normalizeFixture(t, payload, time.Date(2026, 8, 20, 12, 5, 0, 0, time.UTC), pinnedReadySnapshot())
