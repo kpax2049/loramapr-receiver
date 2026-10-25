@@ -16,6 +16,15 @@ func TestBluezOperationInProgress(t *testing.T) {
 	}
 }
 
+func TestBluezRetryableNUSNotifyError(t *testing.T) {
+	if !bluezRetryableNUSNotifyError(errors.New("Operation failed with ATT error: 0x0e")) {
+		t.Fatal("expected transient ATT unlikely error to be retried")
+	}
+	if bluezRetryableNUSNotifyError(errors.New("Operation failed with ATT error: 0x0f")) {
+		t.Fatal("unexpected retry classification for an authentication error")
+	}
+}
+
 func TestBluezConnectionCloseClosesPrivateBusExactlyOnce(t *testing.T) {
 	closes := 0
 	connection := &bluezConnection{

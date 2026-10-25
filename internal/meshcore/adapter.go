@@ -16,8 +16,10 @@ import (
 )
 
 const (
-	AdapterName           = "meshcore-companion"
-	defaultBLEOpenTimeout = 12 * time.Second
+	AdapterName = "meshcore-companion"
+	// A first BLE connection may need a bounded scan window followed by GATT
+	// service resolution and notification setup.
+	defaultBLEOpenTimeout = 20 * time.Second
 )
 
 type ConnectionState string

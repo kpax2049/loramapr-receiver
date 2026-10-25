@@ -424,6 +424,21 @@ func bluezOperationInProgress(err error) bool {
 	return err != nil && strings.Contains(err.Error(), "org.bluez.Error.InProgress")
 }
 
+func bluezRetryableNUSNotifyError(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "ATT error: 0x0e")
+}
+
+func waitForNUSNotifyRetry(ctx context.Context) error {
+	timer := time.NewTimer(500 * time.Millisecond)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
 func waitNUSNotifications(ctx context.Context, conn *dbus.Conn, path dbus.ObjectPath) error {
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
@@ -564,15 +579,25 @@ func (c *bluezConnection) startNotify(ctx context.Context) error {
 	if call := c.conn.BusObject().CallWithContext(ctx, "org.freedesktop.DBus.AddMatch", 0, rule); call.Err != nil {
 		return call.Err
 	}
-	if call := c.tx.CallWithContext(ctx, gattCharInterface+".StartNotify", 0); call.Err != nil {
-		if !bluezOperationInProgress(call.Err) {
+	for attempt := 0; attempt < 3; attempt++ {
+		call := c.tx.CallWithContext(ctx, gattCharInterface+".StartNotify", 0)
+		if call.Err == nil {
+			return nil
+		}
+		if bluezOperationInProgress(call.Err) {
+			if err := waitNUSNotifications(ctx, c.conn, c.txPath); err != nil {
+				return fmt.Errorf("%w: wait for NUS notifications after an in-progress request: %v", ErrBLEConfiguration, err)
+			}
+			return nil
+		}
+		if !bluezRetryableNUSNotifyError(call.Err) || attempt == 2 {
 			return fmt.Errorf("%w: start NUS notifications: %v", ErrBLEConfiguration, call.Err)
 		}
-		if err := waitNUSNotifications(ctx, c.conn, c.txPath); err != nil {
-			return fmt.Errorf("%w: wait for NUS notifications after an in-progress request: %v", ErrBLEConfiguration, err)
+		if err := waitForNUSNotifyRetry(ctx); err != nil {
+			return fmt.Errorf("%w: retry NUS notifications: %v", ErrBLEConfiguration, err)
 		}
 	}
-	return nil
+	return fmt.Errorf("%w: start NUS notifications", ErrBLEConfiguration)
 }
 func (c *bluezConnection) ReadNotification(ctx context.Context) ([]byte, error) {
 	for {
