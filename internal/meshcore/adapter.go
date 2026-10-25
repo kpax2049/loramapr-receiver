@@ -629,6 +629,7 @@ func (a *Adapter) consume(ctx context.Context, link CompanionLink, device string
 
 	connected := false
 	queuedMessageFetches := 0
+	queuedMessagesDrained := 0
 	for {
 		payload, err := link.ReadFrame(ctx)
 		if err != nil {
@@ -669,10 +670,6 @@ func (a *Adapter) consume(ctx context.Context, link CompanionLink, device string
 				status.Session = session.Snapshot()
 				status.LastError = ""
 			})
-			queuedMessageFetches = maxQueuedMessageFetches
-			if err := link.WriteFrame(ctx, []byte{CommandSyncNextMessage}); err != nil {
-				return err
-			}
 		}
 		if result.Push == nil {
 			if result.Response != nil {
@@ -683,6 +680,8 @@ func (a *Adapter) consume(ctx context.Context, link CompanionLink, device string
 		if result.Push.Opcode == PushMessagesWaiting {
 			if queuedMessageFetches == 0 {
 				queuedMessageFetches = maxQueuedMessageFetches
+				queuedMessagesDrained = 0
+				a.logger.Info("MeshCore companion reported queued messages")
 				if err := link.WriteFrame(ctx, []byte{CommandSyncNextMessage}); err != nil {
 					return err
 				}
@@ -691,11 +690,14 @@ func (a *Adapter) consume(ctx context.Context, link CompanionLink, device string
 		}
 		if queuedMessageFetches > 0 {
 			if result.Push.Opcode == ResponseNoMoreMessages {
+				a.logger.Info("MeshCore queued-message drain completed", "messages", queuedMessagesDrained)
 				queuedMessageFetches = 0
 				continue
 			}
 			if isQueuedMessageResponse(result.Push.Opcode) {
 				queuedMessageFetches--
+				queuedMessagesDrained++
+				a.logger.Info("MeshCore queued message fetched", "opcode", fmt.Sprintf("0x%02x", result.Push.Opcode), "bytes", len(result.Push.Payload))
 			}
 		}
 		observedAt := time.Now().UTC()
