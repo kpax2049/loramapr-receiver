@@ -142,7 +142,7 @@ func TestAdapterImportsBLEV14ContactList(t *testing.T) {
 		terminal: io.EOF,
 	}}
 	adapter := NewAdapter(Config{Transport: "ble", BLE: BLEConfig{Adapter: "hci0", PeerAddress: "AA:BB:CC:DD:EE:FF"}}, nil, nil)
-	sink := &recordingSink{events: make(chan protocoladapter.Event, 1)}
+	sink := &contactSyncSink{recordingSink: recordingSink{events: make(chan protocoladapter.Event, 1)}}
 	err := adapter.consume(context.Background(), link, "peer", sink)
 	if !errors.Is(err, io.EOF) {
 		t.Fatalf("consume error = %v, want EOF", err)
@@ -158,6 +158,9 @@ func TestAdapterImportsBLEV14ContactList(t *testing.T) {
 	}
 	if len(link.writes) != 3 || !bytes.Equal(link.writes[0], []byte{CommandDeviceQuery, ProtocolVersion}) || link.writes[1][0] != CommandAppStart || !bytes.Equal(link.writes[2], []byte{CommandGetContacts}) {
 		t.Fatalf("unexpected Companion commands: %#v", link.writes)
+	}
+	if sink.tryPublishes != 0 {
+		t.Fatalf("contact-list import used non-blocking publish %d times", sink.tryPublishes)
 	}
 }
 
@@ -915,6 +918,16 @@ func (s *recordingSink) Publish(event protocoladapter.Event) error {
 
 func (s *recordingSink) TryPublish(event protocoladapter.Event) error {
 	return s.Publish(event)
+}
+
+type contactSyncSink struct {
+	recordingSink
+	tryPublishes int
+}
+
+func (s *contactSyncSink) TryPublish(protocoladapter.Event) error {
+	s.tryPublishes++
+	return protocoladapter.ErrEventBufferFull
 }
 
 type scriptedCompanionLink struct {

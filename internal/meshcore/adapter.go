@@ -749,12 +749,20 @@ func (a *Adapter) consume(ctx context.Context, link CompanionLink, device string
 		if result.Push.Opcode == PushLogRXData {
 			a.recordRawRXCandidate(result.Push.Payload, observedAt, frameSequence)
 		}
-		event := AdapterEvent{
+		adapterEvent := AdapterEvent{
 			Frame: *result.Push, Session: session.Snapshot(), Device: device, ObservedAt: observedAt,
 		}
-		err = protocoladapter.TryPublish(sink, protocoladapter.Event{
-			Adapter: AdapterName, Value: event, ObservedAt: observedAt,
-		})
+		event := protocoladapter.Event{
+			Adapter: AdapterName, Value: adapterEvent, ObservedAt: observedAt,
+		}
+		// A Companion contact-list import is a finite, requested snapshot. Apply
+		// back-pressure instead of dropping contacts when Cloud/outbox work falls
+		// behind; ordinary radio pushes keep their non-blocking transport path.
+		if result.Push.Opcode == ResponseContact {
+			err = sink.Publish(event)
+		} else {
+			err = protocoladapter.TryPublish(sink, event)
+		}
 		if err != nil {
 			if errors.Is(err, protocoladapter.ErrEventBufferFull) {
 				queuedMessageFetches = 0
