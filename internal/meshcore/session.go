@@ -54,6 +54,60 @@ const (
 	PinnedSourceCommit    = "d92964352441e53b93e8667b802e04f6e072b39e"
 )
 
+// FirmwareTrustProfile pins a reviewed upstream Companion build. Device
+// metadata is self-reported, so this restricts semantic decoding; it is not
+// device attestation. Keep entries exact rather than accepting a version range.
+type FirmwareTrustProfile struct {
+	ProtocolVersion byte
+	FirmwareBuild   string
+	FirmwareVersion string
+	SourceCommit    string
+}
+
+var trustedFirmwareProfiles = []FirmwareTrustProfile{
+	{
+		ProtocolVersion: ProtocolVersion,
+		FirmwareBuild:   PinnedFirmwareBuild,
+		FirmwareVersion: PinnedFirmwareVersion,
+		SourceCommit:    PinnedSourceCommit,
+	},
+	{
+		ProtocolVersion: ProtocolVersionV14,
+		FirmwareBuild:   "15 Oct 2026",
+		FirmwareVersion: "v1.18.0",
+		SourceCommit:    "81dbae592ffad40b4212bc0b37e82b38da08f4bc",
+	},
+}
+
+func trustedProfileForDevice(device DeviceInfo) (FirmwareTrustProfile, bool) {
+	if strings.TrimSpace(device.Model) == "" {
+		return FirmwareTrustProfile{}, false
+	}
+	for _, profile := range trustedFirmwareProfiles {
+		if device.ProtocolVersion == profile.ProtocolVersion &&
+			device.FirmwareBuild == profile.FirmwareBuild &&
+			device.FirmwareVersion == profile.FirmwareVersion {
+			return profile, true
+		}
+	}
+	return FirmwareTrustProfile{}, false
+}
+
+func trustedProfileForTrust(trust TrustProfile) (FirmwareTrustProfile, bool) {
+	if strings.TrimSpace(trust.Model) == "" {
+		return FirmwareTrustProfile{}, false
+	}
+	for _, profile := range trustedFirmwareProfiles {
+		if trust.ProtocolVersion == profile.ProtocolVersion &&
+			trust.FirmwareBuild == profile.FirmwareBuild &&
+			trust.FirmwareVersion == profile.FirmwareVersion &&
+			trust.AllowlistCommit == profile.SourceCommit {
+			return profile, true
+		}
+	}
+	return FirmwareTrustProfile{}, false
+}
+
 var (
 	ErrSessionNotStarted        = errors.New("meshcore companion session has not started")
 	ErrUnexpectedHandshakeFrame = errors.New("unexpected meshcore companion handshake frame")
@@ -175,7 +229,6 @@ func NewCompanionSessionForTransport(appName string, transport TransportMetadata
 		transport: transport,
 		state:     SessionDisconnected,
 		trust: TrustProfile{
-			AllowlistCommit:        PinnedSourceCommit,
 			DeviceAttested:         false,
 			Transport:              transport.Kind,
 			DelegatedAdvertAllowed: transport.DelegatedAdvertAllowed,
@@ -194,7 +247,6 @@ func (s *CompanionSession) Begin() []byte {
 	s.self = nil
 	s.trust = TrustProfile{
 		ProtocolVersion:        ProtocolVersion,
-		AllowlistCommit:        PinnedSourceCommit,
 		DeviceAttested:         false,
 		Transport:              s.transport.Kind,
 		DelegatedAdvertAllowed: s.transport.DelegatedAdvertAllowed,
@@ -234,9 +286,7 @@ func (s *CompanionSession) Handle(payload []byte) (HandleResult, error) {
 		if !isSupportedProtocolVersion(device.ProtocolVersion) {
 			return s.fail(fmt.Errorf("%w: got %d, supported %d and %d", ErrUnsupportedProtocol, device.ProtocolVersion, ProtocolVersion, ProtocolVersionV14))
 		}
-		profileMatched := device.FirmwareBuild == PinnedFirmwareBuild &&
-			device.FirmwareVersion == PinnedFirmwareVersion &&
-			strings.TrimSpace(device.Model) != ""
+		profile, profileMatched := trustedProfileForDevice(*device)
 
 		s.device = device
 		s.trust.ProtocolCompatible = true
@@ -245,6 +295,9 @@ func (s *CompanionSession) Handle(payload []byte) (HandleResult, error) {
 		s.trust.FirmwareBuild = device.FirmwareBuild
 		s.trust.FirmwareVersion = device.FirmwareVersion
 		s.trust.Model = device.Model
+		if profileMatched {
+			s.trust.AllowlistCommit = profile.SourceCommit
+		}
 		if !profileMatched {
 			s.trust.Reason = fmt.Sprintf(
 				"%v: build=%q version=%q model=%q; protocol-compatible raw capture only",

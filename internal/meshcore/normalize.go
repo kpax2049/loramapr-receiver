@@ -83,14 +83,12 @@ func NormalizeAdapterEvent(event protocoladapter.Event, binding ReceiverBinding,
 }
 
 func semanticProfileMatched(session Snapshot) bool {
-	return session.State == SessionReady &&
+	_, matched := trustedProfileForTrust(session.Trust)
+	return matched &&
+		session.State == SessionReady &&
 		session.Trust.ProtocolCompatible &&
 		session.Trust.ProfileMatched &&
-		session.Trust.ProtocolVersion == ProtocolVersion &&
-		session.Trust.FirmwareVersion == PinnedFirmwareVersion &&
-		session.Trust.FirmwareBuild == PinnedFirmwareBuild &&
-		strings.TrimSpace(session.Trust.Model) != "" &&
-		session.Trust.AllowlistCommit == PinnedSourceCommit
+		strings.TrimSpace(session.Trust.Model) != ""
 }
 
 func adapterPushFrame(value any) (PushFrame, bool) {
@@ -302,7 +300,7 @@ func normalizeDelegatedAdvert(base map[string]any, payload []byte, observedAt ti
 		"deviceReportedModel":           session.Trust.Model,
 		"deviceProtocol":                int(session.Trust.ProtocolVersion),
 		"appTargetProtocol":             int(ProtocolVersion),
-		"sourceCommit":                  PinnedSourceCommit,
+		"sourceCommit":                  session.Trust.AllowlistCommit,
 		"sourceCommitProvenance":        "pinned_source_allowlist",
 		"deviceAttestedSourceCommit":    false,
 	}
@@ -324,7 +322,12 @@ func trustedDelegatedSession(session Snapshot) bool {
 		!session.Trust.DeviceAttested &&
 		session.Trust.Transport == "physical_serial" &&
 		session.Trust.DelegatedAdvertAllowed &&
-		session.Trust.AllowlistCommit == PinnedSourceCommit
+		trustedProfileMatched(session.Trust)
+}
+
+func trustedProfileMatched(trust TrustProfile) bool {
+	_, matched := trustedProfileForTrust(trust)
+	return matched
 }
 
 func eligibleBLEContactDiscovery(session Snapshot) bool {

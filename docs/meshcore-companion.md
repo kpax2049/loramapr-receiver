@@ -4,6 +4,11 @@ LoRaMapr Receiver can connect to a MeshCore Companion over Bluetooth Low
 Energy (BLE). The intended baseline is stock/official MeshCore Companion
 firmware on a BLE-capable Linux or Raspberry Pi host.
 
+The Receiver has reviewed profiles for official Companion `v1.17.1` (protocol
+13, build `14 Aug 2026`) and `v1.18.0` (protocol 14, build `15 Oct 2026`).
+Other protocol-compatible builds remain connected for raw capture only until
+their wire format is explicitly reviewed and added as another exact profile.
+
 ## Set up the Receiver connection
 
 First pair the Receiver itself with LoRaMapr Cloud through the local portal's

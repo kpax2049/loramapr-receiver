@@ -460,6 +460,32 @@ func pinnedReadySnapshot() Snapshot {
 	}
 }
 
+func pinnedV118ReadySnapshot() Snapshot {
+	return Snapshot{
+		State: SessionReady,
+		Trust: TrustProfile{
+			Trusted:                true,
+			ProtocolCompatible:     true,
+			ProfileMatched:         true,
+			ProtocolVersion:        ProtocolVersionV14,
+			FirmwareBuild:          "15 Oct 2026",
+			FirmwareVersion:        "v1.18.0",
+			Model:                  "Fixture Companion Board",
+			AllowlistCommit:        "81dbae592ffad40b4212bc0b37e82b38da08f4bc",
+			DeviceAttested:         false,
+			Transport:              "physical_serial",
+			DelegatedAdvertAllowed: true,
+		},
+	}
+}
+
+func TestSemanticProfileMatchedAcceptsPinnedV118(t *testing.T) {
+	t.Parallel()
+	if !semanticProfileMatched(pinnedV118ReadySnapshot()) {
+		t.Fatal("pinned v1.18 profile was not accepted")
+	}
+}
+
 func assertContractValid(t *testing.T, event map[string]any) {
 	t.Helper()
 	if _, err := receiverevents.PrepareWithDeliveryID(event, testDeliveryID); err != nil {

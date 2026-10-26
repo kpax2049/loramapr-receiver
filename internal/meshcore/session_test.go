@@ -137,6 +137,40 @@ func TestCompanionSessionAcceptsProtocolV14AsRawCompatible(t *testing.T) {
 	}
 }
 
+func TestCompanionSessionNegotiatesPinnedV118Profile(t *testing.T) {
+	t.Parallel()
+
+	frame := readHexFixture(t, "device-info-v1.17.1.hex")
+	frame[1] = ProtocolVersionV14
+	clear(frame[8:20])
+	copy(frame[8:20], []byte("15 Oct 2026"))
+	clear(frame[60:80])
+	copy(frame[60:80], []byte("v1.18.0"))
+
+	session := NewCompanionSession("loramapr-receiver")
+	session.Begin()
+	result, err := session.Handle(frame)
+	if err != nil {
+		t.Fatalf("handle v1.18 DEVICE_INFO: %v", err)
+	}
+	if len(result.Outbound) == 0 || result.Outbound[0] != CommandAppStart {
+		t.Fatalf("v1.18 DEVICE_INFO did not continue APP_START: %#v", result)
+	}
+	negotiating := session.Snapshot()
+	if !negotiating.Trust.ProtocolCompatible || !negotiating.Trust.ProfileMatched || negotiating.Trust.AllowlistCommit != "81dbae592ffad40b4212bc0b37e82b38da08f4bc" {
+		t.Fatalf("v1.18 profile was not pinned: %#v", negotiating.Trust)
+	}
+
+	result, err = session.Handle(readHexFixture(t, "self-info-v1.17.1.hex"))
+	if err != nil || !result.Ready {
+		t.Fatalf("v1.18 session did not reach ready: result=%#v err=%v", result, err)
+	}
+	ready := session.Snapshot()
+	if !ready.Trust.Trusted || !ready.Trust.ProfileMatched || !semanticProfileMatched(ready) {
+		t.Fatalf("v1.18 ready session was not trusted: %#v", ready)
+	}
+}
+
 func TestCompanionSessionRecognizesContactListResponses(t *testing.T) {
 	t.Parallel()
 	session := readySession(t)
