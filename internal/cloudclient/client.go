@@ -93,6 +93,8 @@ type ReceiverAdapterStatus struct {
 	IntentionalRelease bool                           `json:"intentionalRelease,omitempty"`
 	ConfiguredDevice   string                         `json:"configuredDevice,omitempty"`
 	ConnectedDevice    string                         `json:"connectedDevice,omitempty"`
+	CompanionName      string                         `json:"companionName,omitempty"`
+	CompanionIDPrefix  string                         `json:"companionIdPrefix,omitempty"`
 	Delivery           *ReceiverAdapterDeliveryStatus `json:"delivery,omitempty"`
 }
 

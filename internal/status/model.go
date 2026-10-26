@@ -24,7 +24,7 @@ type ComponentStatus struct {
 
 // AdapterStatus is the protocol-neutral status contract for an attached radio
 // adapter. It deliberately contains operational facts only: it never carries
-// raw radio frames, pairing secrets, or protocol identity keys.
+// raw radio frames, pairing secrets, or complete protocol identity keys.
 type AdapterStatus struct {
 	Name                string                 `json:"name"`
 	Protocol            string                 `json:"protocol"`
@@ -36,6 +36,8 @@ type AdapterStatus struct {
 	Transport           string                 `json:"transport,omitempty"`
 	ConfiguredDevice    string                 `json:"configured_device,omitempty"`
 	ConnectedDevice     string                 `json:"connected_device,omitempty"`
+	CompanionName       string                 `json:"companion_name,omitempty"`
+	CompanionIDPrefix   string                 `json:"companion_id_prefix,omitempty"`
 	Device              string                 `json:"device,omitempty"`
 	ProtocolVersion     string                 `json:"protocol_version,omitempty"`
 	Profile             string                 `json:"profile,omitempty"`

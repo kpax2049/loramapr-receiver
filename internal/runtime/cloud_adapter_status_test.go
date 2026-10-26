@@ -9,14 +9,14 @@ import (
 
 func TestCloudAdapterStatusesProjectOnlySafeFacts(t *testing.T) {
 	adapters := cloudAdapterStatuses([]status.AdapterStatus{
-		{Name: "meshcore-companion", Protocol: "meshcore", Enabled: true, Configured: true, Lifecycle: "connected", ConnectionState: "connected", Ready: true, Transport: "ble", ConfiguredDevice: "FD:B5:13:6A:44:54", ConnectedDevice: "FD:B5:13:6A:44:54", Device: "hci0", ProtocolVersion: "13", Profile: "v1.17.1", ProfileState: "matched", LastError: "open /secret/outbox.db", Delivery: &status.AdapterDeliveryStatus{State: "pending", PendingCount: 2, QuarantinedCount: 1, UsedBytes: 88, FailureCode: "queue_full"}},
+		{Name: "meshcore-companion", Protocol: "meshcore", Enabled: true, Configured: true, Lifecycle: "connected", ConnectionState: "connected", Ready: true, Transport: "ble", ConfiguredDevice: "FD:B5:13:6A:44:54", ConnectedDevice: "FD:B5:13:6A:44:54", CompanionName: "Field Node", CompanionIDPrefix: "FDB5", Device: "hci0", ProtocolVersion: "13", Profile: "v1.17.1", ProfileState: "matched", LastError: "open /secret/outbox.db", Delivery: &status.AdapterDeliveryStatus{State: "pending", PendingCount: 2, QuarantinedCount: 1, UsedBytes: 88, FailureCode: "queue_full"}},
 		{Name: "meshtastic", Protocol: "meshtastic", Enabled: false, Configured: false, Lifecycle: "disabled", ConnectionState: "disabled"},
 	})
 	if len(adapters) != 2 {
 		t.Fatalf("expected independent adapters, got %#v", adapters)
 	}
 	meshcore := adapters[0]
-	if meshcore.Protocol != "meshcore" || !meshcore.Ready || !meshcore.Connected || meshcore.ConnectionState != "connected" || meshcore.Transport != "ble" || meshcore.ConfiguredDevice != "FD:B5:13:6A:44:54" || meshcore.ConnectedDevice != "FD:B5:13:6A:44:54" || meshcore.Delivery == nil || meshcore.Delivery.PendingCount != 2 || meshcore.ProfileState != "matched" {
+	if meshcore.Protocol != "meshcore" || !meshcore.Ready || !meshcore.Connected || meshcore.ConnectionState != "connected" || meshcore.Transport != "ble" || meshcore.ConfiguredDevice != "FD:B5:13:6A:44:54" || meshcore.ConnectedDevice != "FD:B5:13:6A:44:54" || meshcore.CompanionName != "Field Node" || meshcore.CompanionIDPrefix != "FDB5" || meshcore.Delivery == nil || meshcore.Delivery.PendingCount != 2 || meshcore.ProfileState != "matched" {
 		t.Fatalf("unexpected MeshCore cloud status: %#v", meshcore)
 	}
 	if meshcore.Delivery.FailureCode != "queue_full" {
@@ -24,6 +24,13 @@ func TestCloudAdapterStatusesProjectOnlySafeFacts(t *testing.T) {
 	}
 	if adapters[1].Enabled || adapters[1].Configured || adapters[1].Lifecycle != "disabled" {
 		t.Fatalf("disabled adapter was not distinct: %#v", adapters[1])
+	}
+}
+
+func TestCloudAdapterStatusesRejectsUnsafeCompanionIdentityFields(t *testing.T) {
+	items := cloudAdapterStatuses([]status.AdapterStatus{{Protocol: "meshcore", CompanionName: "bad\nname", CompanionIDPrefix: "not-a-prefix"}})
+	if len(items) != 1 || items[0].CompanionName != "" || items[0].CompanionIDPrefix != "" {
+		t.Fatalf("unsafe companion identity fields were projected: %#v", items)
 	}
 }
 

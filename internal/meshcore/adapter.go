@@ -822,16 +822,23 @@ func (a *Adapter) Snapshot() protocoladapter.AdapterSnapshot {
 	}
 	profile := ""
 	protocolVersion := ""
+	companionName := ""
+	companionIDPrefix := ""
 	if session.DeviceInfo != nil {
 		protocolVersion = fmt.Sprintf("%d", session.DeviceInfo.ProtocolVersion)
 		profile = strings.TrimSpace(session.DeviceInfo.FirmwareVersion)
+	}
+	if session.SelfInfo != nil {
+		companionName = strings.TrimSpace(session.SelfInfo.NodeName)
+		companionIDPrefix = fmt.Sprintf("%02X%02X", session.SelfInfo.PublicKey[0], session.SelfInfo.PublicKey[1])
 	}
 	return protocoladapter.AdapterSnapshot{
 		Name: AdapterName, Protocol: "meshcore", State: string(status.State),
 		ConnectionState: meshcoreConnectionState(status.State), Enabled: status.Transport != "disabled",
 		Configured: (status.Transport == "physical_serial" || status.Transport == "ble") && strings.TrimSpace(status.Configured) != "",
 		Ready:      status.State == StateConnected && session.State == SessionReady,
-		Transport:  status.Transport, ConfiguredDevice: status.Configured, ConnectedDevice: status.ConnectedDevice, Device: status.Device,
+		Transport:  status.Transport, ConfiguredDevice: status.Configured, ConnectedDevice: status.ConnectedDevice,
+		CompanionName: companionName, CompanionIDPrefix: companionIDPrefix, Device: status.Device,
 		ReconnectSuppressed: status.ReconnectSuppressed, ReleasedByUser: status.ReleasedByUser,
 		ProtocolVersion: protocolVersion, Profile: profile, ProfileState: profileState,
 		Summary:   fmt.Sprintf("frames=%d frame_errors=%d event_drops=%d reconnects=%d", status.FramesSeen, status.FrameErrors, status.EventDrops, status.Reconnects),

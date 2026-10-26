@@ -254,11 +254,12 @@ func TestAdapterSnapshotReportsProfileAndConnectionFacts(t *testing.T) {
 		status.Session = Snapshot{
 			State:      SessionReady,
 			DeviceInfo: &DeviceInfo{ProtocolVersion: ProtocolVersion, FirmwareVersion: PinnedFirmwareVersion},
+			SelfInfo:   &SelfInfo{NodeName: "Field Node", PublicKey: [32]byte{0xfd, 0xb5}},
 			Trust:      TrustProfile{Trusted: true},
 		}
 	})
 	ready := adapter.Snapshot()
-	if !ready.Enabled || !ready.Configured || !ready.Ready || ready.ConnectionState != "connected" || ready.ConnectedDevice != "AA:BB:CC:DD:EE:FF" || ready.ProtocolVersion != "13" || ready.Profile != PinnedFirmwareVersion || ready.ProfileState != "matched" {
+	if !ready.Enabled || !ready.Configured || !ready.Ready || ready.ConnectionState != "connected" || ready.ConnectedDevice != "AA:BB:CC:DD:EE:FF" || ready.CompanionName != "Field Node" || ready.CompanionIDPrefix != "FDB5" || ready.ProtocolVersion != "13" || ready.Profile != PinnedFirmwareVersion || ready.ProfileState != "matched" {
 		t.Fatalf("unexpected ready snapshot: %#v", ready)
 	}
 }

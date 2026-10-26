@@ -31,6 +31,8 @@ type AdapterSnapshot struct {
 	Transport           string    `json:"transport,omitempty"`
 	ConfiguredDevice    string    `json:"configuredDevice,omitempty"`
 	ConnectedDevice     string    `json:"connectedDevice,omitempty"`
+	CompanionName       string    `json:"companionName,omitempty"`
+	CompanionIDPrefix   string    `json:"companionIdPrefix,omitempty"`
 	Device              string    `json:"device,omitempty"`
 	ProtocolVersion     string    `json:"protocolVersion,omitempty"`
 	Profile             string    `json:"profile,omitempty"`

@@ -1014,11 +1014,18 @@ func withLiveMeshCoreAdapter(snap status.Snapshot, adapter meshcore.AdapterStatu
 	case meshcore.StateConfigurationError, meshcore.StateIncompatible:
 		connectionState = "error"
 	}
+	companionName := ""
+	companionIDPrefix := ""
+	if adapter.Session.SelfInfo != nil {
+		companionName = strings.TrimSpace(adapter.Session.SelfInfo.NodeName)
+		companionIDPrefix = fmt.Sprintf("%02X%02X", adapter.Session.SelfInfo.PublicKey[0], adapter.Session.SelfInfo.PublicKey[1])
+	}
 	replacement := status.AdapterStatus{
 		Name: meshcore.AdapterName, Protocol: "meshcore", Lifecycle: string(adapter.State), ConnectionState: connectionState,
 		Enabled: adapter.Transport != "disabled", Configured: (adapter.Transport == "physical_serial" || adapter.Transport == "ble") && strings.TrimSpace(adapter.Configured) != "",
 		Ready:     adapter.State == meshcore.StateConnected && adapter.Session.State == meshcore.SessionReady,
-		Transport: adapter.Transport, ConfiguredDevice: adapter.Configured, ConnectedDevice: adapter.ConnectedDevice, Device: adapter.Device,
+		Transport: adapter.Transport, ConfiguredDevice: adapter.Configured, ConnectedDevice: adapter.ConnectedDevice,
+		CompanionName: companionName, CompanionIDPrefix: companionIDPrefix, Device: adapter.Device,
 		ReconnectSuppressed: adapter.ReconnectSuppressed, ReleasedByUser: adapter.ReleasedByUser,
 		LastError: strings.TrimSpace(adapter.LastError), UpdatedAt: adapter.UpdatedAt,
 	}

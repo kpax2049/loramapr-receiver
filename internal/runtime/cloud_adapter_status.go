@@ -31,6 +31,8 @@ func cloudAdapterStatuses(adapters []status.AdapterStatus) []cloudclient.Receive
 			IntentionalRelease: adapter.ReleasedByUser,
 			ConfiguredDevice:   cloudBLEDeviceAddress(adapter.ConfiguredDevice),
 			ConnectedDevice:    cloudBLEDeviceAddress(adapter.ConnectedDevice),
+			CompanionName:      cloudCompanionName(adapter.CompanionName),
+			CompanionIDPrefix:  cloudCompanionIDPrefix(adapter.CompanionIDPrefix),
 		}
 		if adapter.Delivery != nil {
 			item.Delivery = &cloudclient.ReceiverAdapterDeliveryStatus{
@@ -54,6 +56,36 @@ func cloudBLEDeviceAddress(value string) string {
 				return ""
 			}
 		} else if !(ch >= '0' && ch <= '9' || ch >= 'A' && ch <= 'F') {
+			return ""
+		}
+	}
+	return value
+}
+
+// cloudCompanionName and cloudCompanionIDPrefix expose only the display name
+// and two-byte MeshCore public-key prefix learned during SELF_INFO. They are
+// useful operating context without forwarding an identity key or any pairing
+// material to Cloud.
+func cloudCompanionName(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" || len(value) > 80 {
+		return ""
+	}
+	for _, ch := range value {
+		if ch < 0x20 || ch == 0x7f {
+			return ""
+		}
+	}
+	return value
+}
+
+func cloudCompanionIDPrefix(value string) string {
+	value = strings.ToUpper(strings.TrimSpace(value))
+	if len(value) != 4 {
+		return ""
+	}
+	for _, ch := range value {
+		if !(ch >= '0' && ch <= '9' || ch >= 'A' && ch <= 'F') {
 			return ""
 		}
 	}
