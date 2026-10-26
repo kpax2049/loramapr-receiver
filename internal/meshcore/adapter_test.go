@@ -128,6 +128,39 @@ func TestAdapterFetchesQueuedMeshCoreMessage(t *testing.T) {
 	}
 }
 
+func TestAdapterImportsBLEV14ContactList(t *testing.T) {
+	deviceInfo := readHexFixture(t, "device-info-v1.17.1.hex")
+	deviceInfo[1] = ProtocolVersionV14
+	clear(deviceInfo[8:20])
+	copy(deviceInfo[8:20], []byte("15 Oct 2026"))
+	clear(deviceInfo[60:80])
+	copy(deviceInfo[60:80], []byte("v1.18.0-81dbae5"))
+	contact := readHexFixture(t, "new-advert-v1.17.1.hex")
+	contact[0] = ResponseContact
+	link := &bleScriptedCompanionLink{scriptedCompanionLink: scriptedCompanionLink{
+		frames:   [][]byte{deviceInfo, readHexFixture(t, "self-info-v1.17.1.hex"), {ResponseContactsStart, 1, 0, 0, 0}, contact, {ResponseContactsEnd, 0, 0, 0, 0}},
+		terminal: io.EOF,
+	}}
+	adapter := NewAdapter(Config{Transport: "ble", BLE: BLEConfig{Adapter: "hci0", PeerAddress: "AA:BB:CC:DD:EE:FF"}}, nil, nil)
+	sink := &recordingSink{events: make(chan protocoladapter.Event, 1)}
+	err := adapter.consume(context.Background(), link, "peer", sink)
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("consume error = %v, want EOF", err)
+	}
+	select {
+	case event := <-sink.events:
+		value, ok := event.Value.(AdapterEvent)
+		if !ok || value.Frame.Opcode != ResponseContact || !value.Session.Trust.ProtocolCompatible || value.Session.Trust.ProtocolVersion != ProtocolVersionV14 {
+			t.Fatalf("unexpected imported contact event: %#v", event)
+		}
+	default:
+		t.Fatal("contact-list item was not published")
+	}
+	if len(link.writes) != 3 || !bytes.Equal(link.writes[0], []byte{CommandDeviceQuery, ProtocolVersion}) || link.writes[1][0] != CommandAppStart || !bytes.Equal(link.writes[2], []byte{CommandGetContacts}) {
+		t.Fatalf("unexpected Companion commands: %#v", link.writes)
+	}
+}
+
 func TestAdapterReconnectInvalidatesAndReestablishesProfile(t *testing.T) {
 	device := existingDeviceFixture(t)
 	adapter := NewAdapter(Config{Transport: "physical_serial", Device: device}, nil, protocoladapter.NewSerialLeaseRegistry())
@@ -914,6 +947,12 @@ func (*scriptedCompanionLink) Metadata() TransportMetadata {
 }
 
 func (*scriptedCompanionLink) Close() error { return nil }
+
+type bleScriptedCompanionLink struct{ scriptedCompanionLink }
+
+func (*bleScriptedCompanionLink) Metadata() TransportMetadata {
+	return TransportMetadata{Kind: "ble"}
+}
 
 type countingCompanionLink struct {
 	scriptedCompanionLink

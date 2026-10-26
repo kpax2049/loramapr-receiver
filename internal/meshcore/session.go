@@ -13,6 +13,7 @@ const (
 	ProtocolVersionV14 = byte(14)
 
 	CommandAppStart             = byte(0x01)
+	CommandGetContacts          = byte(0x04)
 	CommandSyncNextMessage      = byte(0x0A)
 	CommandResetPath            = byte(0x0d)
 	CommandDeviceQuery          = byte(0x16)
@@ -22,7 +23,9 @@ const (
 
 	ResponseOK               = byte(0x00)
 	ResponseError            = byte(0x01)
+	ResponseContactsStart    = byte(0x02)
 	ResponseContact          = byte(0x03)
+	ResponseContactsEnd      = byte(0x04)
 	ResponseSelfInfo         = byte(0x05)
 	ResponseSent             = byte(0x06)
 	ResponseContactMessage   = byte(0x07)
@@ -282,7 +285,7 @@ func (s *CompanionSession) Handle(payload []byte) (HandleResult, error) {
 		if err := validateCapturedPush(payload); err != nil {
 			return HandleResult{}, err
 		}
-		if payload[0] == ResponseOK || payload[0] == ResponseError || payload[0] == ResponseSent || payload[0] == ResponseContact {
+		if payload[0] == ResponseOK || payload[0] == ResponseError || payload[0] == ResponseContactsStart || payload[0] == ResponseContact || payload[0] == ResponseContactsEnd || payload[0] == ResponseSent {
 			if err := validateCommandResponse(payload); err != nil {
 				return HandleResult{}, err
 			}
@@ -335,6 +338,9 @@ func validateCommandResponse(payload []byte) error {
 	// public key and route fields, but validate the complete pinned layout.
 	if payload[0] == ResponseContact && len(payload) != newAdvertLength {
 		return fmt.Errorf("%w: CONTACT got %d bytes, want %d", ErrInvalidPush, len(payload), newAdvertLength)
+	}
+	if (payload[0] == ResponseContactsStart || payload[0] == ResponseContactsEnd) && len(payload) != 5 {
+		return fmt.Errorf("%w: CONTACT list marker got %d bytes, want 5", ErrInvalidPush, len(payload))
 	}
 	return nil
 }

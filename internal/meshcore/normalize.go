@@ -46,6 +46,11 @@ func NormalizeAdapterEvent(event protocoladapter.Event, binding ReceiverBinding,
 	if session.Trust.ProtocolVersion != 0 {
 		base["source"].(map[string]any)["protocolVersion"] = fmt.Sprintf("%d", session.Trust.ProtocolVersion)
 	}
+	// A contact-list response is a command result rather than a pushed frame,
+	// so it has its own pinned layout validation below instead of validatePush.
+	if frame.Opcode == ResponseContact && eligibleBLEContactDiscovery(session) {
+		return normalizeBLEContactDiscovery(base, frame.Payload, "meshcore_companion_ble_contact_list_v1", "contact_list"), nil
+	}
 	if err := validatePush(frame.Payload); err != nil {
 		return normalizeCapturedRaw(base, frame.Payload), nil
 	}
@@ -60,7 +65,7 @@ func NormalizeAdapterEvent(event protocoladapter.Event, binding ReceiverBinding,
 	// on-air advert. It is useful for discovering a MeshCore public key, but
 	// cannot establish identity or position authenticity on its own.
 	if frame.Opcode == PushNewAdvert && eligibleBLEContactDiscovery(session) {
-		return normalizeBLEContactDiscovery(base, frame.Payload), nil
+		return normalizeBLEContactDiscovery(base, frame.Payload, "meshcore_companion_ble_contact_discovery_v1", "contact_discovery"), nil
 	}
 	if !semanticProfileMatched(session) {
 		return normalizeCapturedRaw(base, frame.Payload), nil
@@ -329,8 +334,8 @@ func eligibleBLEContactDiscovery(session Snapshot) bool {
 		session.Trust.Transport == "ble"
 }
 
-func normalizeBLEContactDiscovery(base map[string]any, payload []byte) map[string]any {
-	contact, err := parseDelegatedAdvert(payload)
+func normalizeBLEContactDiscovery(base map[string]any, payload []byte, evidenceKind string, discoverySource string) map[string]any {
+	contact, err := parseBLEContactSummary(payload)
 	if err != nil {
 		return normalizeCapturedRaw(base, payload)
 	}
@@ -346,17 +351,17 @@ func normalizeBLEContactDiscovery(base map[string]any, payload []byte) map[strin
 	if contact.name != "" {
 		base["subject"].(map[string]any)["displayId"] = contact.name
 	}
-	base["contentKey"] = "meshcore:ble-contact-discovery:v1:" + rawSHA256
+	base["contentKey"] = "meshcore:ble-" + discoverySource + ":v1:" + rawSHA256
 	base["authenticity"] = map[string]any{
 		"state":  "unverified",
-		"method": "companion_contact_discovery",
+		"method": "companion_" + discoverySource,
 	}
 	capabilities := base["capabilities"].(map[string]any)
 	capabilities["sender_identity"] = "available"
 	capabilities["position_signed"] = "not_observable"
 	source := base["source"].(map[string]any)
 	source["evidence"] = map[string]any{
-		"kind":                  "meshcore_companion_ble_contact_discovery_v1",
+		"kind":                  evidenceKind,
 		"contactFrameSha256":    rawSHA256,
 		"publicKeyCanonical":    publicKey,
 		"onAirAdvertPresent":    false,
@@ -366,6 +371,20 @@ func normalizeBLEContactDiscovery(base map[string]any, payload []byte) map[strin
 		"identityTrustBoundary": "companion_reported_unverified",
 	}
 	return base
+}
+
+func parseBLEContactSummary(payload []byte) (delegatedAdvert, error) {
+	if len(payload) != newAdvertLength || (payload[0] != PushNewAdvert && payload[0] != ResponseContact) {
+		return delegatedAdvert{}, ErrInvalidPush
+	}
+	contactType := payload[33]
+	if contactType < 1 || contactType > 4 {
+		return delegatedAdvert{}, fmt.Errorf("invalid BLE contact type %d", contactType)
+	}
+	return delegatedAdvert{
+		publicKey: append([]byte(nil), payload[1:33]...),
+		name:      fixedString(payload[100:132]),
+	}, nil
 }
 
 func parseDelegatedAdvert(payload []byte) (delegatedAdvert, error) {

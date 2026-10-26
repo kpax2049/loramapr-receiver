@@ -248,6 +248,38 @@ func TestNormalizeBLEV14NewAdvertProjectsUnverifiedIdentityOnly(t *testing.T) {
 	assertContractValid(t, event)
 }
 
+func TestNormalizeBLEV14ContactListProjectsUnverifiedIdentityOnly(t *testing.T) {
+	payload := readNormalizeHexFixture(t, "new-advert-v1.17.1.hex")
+	payload[0] = ResponseContact
+	bleV14 := pinnedReadySnapshot()
+	bleV14.Trust.Trusted = false
+	bleV14.Trust.ProfileMatched = false
+	bleV14.Trust.ProtocolVersion = ProtocolVersionV14
+	bleV14.Trust.FirmwareBuild = "15 Oct 2026"
+	bleV14.Trust.FirmwareVersion = "v1.18.0-81dbae5"
+	bleV14.Trust.Transport = "ble"
+	bleV14.Trust.DelegatedAdvertAllowed = false
+
+	event := normalizeFixture(t, payload, time.Date(2026, 10, 26, 7, 0, 0, 0, time.UTC), bleV14)
+	if got := stringField(t, event, "eventType"); got != "device_advertisement" {
+		t.Fatalf("eventType = %q, want device_advertisement", got)
+	}
+	if _, ok := event["position"]; ok {
+		t.Fatal("BLE contact-list import must not project a position")
+	}
+	if _, ok := event["radio"]; ok {
+		t.Fatal("BLE contact-list import must not fabricate RF evidence")
+	}
+	if got := stringField(t, mapField(t, event, "subject"), "verification"); got != "unverified" {
+		t.Fatalf("contact-list verification = %q, want unverified", got)
+	}
+	evidence := mapField(t, mapField(t, event, "source"), "evidence")
+	if evidence["kind"] != "meshcore_companion_ble_contact_list_v1" || evidence["onAirAdvertPresent"] != false {
+		t.Fatalf("unexpected contact-list evidence: %#v", evidence)
+	}
+	assertContractValid(t, event)
+}
+
 func TestNormalizeDelegatedAdvertMalformedIsRawOnlyWithoutRF(t *testing.T) {
 	payload := readNormalizeHexFixture(t, "new-advert-v1.17.1.hex")[:20]
 	event := normalizeFixture(t, payload, time.Date(2026, 8, 20, 12, 5, 0, 0, time.UTC), pinnedReadySnapshot())

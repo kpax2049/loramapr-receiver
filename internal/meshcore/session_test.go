@@ -137,6 +137,21 @@ func TestCompanionSessionAcceptsProtocolV14AsRawCompatible(t *testing.T) {
 	}
 }
 
+func TestCompanionSessionRecognizesContactListResponses(t *testing.T) {
+	t.Parallel()
+	session := readySession(t)
+	for _, frame := range [][]byte{
+		{ResponseContactsStart, 2, 0, 0, 0},
+		append([]byte{ResponseContact}, readHexFixture(t, "new-advert-v1.17.1.hex")[1:]...),
+		{ResponseContactsEnd, 42, 0, 0, 0},
+	} {
+		result, err := session.Handle(frame)
+		if err != nil || result.Response == nil || result.Response.Code != frame[0] || result.Push != nil {
+			t.Fatalf("contact-list frame %x: result=%#v err=%v", frame[0], result, err)
+		}
+	}
+}
+
 func TestCompanionSessionProfileMismatchContinuesRawCompatibleHandshake(t *testing.T) {
 	t.Parallel()
 	valid := readHexFixture(t, "device-info-v1.17.1.hex")

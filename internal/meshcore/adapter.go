@@ -2,6 +2,7 @@ package meshcore
 
 import (
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -630,6 +631,10 @@ func (a *Adapter) consume(ctx context.Context, link CompanionLink, device string
 	connected := false
 	queuedMessageFetches := 0
 	queuedMessagesDrained := 0
+	contactSyncRequested := false
+	contactSyncActive := false
+	contactsExpected := uint32(0)
+	contactsImported := uint32(0)
 	for {
 		payload, err := link.ReadFrame(ctx)
 		if err != nil {
@@ -670,11 +675,43 @@ func (a *Adapter) consume(ctx context.Context, link CompanionLink, device string
 				status.Session = session.Snapshot()
 				status.LastError = ""
 			})
+			if shouldSyncBLEContactList(session.Snapshot(), link.Metadata()) {
+				if err := link.WriteFrame(ctx, []byte{CommandGetContacts}); err != nil {
+					return err
+				}
+				contactSyncRequested = true
+			}
+		}
+		if result.Response != nil {
+			a.handleTelemetryCommandResponse(*result.Response)
+			switch result.Response.Code {
+			case ResponseContactsStart:
+				if !contactSyncRequested {
+					continue
+				}
+				contactSyncActive = true
+				contactsImported = 0
+				contactsExpected = binary.LittleEndian.Uint32(result.Response.Payload[1:5])
+				a.logger.Info("MeshCore BLE contact sync started", "contacts", contactsExpected)
+				continue
+			case ResponseContact:
+				if !contactSyncActive {
+					continue
+				}
+				contactsImported++
+				result.Push = &PushFrame{Opcode: ResponseContact, Payload: append([]byte(nil), result.Response.Payload...)}
+			case ResponseContactsEnd:
+				if contactSyncActive {
+					a.logger.Info("MeshCore BLE contact sync completed", "contacts", contactsImported, "reported_contacts", contactsExpected)
+				}
+				contactSyncActive = false
+				contactSyncRequested = false
+				continue
+			default:
+				continue
+			}
 		}
 		if result.Push == nil {
-			if result.Response != nil {
-				a.handleTelemetryCommandResponse(*result.Response)
-			}
 			continue
 		}
 		if result.Push.Opcode == PushMessagesWaiting {
@@ -746,6 +783,16 @@ func (a *Adapter) consume(ctx context.Context, link CompanionLink, device string
 			}
 		}
 	}
+}
+
+// shouldSyncBLEContactList limits history import to the Companion v14 BLE
+// surface that reports unverified contact summaries. Physical-serial sessions
+// retain their existing raw-evidence-only behavior.
+func shouldSyncBLEContactList(session Snapshot, transport TransportMetadata) bool {
+	return transport.Kind == "ble" &&
+		session.State == SessionReady &&
+		session.Trust.ProtocolCompatible &&
+		session.Trust.ProtocolVersion == ProtocolVersionV14
 }
 
 func (a *Adapter) Snapshot() protocoladapter.AdapterSnapshot {
