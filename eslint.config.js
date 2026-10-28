@@ -38,5 +38,13 @@ module.exports = [
     languageOptions: {
       sourceType: "module"
     }
+  },
+  {
+    files: ["internal/webportal/static/js/meshcore-dashboard.js"],
+    languageOptions: {
+      globals: {
+        ...globals.browser
+      }
+    }
   }
 ];

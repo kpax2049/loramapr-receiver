@@ -122,7 +122,7 @@
     text("meshcore-transition-text", transitionText(action));
     setHidden(transition, false);
   }
-  function setLifecycleButtons(action) {
+  function setLifecycleButtons() {
     const pending = actionPending && actionPending.action;
     if (!pending) {
       releaseButton.disabled = false;
@@ -140,7 +140,7 @@
     if (!actionPending || !actionPending.apiSucceeded) return false;
     return actionPending.action === "release" ? view.label === "Released for external use" : view.label === "Connected";
   }
-  function renderPendingAdapter(adapter, view) {
+  function renderPendingAdapter(adapter) {
     const releasing = actionPending.action === "release";
     const label = releasing ? "Releasing device…" : "Connecting / reconnecting";
     const detail = releasing ? "Disconnecting the receiver from this MeshCore device." : "Receiver is attempting to reconnect; waiting for the Companion handshake.";
@@ -156,7 +156,7 @@
     setHidden(byID("meshcore-release-note"), true);
     setHidden(releaseButton, !releasing);
     setHidden(resumeButton, releasing);
-    setLifecycleButtons(actionPending.action);
+    setLifecycleButtons();
     setTransition(actionPending.action);
   }
   function finishTransition() {
@@ -172,7 +172,7 @@
       if (pendingSettled(view)) {
         finishTransition();
       } else {
-        renderPendingAdapter(adapter, view);
+        renderPendingAdapter(adapter);
         return;
       }
     }
@@ -187,7 +187,7 @@
     setHidden(byID("meshcore-release-note"), !released);
     setHidden(releaseButton, !(adapter && view.label === "Connected"));
     setHidden(resumeButton, !released);
-    setLifecycleButtons(null);
+    setLifecycleButtons();
     setTransition(null);
   }
   function errorPanel() {
@@ -298,7 +298,7 @@
   async function json(url, options) {
     const response = await fetch(url, options);
     let payload = null;
-    try { payload = await response.json(); } catch (_) { /* handled below */ }
+    try { payload = await response.json(); } catch { /* handled below */ }
     if (!response.ok) throw new Error((payload && payload.error) || (payload && payload.outcome) || "Request failed (" + response.status + ")");
     return payload;
   }
@@ -326,7 +326,7 @@
   async function lifecycle(action) {
     if (actionPending) return;
     actionPending = { action: action, apiSucceeded: false };
-    renderPendingAdapter(latestAdapter, meshcoreState(latestAdapter));
+    renderPendingAdapter(latestAdapter);
     updateError("");
     refreshState.textContent = transitionText(action);
     scheduleRefresh(250);
