@@ -51,6 +51,16 @@ func NormalizeAdapterEvent(event protocoladapter.Event, binding ReceiverBinding,
 	if frame.Opcode == ResponseContact && eligibleBLEContactDiscovery(session) {
 		return normalizeBLEContactDiscovery(base, frame.Payload, "meshcore_companion_ble_contact_list_v1", "contact_list"), nil
 	}
+	// Queued Companion messages are command replies rather than PUSH frames,
+	// so they must be decoded before validatePush. They carry only a six-byte
+	// public-key prefix: useful activity evidence for an already-known contact,
+	// but insufficient to create or rename an identity on their own.
+	if semanticProfileMatched(session) {
+		switch frame.Opcode {
+		case ResponseContactMessage, ResponseContactMessageV3, ResponseChannelMessage, ResponseChannelMessageV3:
+			return normalizeQueuedMessage(base, frame.Payload), nil
+		}
+	}
 	if err := validatePush(frame.Payload); err != nil {
 		return normalizeCapturedRaw(base, frame.Payload), nil
 	}
@@ -374,6 +384,123 @@ func normalizeBLEContactDiscovery(base map[string]any, payload []byte, evidenceK
 		"identityTrustBoundary": "companion_reported_unverified",
 	}
 	return base
+}
+
+type queuedMessage struct {
+	kind            string
+	senderKeyPrefix string
+	channelIndex    *int
+	pathLength      int
+	textType        int
+	timestamp       uint32
+	textLength      int
+}
+
+// normalizeQueuedMessage records message arrival without serializing message
+// content into queryable fields. The full frame remains immutable receipt
+// evidence in source.raw, as for every Companion frame; callers must not add
+// text to this normalized envelope without a dedicated privacy design.
+func normalizeQueuedMessage(base map[string]any, payload []byte) map[string]any {
+	message, ok := parseQueuedMessage(payload)
+	if !ok {
+		return normalizeCapturedRaw(base, payload)
+	}
+	rawSHA256 := sha256Hex(payload)
+	base["contentKey"] = "meshcore:queued-message:v1:" + rawSHA256
+	if message.timestamp != 0 {
+		base["occurredAt"] = map[string]any{
+			"value":  unixSeconds(message.timestamp).Format(time.RFC3339),
+			"origin": "protocol",
+		}
+	}
+	source := base["source"].(map[string]any)
+	evidence := map[string]any{
+		"kind":                  message.kind,
+		"frameSha256":           rawSHA256,
+		"pathLength":            message.pathLength,
+		"textType":              message.textType,
+		"textByteLength":        message.textLength,
+		"identityTrustBoundary": "message_sender_prefix_only",
+	}
+	if message.senderKeyPrefix != "" {
+		evidence["senderPublicKeyPrefix"] = message.senderKeyPrefix
+	}
+	if message.channelIndex != nil {
+		evidence["channelIndex"] = *message.channelIndex
+	}
+	source["evidence"] = evidence
+	return base
+}
+
+func parseQueuedMessage(payload []byte) (queuedMessage, bool) {
+	if len(payload) == 0 {
+		return queuedMessage{}, false
+	}
+	var message queuedMessage
+	var textOffset int
+	switch payload[0] {
+	case ResponseContactMessage:
+		if len(payload) < 13 {
+			return queuedMessage{}, false
+		}
+		message = queuedMessage{
+			kind:            "meshcore_contact_message_v1",
+			senderKeyPrefix: hex.EncodeToString(payload[1:7]),
+			pathLength:      int(payload[7]),
+			textType:        int(payload[8]),
+			timestamp:       binary.LittleEndian.Uint32(payload[9:13]),
+		}
+		textOffset = 13
+	case ResponseContactMessageV3:
+		if len(payload) < 16 {
+			return queuedMessage{}, false
+		}
+		message = queuedMessage{
+			kind:            "meshcore_contact_message_v3",
+			senderKeyPrefix: hex.EncodeToString(payload[4:10]),
+			pathLength:      int(payload[10]),
+			textType:        int(payload[11]),
+			timestamp:       binary.LittleEndian.Uint32(payload[12:16]),
+		}
+		textOffset = 16
+	case ResponseChannelMessage:
+		if len(payload) < 8 {
+			return queuedMessage{}, false
+		}
+		channelIndex := int(payload[1])
+		message = queuedMessage{
+			kind:         "meshcore_channel_message_v1",
+			channelIndex: &channelIndex,
+			pathLength:   int(payload[2]),
+			textType:     int(payload[3]),
+			timestamp:    binary.LittleEndian.Uint32(payload[4:8]),
+		}
+		textOffset = 8
+	case ResponseChannelMessageV3:
+		if len(payload) < 11 {
+			return queuedMessage{}, false
+		}
+		channelIndex := int(payload[4])
+		message = queuedMessage{
+			kind:         "meshcore_channel_message_v3",
+			channelIndex: &channelIndex,
+			pathLength:   int(payload[5]),
+			textType:     int(payload[6]),
+			timestamp:    binary.LittleEndian.Uint32(payload[7:11]),
+		}
+		textOffset = 11
+	default:
+		return queuedMessage{}, false
+	}
+	// MeshCore's signed text type has a four-byte signature before the text.
+	if message.textType == 2 {
+		textOffset += 4
+	}
+	if textOffset > len(payload) {
+		return queuedMessage{}, false
+	}
+	message.textLength = len(payload) - textOffset
+	return message, true
 }
 
 func parseBLEContactSummary(payload []byte) (delegatedAdvert, error) {

@@ -486,6 +486,63 @@ func TestSemanticProfileMatchedAcceptsPinnedV118(t *testing.T) {
 	}
 }
 
+func TestNormalizeQueuedContactMessageV3LinksOnlyPrefixMetadata(t *testing.T) {
+	// The final bytes intentionally resemble a real private-message body. The
+	// normalized envelope must retain the raw receipt frame while keeping the
+	// body out of all queryable semantic fields.
+	payload := []byte{
+		ResponseContactMessageV3, 8, 0, 0,
+		0x5b, 0xed, 0x01, 0x02, 0x03, 0x04,
+		0xff, 0,
+		0x00, 0xf1, 0x53, 0x65,
+		'h', 'i',
+	}
+	event := normalizeFixture(t, payload, time.Date(2026, 10, 27, 22, 0, 0, 0, time.UTC), pinnedV118ReadySnapshot())
+
+	if got := stringField(t, event, "eventType"); got != "packet_observed" {
+		t.Fatalf("eventType = %q, want packet_observed", got)
+	}
+	if _, exists := event["subject"]; exists {
+		t.Fatalf("queued message unexpectedly asserted a full subject: %#v", event["subject"])
+	}
+	source := mapField(t, event, "source")
+	evidence := mapField(t, source, "evidence")
+	if got := stringField(t, evidence, "kind"); got != "meshcore_contact_message_v3" {
+		t.Fatalf("evidence kind = %q", got)
+	}
+	if got := stringField(t, evidence, "senderPublicKeyPrefix"); got != "5bed01020304" {
+		t.Fatalf("sender prefix = %q", got)
+	}
+	if evidence["pathLength"] != 255 || evidence["textType"] != 0 || evidence["textByteLength"] != 2 {
+		t.Fatalf("unexpected message metadata: %#v", evidence)
+	}
+	if _, exists := evidence["text"]; exists {
+		t.Fatalf("message text was exposed in evidence: %#v", evidence)
+	}
+	if got := stringField(t, event, "contentKey"); got != "meshcore:queued-message:v1:"+sha256Hex(payload) {
+		t.Fatalf("contentKey = %q", got)
+	}
+	assertContractValid(t, event)
+}
+
+func TestNormalizeQueuedMessageFailsClosedWhenSignedTextIsTruncated(t *testing.T) {
+	// txt_type 2 reserves four bytes for the signature. A truncated frame must
+	// stay raw-only rather than guessing a message-text boundary.
+	payload := []byte{
+		ResponseContactMessage, 1, 2, 3, 4, 5, 6,
+		0, 2,
+		0, 0, 0, 0,
+	}
+	event := normalizeFixture(t, payload, time.Now().UTC(), pinnedReadySnapshot())
+	if got := stringField(t, event, "contentKey"); got != "meshcore:packet:v1:"+sha256Hex(payload) {
+		t.Fatalf("truncated message contentKey = %q", got)
+	}
+	if source := mapField(t, event, "source"); source["evidence"] != nil {
+		t.Fatalf("truncated message unexpectedly has semantic evidence: %#v", source["evidence"])
+	}
+	assertContractValid(t, event)
+}
+
 func assertContractValid(t *testing.T, event map[string]any) {
 	t.Helper()
 	if _, err := receiverevents.PrepareWithDeliveryID(event, testDeliveryID); err != nil {
