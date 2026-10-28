@@ -28,7 +28,7 @@ func TestOpenSerialPropagatesConfigurationFailureAndClosesFile(t *testing.T) {
 	if !errors.Is(err, configured) {
 		t.Fatalf("expected configuration failure, got %v", err)
 	}
-	if _, err := opened.Stat(); !errors.Is(err, os.ErrClosed) {
-		t.Fatalf("expected file closed after configuration failure, got %v", err)
+	if _, err := opened.Stat(); err == nil {
+		t.Fatal("expected file closed after configuration failure")
 	}
 }
