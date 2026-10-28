@@ -55,7 +55,7 @@ func NormalizeAdapterEvent(event protocoladapter.Event, binding ReceiverBinding,
 	// so they must be decoded before validatePush. They carry only a six-byte
 	// public-key prefix: useful activity evidence for an already-known contact,
 	// but insufficient to create or rename an identity on their own.
-	if semanticProfileMatched(session) {
+	if queuedMessageProtocolCompatible(session) {
 		switch frame.Opcode {
 		case ResponseContactMessage, ResponseContactMessageV3, ResponseChannelMessage, ResponseChannelMessageV3:
 			return normalizeQueuedMessage(base, frame.Payload), nil
@@ -99,6 +99,17 @@ func semanticProfileMatched(session Snapshot) bool {
 		session.Trust.ProtocolCompatible &&
 		session.Trust.ProfileMatched &&
 		strings.TrimSpace(session.Trust.Model) != ""
+}
+
+// queuedMessageProtocolCompatible permits fixed-layout queued-message metadata
+// for a negotiated Companion protocol version, even when the firmware build is
+// not a pinned semantic profile. Unlike adverts, this does not trust a
+// Companion-reported identity: it retains only a six-byte sender-key prefix,
+// and Cloud may link it only to one already-known identity.
+func queuedMessageProtocolCompatible(session Snapshot) bool {
+	return session.State == SessionReady &&
+		session.Trust.ProtocolCompatible &&
+		isSupportedProtocolVersion(session.Trust.ProtocolVersion)
 }
 
 func adapterPushFrame(value any) (PushFrame, bool) {

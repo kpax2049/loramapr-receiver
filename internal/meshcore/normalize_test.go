@@ -525,6 +525,37 @@ func TestNormalizeQueuedContactMessageV3LinksOnlyPrefixMetadata(t *testing.T) {
 	assertContractValid(t, event)
 }
 
+func TestNormalizeQueuedContactMessageV3AcceptsProtocolCompatibleRawCaptureProfile(t *testing.T) {
+	payload := []byte{
+		ResponseContactMessageV3, 8, 0, 0,
+		0x5b, 0xed, 0x01, 0x02, 0x03, 0x04,
+		0xff, 0,
+		0x00, 0xf1, 0x53, 0x65,
+		'h', 'i',
+	}
+	snapshot := pinnedV118ReadySnapshot()
+	snapshot.Trust.Trusted = false
+	snapshot.Trust.ProfileMatched = false
+	snapshot.Trust.FirmwareVersion = "v1.18.0-unknown-build"
+	snapshot.Trust.AllowlistCommit = ""
+
+	event := normalizeFixture(t, payload, time.Date(2026, 10, 28, 12, 53, 31, 0, time.UTC), snapshot)
+	if _, exists := event["subject"]; exists {
+		t.Fatalf("raw-capture profile unexpectedly asserted a full subject: %#v", event["subject"])
+	}
+	evidence := mapField(t, mapField(t, event, "source"), "evidence")
+	if got := stringField(t, evidence, "kind"); got != "meshcore_contact_message_v3" {
+		t.Fatalf("evidence kind = %q", got)
+	}
+	if got := stringField(t, evidence, "senderPublicKeyPrefix"); got != "5bed01020304" {
+		t.Fatalf("sender prefix = %q", got)
+	}
+	if _, exists := evidence["text"]; exists {
+		t.Fatalf("message text was exposed in evidence: %#v", evidence)
+	}
+	assertContractValid(t, event)
+}
+
 func TestNormalizeQueuedMessageFailsClosedWhenSignedTextIsTruncated(t *testing.T) {
 	// txt_type 2 reserves four bytes for the signature. A truncated frame must
 	// stay raw-only rather than guessing a message-text boundary.
